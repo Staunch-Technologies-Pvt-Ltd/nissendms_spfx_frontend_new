@@ -1,0 +1,26 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/command-set-extension-manifest.schema.json",
+
+  "id": "0638a07a-ab3a-4c4e-b456-9c4cf73be8d0",
+  "alias": "UploadAndTagCommandSet",
+  "componentType": "Extension",
+  "extensionType": "ListViewCommandSet",
+
+  "version": "*",
+  "manifestVersion": 2,
+
+  "requiresCustomScript": false,
+
+  "items": {
+    "UPLOAD_AND_TAG_DOC": {
+      "title": { "default": "Upload & Tag Document" },
+      "iconImageUrl": "icons/request.png",
+      "type": "command"
+    },
+    "APPROVE_DOC": {
+      "title": { "default": "Approve / Reject" },
+      "iconImageUrl": "icons/request.png",
+      "type": "command"
+    }
+  }
+}

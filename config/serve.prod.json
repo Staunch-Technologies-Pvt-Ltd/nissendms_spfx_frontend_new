@@ -1,0 +1,32 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/spfx-serve.schema.json",
+  "port": 4321,
+  "https": true,
+  "serveConfigurations": {
+    "default": {
+      "pageUrl": "https://sg-nissenkaiun.sharepoint.com/_layouts/15/workbench.aspx",
+      "customActions": {
+        "0638a07a-ab3a-4c4e-b456-9c4cf73be8d0": {
+          "location": "ClientSideExtension.ListViewCommandSet.CommandBar",
+          "properties": {
+            "sampleTextOne": "One item is selected in the list",
+            "sampleTextTwo": "This command is always visible."
+          }
+        }
+      }
+    },
+    "uploadAndTag": {
+      "pageUrl": "https://sg-nissenkaiun.sharepoint.com/_layouts/15/workbench.aspx",
+      "customActions": {
+        "0638a07a-ab3a-4c4e-b456-9c4cf73be8d0": {
+          "location": "ClientSideExtension.ListViewCommandSet.CommandBar",
+          "properties": {
+            "sampleTextOne": "One item is selected in the list",
+            "sampleTextTwo": "This command is always visible."
+          }
+        }
+      }
+    }
+  },
+  "initialPage": "https://sg-nissenkaiun.sharepoint.com/_layouts/15/workbench.aspx"
+}
