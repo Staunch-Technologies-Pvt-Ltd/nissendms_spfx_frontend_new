@@ -16,4 +16,5 @@ export interface IVesselEmailProps {
   graphClient?: MSGraphClientV3;
   siteId?: string;
   driveId?: string;
+  siteUrl?: string;  // absolute SharePoint site URL, e.g. https://tenant.sharepoint.com/sites/mysite
 }

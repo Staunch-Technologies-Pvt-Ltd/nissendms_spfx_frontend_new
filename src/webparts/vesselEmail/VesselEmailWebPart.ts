@@ -46,7 +46,8 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
         siteId: this._siteId,
         driveId: this._driveId,
         sessionId: this._sessionId,
-        sessionInitialized: this._sessionInitialized
+        sessionInitialized: this._sessionInitialized,
+        siteUrl: this.context.pageContext.site.absoluteUrl,
       }
     );
 
@@ -99,7 +100,7 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
       this.render();
       return;
     }
-    const base = (this.properties.apiBaseUrl || 'http://localhost:8000').replace(/\/$/, '');
+    const base = (this.properties.apiBaseUrl || 'https://nk-dms-dev.sg-nissenkaiun.com').replace(/\/$/, '');
     try {
       const res = await fetch(`${base}/api/auth/bypass-login`, {
         method: 'POST',

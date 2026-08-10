@@ -150,6 +150,10 @@ interface State {
 
   sessionExpired: boolean;
   sessionReady: boolean;  // true once first valid session_id prop is received
+
+  // Sidebar collapse/expand state
+  sidebarCollapsed: boolean;
+  windowWidth: number;
 }
 
 const BLANK_FORM: FormState = { name: '', imo: '', shipyard: '', hull_number: '', vessel_type: '' };
@@ -162,6 +166,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   public _abort: AbortController | null = null;
   public _filesLoadedForVessels: Set<string> = new Set();
   public _syncScheduler: SyncScheduler | null = null;
+  public _handleResize = (): void => { this.setState({ windowWidth: window.innerWidth }); };
 
   public constructor(props: IVesselEmailProps) {
     super(props);
@@ -227,6 +232,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       lastDeltaSync: null,
       sessionExpired: false,
       sessionReady: false,
+
+      sidebarCollapsed: false,
+      windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1200,
     };
   }
 
@@ -258,6 +266,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     }
     this._startDeltaSync();
     this._loadBentoConfig();
+    window.addEventListener('resize', this._handleResize);
   }
 
   public _loadBentoConfig(): void {
@@ -318,6 +327,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   public componentWillUnmount(): void {
     this._abort?.abort();
     this._syncScheduler?.stop();
+    window.removeEventListener('resize', this._handleResize);
   }
 
   // ── Delta Sync ────────────────────────────────────────────────────────────
@@ -430,7 +440,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
   public _base(): string {
     const url = (this.props.apiBaseUrl || '').replace(/\/$/, '');
-    return url || 'http://localhost:8000';
+    return url || 'https://nk-dms-dev.sg-nissenkaiun.com';
   }
 
   // ── Data Loading ──────────────────────────────────────────────────────────
@@ -468,13 +478,36 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           }));
         }
 
+        // Step 1b: Discover vessels existing in SharePoint Online directly
+        const { graphClient, siteId, driveId } = this.props;
+        if (graphClient && siteId && driveId) {
+          try {
+            const spoVesselNodes = await this._getGraphChildren('Vessel Management/Technical & Crewing', signal).catch(() => []);
+            for (const node of spoVesselNodes) {
+              if (node.isFolder && node.name) {
+                const vName = cleanName(node.name);
+                if (!vessels.some(v => v.name.toLowerCase() === vName.toLowerCase())) {
+                  vessels.push({
+                    id: `spo_${node.id}`,
+                    name: vName,
+                    imo: '—',
+                    status: 'Active',
+                    image_url: pickRandomVesselImage('Bulk Carrier'),
+                  });
+                }
+              }
+            }
+          } catch (spoErr) {
+            console.warn('[VesselDMS] SPO vessel auto-discovery warning:', spoErr);
+          }
+        }
+
         // Update vessel list in state immediately so UI shows vessels right away
         if (vessels.length > 0) {
           this.setState({ vessels });
         }
 
         // Step 2: Try Graph API folder-walk first (when SPO context is available)
-        const { graphClient, siteId, driveId } = this.props;
         if (graphClient && siteId && driveId && vessels.length > 0) {
           console.log('[VesselDMS] _loadData: Graph context available — using Graph API for folder tree walk');
           try {
@@ -1244,6 +1277,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     this.setState({ uploadingGroupKey: null, uploadInfo: infoMsg, uploadError: errMsg });
     if (done > 0) {
       await this._refreshFolderFiles(row.uploadFolderId, row.groupKey, true);
+      void this._syncScheduler?.triggerNow().catch(() => undefined);
     }
   };
 
@@ -1469,6 +1503,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       });
     } catch { /* fallback */ }
     this.setState(prev => ({ recycleBin: prev.recycleBin.filter(r => r.id !== item.id) }));
+    void this._syncScheduler?.triggerNow().catch(() => undefined);
     if (item.kind === 'vessel' || item.item_type === 'vessel') {
       this.setState(prev => ({ reloadKey: prev.reloadKey + 1 }));
     }
@@ -1482,6 +1517,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       });
     } catch { /* fallback */ }
     this.setState(prev => ({ recycleBin: prev.recycleBin.filter(r => r.id !== item.id) }));
+    void this._syncScheduler?.triggerNow().catch(() => undefined);
   };
 
   public _renderRecycleBinPage(): React.ReactElement {

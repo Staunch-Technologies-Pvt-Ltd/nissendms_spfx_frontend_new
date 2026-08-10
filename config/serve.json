@@ -4,7 +4,7 @@
   "https": true,
   "serveConfigurations": {
     "default": {
-      "pageUrl": "https://kamalnathqatestergmail.sharepoint.com/_layouts/15/workbench.aspx",
+      "pageUrl": "https://nissenkaiunsingapore.sharepoint.com/_layouts/15/workbench.aspx",
       "customActions": {
         "0638a07a-ab3a-4c4e-b456-9c4cf73be8d0": {
           "location": "ClientSideExtension.ListViewCommandSet.CommandBar",
@@ -16,7 +16,7 @@
       }
     },
     "uploadAndTag": {
-      "pageUrl": "https://kamalnathqatestergmail.sharepoint.com/_layouts/15/workbench.aspx",
+      "pageUrl": "https://nissenkaiunsingapore.sharepoint.com/_layouts/15/workbench.aspx",
       "customActions": {
         "0638a07a-ab3a-4c4e-b456-9c4cf73be8d0": {
           "location": "ClientSideExtension.ListViewCommandSet.CommandBar",
@@ -28,5 +28,6 @@
       }
     }
   },
-  "initialPage": "https://kamalnathqatestergmail.sharepoint.com/_layouts/15/workbench.aspx"
+  "initialPage": "https://nissenkaiunsingapore.sharepoint.com/_layouts/15/workbench.aspx"
 }
+

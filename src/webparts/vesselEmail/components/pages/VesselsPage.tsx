@@ -16,6 +16,18 @@ import type {
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
 
+function getSpoVesselFolderUrl(siteUrlProp?: string, vesselName?: string): string {
+  if (!siteUrlProp) return '#';
+  try {
+    const urlObj = new URL(siteUrlProp);
+    const basePath = urlObj.pathname.replace(/\/$/, '');
+    const folderPath = `${basePath}/Shared Documents/Vessel Management/Technical & Crewing${vesselName ? '/' + vesselName : ''}`;
+    return `${urlObj.origin}${basePath}/Shared Documents/Forms/AllItems.aspx?id=${encodeURIComponent(folderPath)}`;
+  } catch {
+    return '#';
+  }
+}
+
 export function renderVesselsPage(host: VesselEmail): React.ReactElement {
     const {
       vessels, vesselsSearch, vesselStatusFilter, vesselTypeFilter,
@@ -140,7 +152,19 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
         )}
         {folderCreationResults && !folderCreationError && (
           <div style={{ marginBottom: 12, background: '#dff6dd', border: '1px solid #86efac', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#107c10', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>✅ SharePoint folders provisioned — {folderCreationResults.filter(r => r.status === 'created').length} created, {folderCreationResults.filter(r => r.status === 'existed').length} already existed.</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span>✅ SharePoint folders provisioned — {folderCreationResults.filter(r => r.status === 'created').length} created, {folderCreationResults.filter(r => r.status === 'existed').length} already existed.</span>
+              {host.props.siteUrl && (
+                <a
+                  href={getSpoVesselFolderUrl(host.props.siteUrl)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: '#0078d4', fontWeight: 600, textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                >
+                  Open SharePoint Folder ↗
+                </a>
+              )}
+            </div>
             <button onClick={() => host.setState({ folderCreationResults: null })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#107c10', fontWeight: 700 }}>✕</button>
           </div>
         )}
@@ -310,6 +334,21 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                           <><span style={{ display: 'inline-block', width: 11, height: 11, border: '2px solid #0284c7', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} /> Creating…</>
                         ) : '📁 Provision'}
                       </button>
+                      {/* Open exact vessel folder */}
+                      <a
+                        href={getSpoVesselFolderUrl(host.props.siteUrl, vessel.name)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={e => e.stopPropagation()}
+                        title="Open in SharePoint"
+                        style={{
+                          width: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          border: '1px solid #cbd5e1', borderRadius: 7, background: '#f8fafc',
+                          color: '#0078d4', fontSize: 13, textDecoration: 'none',
+                        }}
+                      >
+                        ↗
+                      </a>
                     </div>
                   </div>
                 </div>

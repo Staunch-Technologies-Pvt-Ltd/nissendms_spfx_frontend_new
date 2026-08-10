@@ -19,7 +19,7 @@ import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../ve
 export function renderLayout(host: VesselEmail, content: React.ReactElement): React.ReactElement {
     const userDisplayName = host.props.userDisplayName || 'Priya';
     return (
-      <div style={{ display: 'flex', minHeight: '100vh', background: '#f8fafc', width: '100%', fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif" }}>
+      <div style={{ display: 'flex', alignItems: 'stretch', minHeight: '100vh', background: '#f8fafc', width: '100%', fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif" }}>
         {host._renderSidebar()}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
           {/* Top Bar Header */}

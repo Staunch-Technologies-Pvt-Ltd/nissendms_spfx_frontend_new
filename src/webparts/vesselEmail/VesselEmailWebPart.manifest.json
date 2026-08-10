@@ -23,7 +23,7 @@
     "description": { "default": "Flattened vessel document list view" },
     "officeFabricIconFontName": "Ship",
     "properties": {
-      "apiBaseUrl": ""
+      "apiBaseUrl": "https://nk-dms-dev.sg-nissenkaiun.com"
     }
   }]
 }
