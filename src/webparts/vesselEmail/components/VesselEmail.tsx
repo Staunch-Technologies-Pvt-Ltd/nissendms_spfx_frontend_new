@@ -145,6 +145,7 @@ interface State {
   folderCreationResults: FolderResult[] | null;
   folderCreationError: string | null;
   folderProvisioningVesselId: string | null;
+  provisionedVesselIds: Set<string>;
 
   // Delta sync — flat id→node map representing the live SPO folder tree
   spoFolderMap: Map<string, SpoFolderNode>;
@@ -166,6 +167,14 @@ interface State {
     done: boolean;
     doneNormal?: boolean;   // success screen for "normal folder" classification
     alreadyExisted?: boolean;
+    error: string | null;
+  } | null;
+
+  // Vessel card Provision dialog (standalone provision for existing vessel)
+  spoProvisionDialog: {
+    vessel: import('./types/rows').VesselRecord;
+    provisioning: boolean;
+    done: boolean;
     error: string | null;
   } | null;
 
@@ -250,6 +259,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       folderCreationResults: null,
       folderCreationError: null,
       folderProvisioningVesselId: null,
+      provisionedVesselIds: new Set<string>(),
       spoFolderMap: new Map(),
       lastDeltaSync: null,
       sessionExpired: false,
@@ -258,6 +268,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       folderAnomalies: [],
       normalFolders: [],
       spoClassifyDialog: null,
+      spoProvisionDialog: null,
       spoAnomalyDismissConfirm: null,
       sidebarCollapsed: false,
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1200,
@@ -1419,11 +1430,21 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     this.setState({ folderCreationBusy: true, folderCreationResults: null, folderCreationError: null, folderProvisioningVesselId: vesselId || null });
     try {
       const result = await createVesselFolders(graphClient, siteId, driveId, vesselName);
+      const provisionedSet = new Set(this.state.provisionedVesselIds);
+      if (vesselId) {
+        provisionedSet.add(vesselId);
+        // Persist provisioned status in database
+        void fetch(`${this._base()}/api/vessels/${vesselId}/provision`, {
+          method: 'POST',
+          headers: this._headers(),
+        }).catch(() => undefined);
+      }
       this.setState({
         folderCreationBusy: false,
         folderProvisioningVesselId: null,
         folderCreationResults: result.results,
         folderCreationError: result.success ? null : 'Some folders could not be created. Check the creation log.',
+        provisionedVesselIds: provisionedSet,
       });
       // Trigger an immediate delta sync so the new folders appear in the tree
       void this._syncScheduler?.triggerNow().catch(() => undefined);

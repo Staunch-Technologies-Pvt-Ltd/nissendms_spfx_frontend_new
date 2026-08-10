@@ -672,6 +672,269 @@ function renderNormalFoldersSection(host: VesselEmail): React.ReactElement | nul
   );
 }
 
+// ── Vessel Card Provision Dialog ──────────────────────────────────────────────
+// Shown when user clicks the "📁 Provision" button on a vessel card.
+
+function renderProvisionDialog(host: VesselEmail): React.ReactElement | null {
+  if (!host.state.spoProvisionDialog) return null;
+  return <ProvisionModalContent host={host} dlg={host.state.spoProvisionDialog} />;
+}
+
+function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): React.ReactElement {
+  const { vessel, provisioning, done, error } = dlg;
+  const [elapsed, setElapsed] = React.useState(0);
+
+  const isProvisioned = (
+    host.state.provisionedVesselIds?.has(vessel.id) ||
+    (host.state.rows && host.state.rows.some(r => r.vesselName && r.vesselName.toLowerCase() === vessel.name.toLowerCase())) ||
+    (vessel as any).is_provisioned === true ||
+    (vessel as any).provisioned === true
+  );
+
+  React.useEffect(() => {
+    if (!provisioning) { setElapsed(0); return; }
+    const timer = setInterval(() => setElapsed(e => e + 1), 1000);
+    return () => clearInterval(timer);
+  }, [provisioning]);
+
+  const formatTimer = (sec: number): string => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m < 10 ? '0' + m : m}:${s < 10 ? '0' + s : s}`;
+  };
+
+  const handleProvision = async (): Promise<void> => {
+    host.setState({ spoProvisionDialog: { ...dlg, provisioning: true, error: null } });
+    try {
+      await host._provisionVesselFolders(vessel.name, vessel.id);
+      host.setState({ spoProvisionDialog: { ...dlg, provisioning: false, done: true, error: null } });
+    } catch (e: any) {
+      host.setState({ spoProvisionDialog: { ...dlg, provisioning: false, done: false, error: e?.message || 'Failed to provision vessel folders.' } });
+    }
+  };
+
+  const handleClose = (): void => {
+    host.setState({ spoProvisionDialog: null, folderCreationResults: null });
+  };
+
+  const renderBody = (): React.ReactElement => {
+    if (provisioning) {
+      return (
+        <div style={{ textAlign: 'center', padding: '8px 0' }}>
+          <div style={{ fontSize: 44, marginBottom: 12 }}>⏳</div>
+          <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#0284c7' }}>
+            Provisioning DMS Folder Structure…
+          </h3>
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+            Creating standard DMS folder hierarchy for <strong>"{ vessel.name }"</strong> in SharePoint Online. Please wait.
+          </p>
+
+          {/* Live Timer badge */}
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8,
+            background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd',
+            borderRadius: 20, padding: '8px 18px', fontSize: 14, fontWeight: 700, marginBottom: 20,
+          }}>
+            <span style={{ fontSize: 16 }}>⏱️</span>
+            <span>Elapsed Time: {formatTimer(elapsed)}</span>
+          </div>
+
+          {/* Animated Progress Bar */}
+          <div style={{ background: '#e2e8f0', borderRadius: 10, height: 8, overflow: 'hidden', marginBottom: 20 }}>
+            <div style={{
+              background: 'linear-gradient(90deg, #0ea5e9, #0284c7, #38bdf8)',
+              height: '100%', width: `${Math.min(96, 15 + elapsed * 12)}%`,
+              transition: 'width 0.8s ease-out', borderRadius: 10,
+            }} />
+          </div>
+
+          {/* Step Progress Checklist */}
+          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: '14px 16px', textAlign: 'left', fontSize: 12 }}>
+            <div style={{ color: '#16a34a', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 14 }}>✓</span><span>Vessel record confirmed in database</span>
+            </div>
+            <div style={{ color: '#0284c7', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 14 }}>⏳</span><span>Creating SharePoint DMS folder tree (Technical &amp; Crewing, Month End, Certificates)…</span>
+            </div>
+            <div style={{ color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 14 }}>○</span><span>Linking category subfolders &amp; permissions</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (done) {
+      return (
+        <div style={{ textAlign: 'center', padding: '12px 0' }}>
+          <div style={{ fontSize: 52, marginBottom: 12 }}>🎉</div>
+          <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#059669' }}>
+            Vessel Folders Successfully Provisioned!
+          </h3>
+          <p style={{ margin: '0 0 20px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+            <strong>"{ vessel.name }"</strong> has been fully provisioned — all SharePoint DMS folder structures have been created.
+          </p>
+          <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, padding: '12px 16px', marginBottom: 24, fontSize: 12, color: '#065f46', textAlign: 'left' }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>✅ Provisioning Complete</div>
+            <div>• SharePoint DMS department subfolders created</div>
+            <div>• IMO: {vessel.imo || '—'}</div>
+            <div>• Vessel is ready for document uploads</div>
+          </div>
+          <button
+            onClick={handleClose}
+            style={{
+              background: 'linear-gradient(135deg, #10b981, #059669)',
+              color: '#fff', border: 'none', borderRadius: 10,
+              padding: '12px 32px', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(16,185,129,0.3)',
+            }}
+          >
+            Done / View Vessels
+          </button>
+        </div>
+      );
+    }
+
+    if (!provisioning && !done && isProvisioned) {
+      return (
+        <div style={{ textAlign: 'center', padding: '8px 0' }}>
+          <div style={{ fontSize: 48, marginBottom: 10 }}>✅</div>
+          <h3 style={{ margin: '0 0 6px', fontSize: 19, fontWeight: 700, color: '#15803d' }}>
+            Folders Already Provisioned
+          </h3>
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+            The standard SharePoint DMS folder tree for <strong>"{vessel.name}"</strong> is already provisioned and registered.
+          </p>
+
+          <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 12, color: '#166534', textAlign: 'left' }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>📋 Provisioned Folder Structure:</div>
+            <div>• Technical &amp; Crewing — Active</div>
+            <div>• Commercial &amp; Chartering — Active</div>
+            <div>• Insurance — Active</div>
+          </div>
+
+          {error && (
+            <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#dc2626', display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span>⚠️</span><span>{error}</span>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button
+              onClick={handleClose}
+              style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+            >
+              Close
+            </button>
+            {host.props.siteUrl && (
+              <a
+                href={getSpoVesselFolderUrl(host.props.siteUrl, vessel.name)}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  background: 'linear-gradient(135deg, #0ea5e9, #0284c7)', color: '#fff',
+                  border: 'none', borderRadius: 8, padding: '10px 20px',
+                  fontSize: 13, fontWeight: 700, textDecoration: 'none',
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                }}
+              >
+                Open in SharePoint ↗
+              </a>
+            )}
+            <button
+              onClick={handleProvision}
+              style={{
+                background: 'transparent', color: '#0284c7', border: '1px solid #0284c7',
+                borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              }}
+            >
+              🔄 Re-Provision Folders
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <>
+        <div style={{ textAlign: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 44, marginBottom: 10 }}>📁</div>
+          <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#0f172a' }}>
+            Provision SharePoint Folders
+          </h3>
+          <p style={{ margin: '0 0 12px', fontSize: 13, color: '#64748b', lineHeight: 1.5 }}>
+            This will create the full DMS folder hierarchy for <strong>"{ vessel.name }"</strong> in SharePoint Online across all departments.
+          </p>
+        </div>
+
+        <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 12, color: '#0369a1', textAlign: 'left' }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>📋 What will be created:</div>
+          <div>• Technical &amp; Crewing — monthly sub-folders + categories</div>
+          <div>• Commercial — contract and invoice folders</div>
+          <div>• Insurance — certificate and policy folders</div>
+        </div>
+
+        {error && (
+          <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#dc2626', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <span>⚠️</span><span>{error}</span>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+          <button
+            onClick={handleClose}
+            style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 8, padding: '10px 22px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleProvision}
+            style={{
+              background: 'linear-gradient(135deg, #0ea5e9, #0284c7)',
+              color: '#fff', border: 'none', borderRadius: 8,
+              padding: '10px 26px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+              boxShadow: '0 4px 12px rgba(2,132,199,0.3)',
+            }}
+          >
+            📁 Start Provisioning
+          </button>
+        </div>
+      </>
+    );
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Provision Vessel Folders"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        background: 'rgba(15,23,42,0.6)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        backdropFilter: 'blur(4px)',
+      }}
+      onClick={e => { if (e.target === e.currentTarget && !provisioning) handleClose(); }}
+    >
+      <div style={{
+        background: '#fff', borderRadius: 20, padding: '32px 36px',
+        width: 480, maxWidth: '92vw',
+        boxShadow: '0 24px 64px rgba(0,0,0,0.28)', position: 'relative',
+      }}>
+        {!provisioning && (
+          <button
+            onClick={handleClose}
+            style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
+            title="Close"
+          >✕</button>
+        )}
+        {renderBody()}
+      </div>
+    </div>
+  );
+}
+
+
 // ── Main Page Render ─────────────────────────────────────────────────────────
 
 export function renderVesselsPage(host: VesselEmail): React.ReactElement {
@@ -968,26 +1231,41 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                       >
                         📄 View Documents
                       </button>
-                      <button
-                        disabled={!!folderProvisioningVesselId}
-                        onClick={e => {
-                          e.stopPropagation();
-                          host._provisionVesselFolders(vessel.name, vessel.id).catch(() => undefined);
-                        }}
-                        title="Create SharePoint folder structure for this vessel"
-                        style={{
-                          flex: 1,
-                          border: '1px solid #cbd5e1', borderRadius: 7, padding: '7px 10px',
-                          fontSize: 11, fontWeight: 700, cursor: folderProvisioningVesselId ? 'not-allowed' : 'pointer',
-                          background: isProvisioning ? '#f0f9ff' : '#f8fafc',
-                          color: isProvisioning ? '#0284c7' : '#334155',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-                        }}
-                      >
-                        {isProvisioning ? (
-                          <><span style={{ display: 'inline-block', width: 11, height: 11, border: '2px solid #0284c7', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} /> Creating…</>
-                        ) : '📁 Provision'}
-                      </button>
+                      {(() => {
+                        const provisioned = (
+                          host.state.provisionedVesselIds?.has(vessel.id) ||
+                          (host.state.rows && host.state.rows.some(r => r.vesselName && r.vesselName.toLowerCase() === vessel.name.toLowerCase())) ||
+                          (vessel as any).is_provisioned === true ||
+                          (vessel as any).provisioned === true
+                        );
+                        return (
+                          <button
+                            disabled={!!folderProvisioningVesselId}
+                            onClick={e => {
+                              e.stopPropagation();
+                              host.setState({ spoProvisionDialog: { vessel, provisioning: false, done: false, error: null } });
+                            }}
+                            title={provisioned ? "SharePoint DMS folders are already provisioned" : "Create SharePoint folder structure for this vessel"}
+                            style={{
+                              flex: 1,
+                              border: provisioned ? '1px solid #bbf7d0' : '1px solid #cbd5e1',
+                              borderRadius: 7, padding: '7px 10px',
+                              fontSize: 11, fontWeight: 700, cursor: folderProvisioningVesselId ? 'not-allowed' : 'pointer',
+                              background: isProvisioning ? '#f0f9ff' : provisioned ? '#f0fdf4' : '#f8fafc',
+                              color: isProvisioning ? '#0284c7' : provisioned ? '#15803d' : '#334155',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                            }}
+                          >
+                            {isProvisioning ? (
+                              <><span style={{ display: 'inline-block', width: 11, height: 11, border: '2px solid #0284c7', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} /> Creating…</>
+                            ) : provisioned ? (
+                              '✓ Already Provisioned'
+                            ) : (
+                              '📁 Provision'
+                            )}
+                          </button>
+                        );
+                      })()}
                       <a
                         href={getSpoVesselFolderUrl(host.props.siteUrl, vessel.name)}
                         target="_blank"
@@ -1037,8 +1315,11 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
           @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         `}</style>
 
-        {/* ── Classify Dialog (rendered at top layer via portal-like absolute) ── */}
+        {/* ── Classify Dialog ── */}
         {renderClassifyDialog(host)}
+
+        {/* ── Provision Dialog ── */}
+        {renderProvisionDialog(host)}
 
         {/* Modals */}
         {modal === 'create' && host._renderVesselForm('create')}
