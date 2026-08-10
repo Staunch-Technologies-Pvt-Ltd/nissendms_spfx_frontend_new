@@ -102,33 +102,51 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
     }
     const base = (this.properties.apiBaseUrl || 'https://nk-dms-dev.sg-nissenkaiun.com').replace(/\/$/, '');
     try {
-      const res = await fetch(`${base}/api/auth/bypass-login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: this._userEmail,
-          display_name: this.context.pageContext.user.displayName,
-          tenant_id: this.context.pageContext.aadInfo?.tenantId?.toString() || '',
-        }),
-      });
-      if (res.ok) {
+      let res: Response | null = null;
+      try {
+        res = await fetch(`${base}/api/auth/bypass-login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: this._userEmail,
+            display_name: this.context.pageContext.user.displayName,
+            tenant_id: this.context.pageContext.aadInfo?.tenantId?.toString() || '',
+          }),
+        });
+      } catch (sslErr) {
+        console.warn('[VesselDMS] Primary bypass-login failed (SSL/Network):', sslErr);
+        if (base.includes('nk-dms-dev.sg-nissenkaiun.com')) {
+          try {
+            res = await fetch(`http://localhost:8000/api/auth/bypass-login`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                email: this._userEmail,
+                display_name: this.context.pageContext.user.displayName,
+                tenant_id: this.context.pageContext.aadInfo?.tenantId?.toString() || '',
+              }),
+            });
+          } catch (localErr) {
+            console.warn('[VesselDMS] Local fallback bypass-login failed:', localErr);
+          }
+        }
+      }
+
+      if (res && res.ok) {
         const data = await res.json();
         if (data.session_id) {
           this._sessionId = data.session_id;
         } else {
-          // Backend is running in stub/no-DB mode (session_id intentionally null —
-          // require_session() allows unauthenticated calls there). This is NOT a
-          // failure: fall through and still mark init as done so the UI loads data.
           console.warn('[VesselDMS] bypass-login succeeded without a session_id (stub/no-DB mode).');
         }
-      } else {
+      } else if (res) {
         console.warn('[VesselDMS] bypass-login failed:', res.status, await res.text().catch(() => ''));
-        // Even without a session, the UI should still load — the backend allows
-        // requests without a session token in stub/no-DB mode.
       }
     } catch (e) {
       console.warn('[VesselDMS] Session init failed:', e);
     } finally {
+
+
       // ALWAYS mark session init as settled and re-render — regardless of whether
       // a session_id was actually obtained. Previously this.render() was only
       // called inside the `if (data.session_id)` branch, so when the backend had

@@ -78,4 +78,30 @@ export interface UserItem {
   role: 'Administrator' | 'Manager' | 'User' | 'Reviewer';
   status: 'Active' | 'Inactive';
   lastLogin: string;
-}
+}
+
+export interface FolderAnomalyItem {
+  id: number;
+  drive_item_id: string;
+  name: string;
+  item_type: 'folder' | 'file';
+  anomaly_type: 'vessel_level_unmatched' | 'main_folder_unmatched' | 'subfolder_unmatched' | 'classified_normal';
+  department: string;
+  vessel_name: string | null;
+  spo_path: string;
+  resolved: boolean;
+  detected_at: string | null;
+}
+
+export interface NormalFolderRecord {
+  id: number | null;
+  drive_item_id: string;
+  name: string;
+  item_type: 'folder' | 'file';
+  spo_path: string;
+  department: string;
+  vessel_name: string | null;
+  detected_at: string | null;
+}
+
+

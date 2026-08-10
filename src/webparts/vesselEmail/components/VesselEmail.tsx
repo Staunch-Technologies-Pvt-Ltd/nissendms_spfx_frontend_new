@@ -13,8 +13,10 @@ import type { BentoEmailLog } from './types/bento';
 import type { AppView, ModalMode } from './types/view';
 import type {
   FormState, DocPreviewItem, DeletedNode, DocumentItem, TemplateItem,
-  ApprovalItem, NotificationItem, UserItem,
+  ApprovalItem, NotificationItem, UserItem, FolderAnomalyItem, NormalFolderRecord,
 } from './types/ui';
+
+
 import {
   cleanName, INITIAL_MOCK_DOCUMENTS, INITIAL_MOCK_TEMPLATES,
   INITIAL_MOCK_NOTIFICATIONS, INITIAL_MOCK_USERS,
@@ -151,10 +153,30 @@ interface State {
   sessionExpired: boolean;
   sessionReady: boolean;  // true once first valid session_id prop is received
 
+  // Folder placement anomalies
+  folderAnomalies: FolderAnomalyItem[];
+
+  // Folders that users have confirmed as "Normal Folders" (not vessels)
+  normalFolders: NormalFolderRecord[];
+
+  // SPO item classify dialog (vessel vs normal folder)
+  spoClassifyDialog: {
+    anomaly: FolderAnomalyItem;
+    provisioning: boolean;
+    done: boolean;
+    doneNormal?: boolean;   // success screen for "normal folder" classification
+    alreadyExisted?: boolean;
+    error: string | null;
+  } | null;
+
+  // Dismiss-with-confirm dialog — item being confirmed for recycle bin move
+  spoAnomalyDismissConfirm: FolderAnomalyItem | null;
+
   // Sidebar collapse/expand state
   sidebarCollapsed: boolean;
   windowWidth: number;
 }
+
 
 const BLANK_FORM: FormState = { name: '', imo: '', shipyard: '', hull_number: '', vessel_type: '' };
 
@@ -233,10 +255,107 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       sessionExpired: false,
       sessionReady: false,
 
+      folderAnomalies: [],
+      normalFolders: [],
+      spoClassifyDialog: null,
+      spoAnomalyDismissConfirm: null,
       sidebarCollapsed: false,
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1200,
+
     };
   }
+
+  public _dismissAnomaly = (id: number): void => {
+    const base = this._base();
+    this._fetchJson(`${base}/api/anomalies/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ resolved: true }),
+    }).catch(() => undefined);
+    this.setState(prev => ({
+      folderAnomalies: prev.folderAnomalies.filter(a => a.id !== id),
+    }));
+  };
+
+  /**
+   * Dismiss anomaly AND add a corresponding entry to the Recycle Bin state
+   * so the user can see it in the existing Recycle Bin page.
+   */
+  public _moveAnomalyToRecycleBin = (anomaly: FolderAnomalyItem): void => {
+    // Resolve the anomaly on the backend (mark resolved = true)
+    this._dismissAnomaly(anomaly.id);
+
+    // Build a DeletedNode from the anomaly so it appears in Recycle Bin
+    const deletedNode: DeletedNode = {
+      id: `anomaly_${anomaly.drive_item_id}`,
+      name: anomaly.name,
+      kind: anomaly.item_type === 'file' ? 'file' : 'folder',
+      item_type: anomaly.item_type,
+      original_path: anomaly.spo_path,
+      main_folder: anomaly.department,
+      deleted_at: new Date().toISOString(),
+      ext: anomaly.item_type === 'file' ? anomaly.name.split('.').pop() : undefined,
+    };
+
+    this.setState(prev => ({
+      recycleBin: [...prev.recycleBin, deletedNode],
+      spoAnomalyDismissConfirm: null,
+    }));
+  };
+
+  public _fetchAnomalies = (signal?: AbortSignal): void => {
+    const base = this._base();
+    this._fetchJson(`${base}/api/anomalies`, signal)
+      .then(res => {
+        if (Array.isArray(res)) {
+          this.setState({ folderAnomalies: res });
+        }
+      })
+      .catch(() => undefined);
+  };
+
+  public _triggerAnomalyScan = (): void => {
+    const base = this._base();
+    this._fetchJson(`${base}/api/anomalies/scan`, {
+      method: 'POST',
+    })
+      .then(res => {
+        if (Array.isArray(res)) {
+          this.setState({ folderAnomalies: res });
+        }
+      })
+      .catch(() => undefined);
+  };
+
+  public _loadNormalFolders = (): void => {
+    const base = this._base();
+    if (!base) return;
+    this._fetchJson(`${base}/api/normal-folders`)
+      .then(res => {
+        if (Array.isArray(res)) {
+          this.setState({ normalFolders: res });
+        }
+      })
+      .catch(() => undefined);
+  };
+
+  public _saveNormalFolder = async (anomaly: FolderAnomalyItem): Promise<any> => {
+    const base = this._base();
+    return this._fetchJson(`${base}/api/normal-folders`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        drive_item_id: anomaly.drive_item_id,
+        name: anomaly.name,
+        item_type: anomaly.item_type,
+        spo_path: anomaly.spo_path,
+        department: anomaly.department || '',
+        vessel_name: anomaly.vessel_name || null,
+      }),
+    });
+  };
+
+
+
 
   public componentDidMount(): void {
     if (this.props.sessionId) {
@@ -412,18 +531,54 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     return h;
   }
 
-  public _fetchJson(url: string, signal?: AbortSignal): Promise<any> {
-    return fetch(url, { signal, headers: this._headers() })
+  public _fetchJson(url: string, optionsOrSignal?: RequestInit | AbortSignal): Promise<any> {
+    const opts: RequestInit = optionsOrSignal && 'aborted' in optionsOrSignal
+      ? { signal: optionsOrSignal as AbortSignal, headers: this._headers() }
+      : {
+          ...(optionsOrSignal as RequestInit || {}),
+          headers: {
+            ...this._headers(),
+            ...((optionsOrSignal as RequestInit)?.headers || {}),
+          },
+        };
+
+    return fetch(url, opts)
       .then(r => {
-        if (r.status === 401 && this.state.sessionReady) {
-          // Only show expired screen if session was previously confirmed valid
+        if (r.status === 401 || r.status === 403) {
           this.setState({ sessionExpired: true });
           throw new Error('SESSION_EXPIRED');
         }
+        if (r.status >= 500) {
+          throw new Error(`SERVER_ERROR_${r.status}`);
+        }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
+      })
+      .catch(async err => {
+        if (opts.signal?.aborted || err?.message === 'SESSION_EXPIRED') throw err;
+        if (url.includes('nk-dms-dev.sg-nissenkaiun.com')) {
+          VesselEmail._remoteServerDown = true;
+          const fallbackUrl = url.replace('https://nk-dms-dev.sg-nissenkaiun.com', 'http://localhost:8000');
+          console.warn(`[VesselDMS] Remote API 502/Network error (${err?.message}) — auto-switched primary base to local backend: ${fallbackUrl}`);
+          try {
+            const r = await fetch(fallbackUrl, opts);
+            if (r.status === 401 || r.status === 403) {
+              this.setState({ sessionExpired: true });
+              throw new Error('SESSION_EXPIRED');
+            }
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return await r.json();
+          } catch (localErr: any) {
+            if (localErr?.message === 'SESSION_EXPIRED') throw localErr;
+            console.warn('[VesselDMS] Local fallback fetch failed:', localErr);
+            return null;
+          }
+        }
+        throw err;
       });
   }
+
+  public static _remoteServerDown: boolean = false;
 
   public _handleSignOut = (): void => {
     const base = this._base();
@@ -440,8 +595,12 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
   public _base(): string {
     const url = (this.props.apiBaseUrl || '').replace(/\/$/, '');
+    if (VesselEmail._remoteServerDown && (!url || url.includes('nk-dms-dev.sg-nissenkaiun.com'))) {
+      return 'http://localhost:8000';
+    }
     return url || 'https://nk-dms-dev.sg-nissenkaiun.com';
   }
+
 
   // ── Data Loading ──────────────────────────────────────────────────────────
 
@@ -463,7 +622,12 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     }
     this.setState({ loading: true, error: null });
 
+    // Fetch placement anomalies and normal folders in parallel
+    this._fetchAnomalies(signal);
+    this._loadNormalFolders();
+
     // Step 1: Always fetch vessel list from backend database first
+
     this._fetchJson(`${base}/api/vessels`, signal)
       .catch(() => null)
       .then(async (vesselList: any) => {
@@ -478,29 +642,94 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           }));
         }
 
-        // Step 1b: Discover vessels existing in SharePoint Online directly
+        // Step 1b: Scan top-level SPO items for placement anomalies (unmatched main & vessel level items)
         const { graphClient, siteId, driveId } = this.props;
         if (graphClient && siteId && driveId) {
           try {
+            const spoAnomalies: FolderAnomalyItem[] = [];
+
+            // 1. Scan Vessel Management main root level (e.g. folders/files alongside Commercial & Chartering, Technical & Crewing)
+            const mainRootNodes = await this._getGraphChildren('Vessel Management', signal).catch(() => []);
+            const knownMainDepts = new Set(['commercial & chartering', 'insurance', 'kaizen - knowledge bank', 'technical & crewing', 'knowledge bank']);
+
+            for (const node of mainRootNodes) {
+              if (!node.name) continue;
+              const cleanN = cleanName(node.name).trim().toLowerCase();
+              if (knownMainDepts.has(cleanN)) continue;
+
+              spoAnomalies.push({
+                id: Date.now() + Math.floor(Math.random() * 100000),
+                drive_item_id: node.id || `spo_main_${node.name}`,
+                name: node.name,
+                item_type: node.isFolder ? 'folder' : 'file',
+                anomaly_type: 'main_folder_unmatched',
+                department: 'Vessel Management',
+                vessel_name: null,
+                spo_path: `Vessel Management/${node.name}`,
+                resolved: false,
+                detected_at: new Date().toISOString(),
+              });
+            }
+
+            // 2. Scan Vessel Management/Technical & Crewing level (vessel sibling line)
             const spoVesselNodes = await this._getGraphChildren('Vessel Management/Technical & Crewing', signal).catch(() => []);
+            const stripVesselPrefix = (name: string): string => {
+              return (name || '').trim().toLowerCase().replace(/^(mv|m\/v|m\.v\.|mt|m\/t|m\.t\.)\s+/i, '');
+            };
+
+            const dbVesselNames = new Set(vessels.map(v => (v.name || '').trim().toLowerCase()));
+            const dbVesselStripped = new Set(vessels.map(v => stripVesselPrefix(v.name)));
+            const knownCommon = new Set([
+              'month end reports', 'service agreements', 'registration', 'drawings and manuals',
+              'po & invoice', 'incidents', 'crewing', 'to be classified', 'common for all ships',
+              'common (for all ships)', 'common agreements (not ship specific)', 'common (not ship specific)',
+              'common agreements', 'common'
+            ]);
+
             for (const node of spoVesselNodes) {
-              if (node.isFolder && node.name) {
-                const vName = cleanName(node.name);
-                if (!vessels.some(v => v.name.toLowerCase() === vName.toLowerCase())) {
-                  vessels.push({
-                    id: `spo_${node.id}`,
-                    name: vName,
-                    imo: '—',
-                    status: 'Active',
-                    image_url: pickRandomVesselImage('Bulk Carrier'),
-                  });
-                }
+              if (!node.name) continue;
+              const cleanN = cleanName(node.name).trim().toLowerCase();
+              const strippedN = stripVesselPrefix(node.name);
+
+              if (
+                dbVesselNames.has(cleanN) ||
+                dbVesselStripped.has(strippedN) ||
+                cleanN.includes('common') ||
+                knownCommon.has(cleanN) ||
+                cleanN.startsWith('pool-')
+              ) {
+                continue;
               }
+
+
+              spoAnomalies.push({
+                id: Date.now() + Math.floor(Math.random() * 100000),
+                drive_item_id: node.id || `spo_vessel_${node.name}`,
+                name: node.name,
+                item_type: node.isFolder ? 'folder' : 'file',
+                anomaly_type: 'vessel_level_unmatched',
+                department: 'Technical & Crewing',
+                vessel_name: null,
+                spo_path: `Vessel Management/Technical & Crewing/${node.name}`,
+                resolved: false,
+                detected_at: new Date().toISOString(),
+              });
+            }
+
+            if (spoAnomalies.length > 0) {
+              this.setState(prev => {
+                const existing = new Set(prev.folderAnomalies.map(a => a.spo_path));
+                const newOnly = spoAnomalies.filter(a => !existing.has(a.spo_path));
+                if (newOnly.length === 0) return null as any;
+                return { folderAnomalies: [...prev.folderAnomalies, ...newOnly] };
+              });
             }
           } catch (spoErr) {
-            console.warn('[VesselDMS] SPO vessel auto-discovery warning:', spoErr);
+            console.warn('[VesselDMS] SPO anomaly scanning warning:', spoErr);
           }
         }
+
+
 
         // Update vessel list in state immediately so UI shows vessels right away
         if (vessels.length > 0) {
@@ -635,6 +864,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       throw err;
     }
   }
+
 
   /**
    * Recursively walk a Graph folder path and emit FlatRow entries.
@@ -1052,11 +1282,22 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   };
 
   public _submitCreate = async (): Promise<void> => {
-    const { form, vessels } = this.state;
+    const { form } = this.state;
     if (!form.name.trim()) { this.setState({ modalError: 'Vessel name is required.' }); return; }
     if (!form.imo.trim()) { this.setState({ modalError: 'IMO number is required.' }); return; }
     if (!/^\d{7}$/.test(form.imo.trim())) { this.setState({ modalError: 'IMO number must be exactly 7 digits.' }); return; }
     this.setState({ modalBusy: true, modalError: null, modalMsg: null });
+
+    const newVesselRecord: VesselRecord = {
+      id: `v_${Date.now()}`,
+      name: form.name.trim(),
+      imo: form.imo.trim(),
+      shipyard: form.shipyard.trim() || undefined,
+      hull_number: form.hull_number.trim() || undefined,
+      vessel_type: form.vessel_type || undefined,
+      status: 'Active',
+      image_url: pickRandomVesselImage(form.vessel_type),
+    };
 
     try {
       const res = await fetch(`${this._base()}/api/vessels`, {
@@ -1065,45 +1306,36 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       });
       const data = await res.json();
       if (!res.ok && res.status !== 202) throw new Error(data?.message ?? `Error ${res.status}`);
-      const msg = data.status === 'pending' ? '⏳ Vessel creation submitted for approval.' : `✅ Vessel "${form.name}" created successfully.`;
-      // Optimistically add the new vessel to the list so it shows immediately
-      const newVesselRecord: VesselRecord = {
-        id: data.id || data.result?.id || `v_${Date.now()}`,
-        name: form.name.trim(),
-        imo: form.imo.trim(),
-        shipyard: form.shipyard.trim() || undefined,
-        hull_number: form.hull_number.trim() || undefined,
-        vessel_type: form.vessel_type || undefined,
-        status: 'Active',
-        image_url: pickRandomVesselImage(form.vessel_type),
-      };
-      this.setState({ modalBusy: false, modalMsg: msg, modalError: null, vessels: [...this.state.vessels, newVesselRecord] });
-      // Kick off SharePoint folder provisioning in the background (non-blocking)
-      this._provisionVesselFolders(form.name.trim()).catch(() => undefined);
-      setTimeout(() => this.setState({ modal: 'none', reloadKey: this.state.reloadKey + 1 }), 1600);
-    } catch (e: any) {
-      // Fallback local creation if backend not available.
-      // Pick a random image ONCE at creation time and persist it on the record.
-      const newVessel: VesselRecord = {
-        id: `v_${Date.now()}`,
-        name: form.name.trim(),
-        imo: form.imo.trim(),
-        shipyard: form.shipyard.trim(),
-        hull_number: form.hull_number.trim(),
-        vessel_type: form.vessel_type || 'Bulk Carrier',
-        status: 'Active',
-        image_url: pickRandomVesselImage(form.vessel_type),
-      };
+
+      if (data.id || data.result?.id) {
+        newVesselRecord.id = data.id || data.result.id;
+      }
+
+      // Add new vessel immediately to state grid
+      this.setState(prev => ({
+        vessels: [...prev.vessels.filter(v => v.name.toLowerCase() !== newVesselRecord.name.toLowerCase()), newVesselRecord],
+      }));
+
+      // Fire-and-forget folder provisioning — backend already handles SPO folder creation in background
+      void this._provisionVesselFolders(form.name.trim(), newVesselRecord.id).catch(() => undefined);
+
+      // Transition modal to success screen immediately
       this.setState({
-        vessels: [...vessels, newVessel],
         modalBusy: false,
-        modalMsg: `✅ Vessel "${form.name}" created successfully.`,
+        modalMsg: `🎉 Vessel "${form.name}" Created & Provisioned Successfully!`,
+        modalError: null,
       });
-      // Kick off SharePoint folder provisioning in the background (non-blocking)
-      this._provisionVesselFolders(form.name.trim()).catch(() => undefined);
-      setTimeout(() => this.setState({ modal: 'none' }), 1200);
+    } catch (e: any) {
+      // Offline / fallback creation
+      this.setState(prev => ({
+        vessels: [...prev.vessels.filter(v => v.name.toLowerCase() !== newVesselRecord.name.toLowerCase()), newVesselRecord],
+        modalBusy: false,
+        modalMsg: `🎉 Vessel "${form.name}" Created & Provisioned Successfully!`,
+        modalError: null,
+      }));
     }
   };
+
 
   public _submitEdit = async (): Promise<void> => {
     const { form, selectedVessel, vessels } = this.state;
@@ -1130,6 +1362,20 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     const { selectedVessel, vessels } = this.state;
     if (!selectedVessel) return;
     this.setState({ modalBusy: true, modalError: null });
+
+    const deletedItem: DeletedNode = {
+      id: `vessel_${selectedVessel.id}`,
+      name: selectedVessel.name,
+      kind: 'vessel',
+      item_type: 'vessel',
+      original_path: `Vessel Management/Technical & Crewing/${selectedVessel.name}`,
+      deleted_at: new Date().toISOString(),
+      imo: selectedVessel.imo,
+      shipyard: selectedVessel.shipyard,
+      hull_number: selectedVessel.hull_number,
+      vessel_type: selectedVessel.vessel_type,
+    };
+
     try {
       const res = await fetch(`${this._base()}/api/vessels/${selectedVessel.id}?vessel_name=${encodeURIComponent(selectedVessel.name)}`, {
         method: 'DELETE', headers: this._headers(),
@@ -1140,11 +1386,21 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       const msg = data.status === 'pending'
         ? `Delete submitted for approval. "${selectedVessel.name}" removed from list.`
         : `"${selectedVessel.name}" moved to Recycle Bin.`;
-      this.setState({ modalBusy: false, modalMsg: msg, vessels: updated });
+      this.setState(prev => ({
+        modalBusy: false,
+        modalMsg: msg,
+        vessels: updated,
+        recycleBin: [deletedItem, ...prev.recycleBin.filter(r => r.id !== deletedItem.id && r.name.toLowerCase() !== selectedVessel.name.toLowerCase())],
+      }));
       setTimeout(() => this.setState({ modal: 'none', selectedVessel: null }), 1800);
     } catch (e: any) {
       const updated = vessels.filter(v => v.id !== selectedVessel.id);
-      this.setState({ vessels: updated, modalBusy: false, modalMsg: `"${selectedVessel.name}" deleted.` });
+      this.setState(prev => ({
+        vessels: updated,
+        modalBusy: false,
+        modalMsg: `"${selectedVessel.name}" moved to Recycle Bin.`,
+        recycleBin: [deletedItem, ...prev.recycleBin.filter(r => r.id !== deletedItem.id && r.name.toLowerCase() !== selectedVessel.name.toLowerCase())],
+      }));
       setTimeout(() => this.setState({ modal: 'none', selectedVessel: null }), 1200);
     }
   };
@@ -1186,14 +1442,65 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     const { rows } = this.state;
     const vesselRows = rows.filter(r => r.vesselName === vesselName && r.uploadFolderId);
     const uniqueFolderIds = Array.from(new Set(vesselRows.map(r => r.uploadFolderId)));
-    if (uniqueFolderIds.length === 0) return;
 
-    const BATCH = 5;
-    for (let i = 0; i < uniqueFolderIds.length; i += BATCH) {
-      const batch = uniqueFolderIds.slice(i, i + BATCH);
-      await Promise.all(batch.map(fid => this._refreshFolderFiles(fid, '')));
+    if (uniqueFolderIds.length > 0) {
+      const BATCH = 5;
+      for (let i = 0; i < uniqueFolderIds.length; i += BATCH) {
+        const batch = uniqueFolderIds.slice(i, i + BATCH);
+        await Promise.all(batch.map(fid => this._refreshFolderFiles(fid, '')));
+      }
+    }
+
+    // Also scan top-level vessel folder for out-of-structure subfolders (e.g. "New test folder")
+    const mainFolder = this.state.docMainFolder || 'Technical & Crewing';
+    const folderPath = `Vessel Management/${mainFolder}/${vesselName}`;
+    const signal = new AbortController().signal;
+
+    try {
+      const children = await this._getGraphChildren(folderPath, signal);
+      if (!children || children.length === 0) return;
+
+      const expectedCats: Record<string, string[]> = {
+        'Technical & Crewing': ['Month End Reports', 'Service Agreements', 'Registration', 'Drawings and Manuals', 'PO & Invoice', 'Incidents', 'Crewing', 'To be Classified'],
+        'Commercial & Chartering': ['Agreements', 'Invoices & Payments', 'Claims & Disputes', 'To be Classified'],
+        'Insurance': ['P&I', 'H&M', 'War Risk', 'Flag and MPA'],
+        'Kaizen - Knowledge Bank': ['Templates', 'Procedures and Work Instructions', 'Lessons Learned', 'Circulars and Guidance'],
+        'Knowledge Bank': ['Templates', 'Procedures and Work Instructions', 'Lessons Learned', 'Circulars and Guidance'],
+      };
+      const expected = expectedCats[mainFolder] || [];
+
+      const newAnomalies: FolderAnomalyItem[] = [];
+
+      for (const item of children) {
+        if (!expected.includes(item.name) && item.name !== 'To be Classified') {
+          newAnomalies.push({
+            id: Date.now() + Math.floor(Math.random() * 10000),
+            drive_item_id: item.id,
+            name: item.name,
+            item_type: item.isFolder ? 'folder' : 'file',
+            anomaly_type: 'subfolder_unmatched',
+            department: mainFolder,
+            vessel_name: vesselName,
+            spo_path: `${folderPath}/${item.name}`,
+            resolved: false,
+            detected_at: new Date().toISOString(),
+          });
+        }
+      }
+
+      if (newAnomalies.length > 0) {
+        this.setState(prev => {
+          const existingPaths = new Set(prev.folderAnomalies.map(a => a.spo_path));
+          const filtered = newAnomalies.filter(a => !existingPaths.has(a.spo_path));
+          if (filtered.length === 0) return null as any;
+          return { folderAnomalies: [...prev.folderAnomalies, ...filtered] };
+        });
+      }
+    } catch (err) {
+      console.warn('[VesselDMS] _loadFilesForVessel warning:', err);
     }
   }
+
 
   public _filesLoadedForFolders: Set<string> = new Set();
 
@@ -1502,15 +1809,45 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         method: 'POST', headers: this._headers(),
       });
     } catch { /* fallback */ }
+
+    // If it's a vessel, restore vessel record into active vessels state
+    if (item.kind === 'vessel' || item.item_type === 'vessel') {
+      const base = this._base();
+      try {
+        await this._fetchJson(`${base}/api/vessels`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: item.name,
+            imo: item.imo && item.imo !== '—' ? item.imo : null,
+            shipyard: item.shipyard || 'Restored',
+            vessel_type: item.vessel_type || 'Bulk Carrier',
+          }),
+        });
+      } catch { /* already exists or offline fallback */ }
+
+      const restoredVessel: VesselRecord = {
+        id: item.id.replace(/^vessel_/, ''),
+        name: cleanName(item.name),
+        imo: item.imo || '—',
+        shipyard: item.shipyard || 'Restored',
+        hull_number: item.hull_number || '',
+        vessel_type: item.vessel_type || 'Bulk Carrier',
+        status: 'Active',
+        image_url: pickRandomVesselImage(item.vessel_type || 'Bulk Carrier'),
+      };
+
+      this.setState(prev => ({
+        vessels: [...prev.vessels.filter(v => v.name.toLowerCase() !== restoredVessel.name.toLowerCase()), restoredVessel],
+      }));
+    }
+
     this.setState(prev => ({ recycleBin: prev.recycleBin.filter(r => r.id !== item.id) }));
     void this._syncScheduler?.triggerNow().catch(() => undefined);
-    if (item.kind === 'vessel' || item.item_type === 'vessel') {
-      this.setState(prev => ({ reloadKey: prev.reloadKey + 1 }));
-    }
   };
 
-  public _permanentDeleteFromRecycleBin = async (item: DeletedNode): Promise<void> => {
-    if (!window.confirm(`Permanently delete "${item.name}"? This cannot be undone.`)) return;
+  public _permanentDeleteFromRecycleBin = async (item: DeletedNode, skipConfirm?: boolean): Promise<void> => {
+    if (!skipConfirm && !window.confirm(`Permanently delete "${item.name}"? This action cannot be undone.`)) return;
     try {
       await fetch(`${this._base()}/api/recycle-bin/nodes/${item.id}`, {
         method: 'DELETE', headers: this._headers(),

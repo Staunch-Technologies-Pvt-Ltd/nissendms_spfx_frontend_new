@@ -15,8 +15,10 @@ import type {
   ApprovalItem, NotificationItem, UserItem,
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
+import { renderClassifyDialog } from './VesselsPage';
 
 export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
+
     const {
       textFilter, vesselFilter, catFilter, docViewMode, showAllVesselsInFolderView,
       vessels, rows, docListPage, docListSort, docGroupFilter,
@@ -62,6 +64,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
     const currentFolderNode = folderPathStack.length > 0 ? folderPathStack[folderPathStack.length - 1] : null;
     const currentFolderName = currentFolderNode ? currentFolderNode.name : null;
+    const currentVesselNameFromStack = folderPathStack.length > 0 ? folderPathStack[0].name : null;
+
+    if (currentVesselNameFromStack && !host._filesLoadedForVessels.has(currentVesselNameFromStack)) {
+      host._filesLoadedForVessels.add(currentVesselNameFromStack);
+      setTimeout(() => host._loadFilesForVessel(currentVesselNameFromStack!).catch(() => undefined), 0);
+    }
+
 
     // Determine subfolders for current depth
     const subfolderNames: string[] = currentFolderName
@@ -72,6 +81,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             : []
         ))
       : [];
+
 
     const currentFolderFiles = currentFolderName ? (uploadedFilesByFolder[currentFolderName] || []).filter((f: any) => !f.pending) : [];
 
@@ -436,30 +446,137 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
             {/* ── Level 0: Four Main Folders ── */}
             {!docMainFolder ? (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
-                {MAIN_FOLDERS.map(mf => (
-                  <div
-                    key={mf.key}
-                    onClick={() => host.setState({ docMainFolder: mf.key, folderPathStack: [], vesselFilter: 'all' })}
-                    style={{
-                      background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
-                      display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'transform 0.15s, box-shadow 0.15s',
-                    }}
-                  >
-                    <div style={{ width: 44, height: 44, borderRadius: 10, background: mf.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>
-                      {mf.emoji}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
+                  {MAIN_FOLDERS.map(mf => (
+                    <div
+                      key={mf.key}
+                      onClick={() => host.setState({ docMainFolder: mf.key, folderPathStack: [], vesselFilter: 'all' })}
+                      style={{
+                        background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
+                        display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'transform 0.15s, box-shadow 0.15s',
+                      }}
+                    >
+                      <div style={{ width: 44, height: 44, borderRadius: 10, background: mf.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>
+                        {mf.emoji}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{mf.key}</div>
+                        <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{vessels.length} vessels</div>
+                      </div>
+                      <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
                     </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{mf.key}</div>
-                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{vessels.length} vessels</div>
+                  ))}
+                </div>
+
+                {/* ── Segregated Section: Main Folder Level Unmatched Items ── */}
+                {(() => {
+                  const mainAnomalies = (host.state.folderAnomalies || []).filter(a => a.anomaly_type === 'main_folder_unmatched');
+                  if (mainAnomalies.length === 0) return null;
+
+                  const mainFolders = mainAnomalies.filter(a => a.item_type === 'folder');
+                  const mainFiles   = mainAnomalies.filter(a => a.item_type === 'file');
+
+                  return (
+                    <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      {/* Unrecognised Folders Section */}
+                      {mainFolders.length > 0 && (
+                        <div style={{ background: 'linear-gradient(135deg, #fffbeb 0%, #fff9e6 100%)', border: '2px solid #f59e0b', borderRadius: 14, padding: 20 }}>
+                          <h4 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 700, color: '#92400e', display: 'flex', alignItems: 'center', gap: 8 }}>
+                            ⚠️ Folders Created Outside Standard Main Folders ({mainFolders.length})
+                          </h4>
+                          <p style={{ margin: '0 0 12px', fontSize: 12, color: '#a16207' }}>
+                            These folders were created directly in SharePoint Online at the main folder root level (`Vessel Management`) outside standard category structures.
+                          </p>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                            {mainFolders.map(item => (
+                              <div
+                                key={item.id}
+                                style={{
+                                  background: '#fff', borderRadius: 10, border: '1px solid #fde68a', padding: '12px 16px',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 200 }}>
+                                  <span style={{ fontSize: 24 }}>📁</span>
+                                  <div>
+                                    <div style={{ fontWeight: 700, fontSize: 13, color: '#1f1f1f' }}>{item.name}</div>
+                                    <div style={{ fontSize: 11, color: '#78716c', fontFamily: 'monospace' }}>{item.spo_path}</div>
+                                  </div>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <button
+                                    onClick={() => host.setState({ spoClassifyDialog: { anomaly: item, provisioning: false, done: false, error: null } })}
+                                    style={{
+                                      background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                                      color: '#fff', border: 'none', borderRadius: 6, padding: '6px 12px',
+                                      fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                                    }}
+                                  >
+                                    🔍 Classify
+                                  </button>
+                                  <button
+                                    onClick={() => host._dismissAnomaly(item.id)}
+                                    style={{ background: '#fff', color: '#78716c', border: '1px solid #d6d3d1', borderRadius: 6, padding: '6px 10px', fontSize: 11, cursor: 'pointer' }}
+                                  >
+                                    ✕ Dismiss
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Main Level Uploaded Files Section */}
+                      {mainFiles.length > 0 && (
+                        <div style={{ background: 'linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%)', border: '2px solid #a855f7', borderRadius: 14, padding: 20 }}>
+                          <h4 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 700, color: '#6b21a8', display: 'flex', alignItems: 'center', gap: 8 }}>
+                            📄 Files Uploaded Outside Main Category Structure ({mainFiles.length})
+                          </h4>
+                          <p style={{ margin: '0 0 12px', fontSize: 12, color: '#7c3aed' }}>
+                            These files were uploaded directly to the main folder root in SharePoint Online.
+                          </p>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            {mainFiles.map(item => {
+                              const ext = item.name.split('.').pop()?.toUpperCase() || 'FILE';
+                              return (
+                                <div
+                                  key={item.id}
+                                  style={{
+                                    background: '#fff', borderRadius: 10, border: '1px solid #e9d5ff', padding: '10px 14px',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                    <span style={{ background: '#f3e8ff', color: '#6b21a8', borderRadius: 4, padding: '2px 6px', fontSize: 10, fontWeight: 700 }}>{ext}</span>
+                                    <div>
+                                      <span style={{ fontWeight: 600, fontSize: 13, color: '#1e293b' }}>{item.name}</span>
+                                      <span style={{ fontSize: 11, color: '#64748b', marginLeft: 8, fontFamily: 'monospace' }}>{item.spo_path}</span>
+                                    </div>
+                                  </div>
+                                  <button
+                                    onClick={() => host._dismissAnomaly(item.id)}
+                                    style={{ background: '#fff', color: '#6b21a8', border: '1px solid #e9d5ff', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}
+                                  >
+                                    ✕ Dismiss
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
-                  </div>
-                ))}
+                  );
+                })()}
               </div>
 
+
             ) : folderPathStack.length === 0 ? (
+
               /* ── Level 1: Vessel list inside the selected main folder ── */
               <>
                 {/* Common Documents section */}
@@ -489,12 +606,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         key={v.id}
                         onClick={() => {
                           host.setState({ vesselFilter: v.name, folderPathStack: [{ id: v.id, name: v.name }] });
-                          // Pre-load files for host vessel so approved files show immediately
-                          if (!host._filesLoadedForVessels.has(v.name)) {
-                            host._filesLoadedForVessels.add(v.name);
-                            host._loadFilesForVessel(v.name).catch(() => undefined);
-                          }
+                          // Pre-load files & scan live SPO structure for host vessel so new SPO folders show immediately
+                          host._loadFilesForVessel(v.name).catch(() => undefined);
                         }}
+
                         style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }}
                       >
                         <div style={{ width: 44, height: 44, borderRadius: 10, background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#0284c7' }}>🚢</div>
@@ -604,8 +719,54 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 </div>
               </div>
             )}
+
+            {/* ── Segregated Section: Subfolder Level Unmatched Items Inside Vessel ── */}
+            {(() => {
+              const currentVessel = folderPathStack.length > 0 ? folderPathStack[0].name : null;
+              const subAnomalies = (host.state.folderAnomalies || []).filter(a =>
+                a.anomaly_type === 'subfolder_unmatched' && (!currentVessel || a.vessel_name === currentVessel)
+              );
+              if (subAnomalies.length === 0) return null;
+
+              return (
+                <div style={{ background: '#fff7ed', border: '1px solid #ffedd5', borderRadius: 14, padding: 18, marginTop: 16 }}>
+                  <h4 style={{ margin: '0 0 8px', fontSize: 14, fontWeight: 700, color: '#c2410c', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    ⚠️ Other / Unclassified Items Inside Vessel Tree ({subAnomalies.length})
+                  </h4>
+                  <p style={{ margin: '0 0 12px', fontSize: 12, color: '#9a3412' }}>
+                    These items were added inside the vessel folder in SharePoint but are not part of the standard template structure.
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {subAnomalies.map(item => (
+                      <div
+                        key={item.id}
+                        style={{
+                          background: '#fff', borderRadius: 8, border: '1px solid #fed7aa', padding: '10px 14px',
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span style={{ fontSize: 18 }}>{item.item_type === 'folder' ? '📁' : '📄'}</span>
+                          <div>
+                            <span style={{ fontWeight: 600, fontSize: 13, color: '#1e293b' }}>{item.name}</span>
+                            <span style={{ fontSize: 11, color: '#64748b', marginLeft: 8 }}>Path: {item.spo_path}</span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => host._dismissAnomaly(item.id)}
+                          style={{ background: '#fff', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}
+                        >
+                          ✕ Dismiss
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         ) : (
+
           /* ── LIST VIEW ── */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {/* Table wrapper */}
@@ -820,6 +981,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             </div>
           </div>
         )}
+        {/* Classify Dialog Modal */}
+        {renderClassifyDialog(host)}
       </div>
-    );
+    );
+
+
 }
