@@ -8,7 +8,6 @@ export type AppView =
   | 'vessels'
   | 'templates'
   | 'approvals'
-  | 'notifications'
   | 'reports'
   | 'users'
   | 'settings'

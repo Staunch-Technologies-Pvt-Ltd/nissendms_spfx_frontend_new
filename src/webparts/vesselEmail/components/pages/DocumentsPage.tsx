@@ -22,80 +22,257 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     const {
       textFilter, vesselFilter, catFilter, docViewMode, showAllVesselsInFolderView,
       vessels, rows, docListPage, docListSort, docGroupFilter,
+      documentVesselCount, documentVesselsLoadingMore,
       docUploadRowKey, docUploadBusy, docUploadMsg, documentsList,
       folderPathStack, uploadedFilesByFolder, docMainFolder,
+      folderNavHistory, folderNavIndex, listViewSelectedFiles, folderViewSelectedFiles,
     } = host.state;
+
+    const canGoBack = folderNavIndex > 0;
+    const canGoForward = folderNavIndex < folderNavHistory.length - 1;
+
+    const goBack = (): void => {
+      if (!canGoBack) return;
+      const prev = folderNavHistory[folderNavIndex - 1];
+      host.setState({ folderNavIndex: folderNavIndex - 1, folderPathStack: prev.folderPathStack, docMainFolder: prev.docMainFolder });
+    };
+
+    const goForward = (): void => {
+      if (!canGoForward) return;
+      const next = folderNavHistory[folderNavIndex + 1];
+      host.setState({ folderNavIndex: folderNavIndex + 1, folderPathStack: next.folderPathStack, docMainFolder: next.docMainFolder });
+    };
 
     const PAGE_ROWS = 10;
 
-    // ── Main folder definitions ──
+    // Main folder definitions
     type MainFolderKey = 'Technical & Crewing' | 'Commercial & Chartering' | 'Insurance' | 'Kaizen - Knowledge Bank' | 'Knowledge Bank';
-    const MAIN_FOLDERS: Array<{ key: MainFolderKey; icon: string; emoji: string; color: string; bg: string }> = [
+    const VESSEL_MAIN_FOLDERS: Array<{ key: MainFolderKey; icon: string; emoji: string; color: string; bg: string }> = [
       { key: 'Technical & Crewing', icon: '⚙️', emoji: '⚙️', color: '#dc2626', bg: '#fee2e2' },
       { key: 'Commercial & Chartering', icon: '💼', emoji: '💼', color: '#16a34a', bg: '#dcfce7' },
       { key: 'Insurance', icon: '🛡️', emoji: '🛡️', color: '#d97706', bg: '#fef3c7' },
+    ];
+    const MAIN_FOLDERS: Array<{ key: MainFolderKey; icon: string; emoji: string; color: string; bg: string }> = [
+      ...VESSEL_MAIN_FOLDERS,
       { key: 'Kaizen - Knowledge Bank', icon: '📚', emoji: '📚', color: '#7c3aed', bg: '#ede9fe' },
     ];
 
-    // ── Per main-folder subfolder structure (aligned with vesselFolderTemplate.ts) ──
-    const DEFAULT_VESSEL_MAINS: Record<MainFolderKey, string[]> = {
-      'Technical & Crewing': ['Month End Reports', 'Service Agreements', 'Registration', 'Drawings and Manuals', 'PO & Invoice', 'Incidents', 'Crewing', 'To be Classified'],
-      'Commercial & Chartering': ['Agreements', 'Invoices & Payments', 'Claims & Disputes', 'To be Classified'],
-      'Insurance': ['P&I', 'H&M', 'War Risk', 'Flag and MPA'],
-      'Kaizen - Knowledge Bank': ['Templates', 'Procedures and Work Instructions', 'Lessons Learned', 'Circulars and Guidance'],
-      'Knowledge Bank': ['Templates', 'Procedures and Work Instructions', 'Lessons Learned', 'Circulars and Guidance'],
-    };
-
-    const SUBFOLDERS_MAP: Record<string, string[]> = {
-      'Month End Reports': ['Month Wise Folder'],
-      'Drawings and Manuals': [
-        'Flag & MPA', 'Ship Builder', 'Rules & Telecom', 'Crewing & SMOU', 'Novation', 'Automation and To be Classified',
-        'Drawings', 'Manuals',
-      ],
-      'Drawings': ['Archive', 'Basic', 'Electrical', 'Engine', 'Hull', 'Other Drawings', 'Safety'],
-      'Manuals': ['Automation', 'Auxiliary Engine', 'Boiler', 'Cargo', 'Deck Machinery', 'Electrical', 'Main Engine', 'Other Manuals', 'Pollution', 'Propulsion', 'Refrigeration', 'Safety', 'Shafting', 'Steering Gear', 'Thrusters'],
-      'Invoices & Payments': ['Month Wise Folder'],
-      'Claims & Disputes': ['Month Wise Folder'],
-      'Circulars and Guidance': ['Equipment Maker', 'Class', 'Flag ⁄ Port State', 'SIRE⁄OCIMF⁄RightShip', 'Shipyard'],
-      'Common for all ships': ['Vendor & Service Agreements', 'Vendor Management'],
-      'Common Agreements (Not Ship Specific)': ['Agreements', 'To be Classified'],
-      'Common (Not Ship Specific)': ['Agreements', 'Miscellaneous'],
-    };
-
-    const currentFolderNode = folderPathStack.length > 0 ? folderPathStack[folderPathStack.length - 1] : null;
-    const currentFolderName = currentFolderNode ? currentFolderNode.name : null;
-    const currentVesselNameFromStack = folderPathStack.length > 0 ? folderPathStack[0].name : null;
+    // Hierarchy navigation state
+    const stackLevel = folderPathStack.length;
+    const atVesselsRoot = stackLevel === 1 && folderPathStack[0]?.id === 'vessels_root';
+    const atSpecificVessels = stackLevel === 2 && folderPathStack[1]?.id === 'specific_vessels';
+    const atCommonShips = stackLevel === 2 && folderPathStack[1]?.id === 'common';
+    // Vessel node is always at index 2 when path is [vessels_root, specific_vessels, vessel]
+    // For other paths (e.g. kaizen), fall back to searching by exclusion
+    const KNOWN_NAV_IDS = new Set(['vessels_root', 'specific_vessels', 'common', 'kaizen_root']);
+    const vesselStackIdx = (() => {
+      // Standard path: vessels_root > specific_vessels > {vessel}
+      if (stackLevel >= 3 && folderPathStack[0]?.id === 'vessels_root' && folderPathStack[1]?.id === 'specific_vessels') {
+        return 2;
+      }
+      // Fallback: find first node that is not a known nav node and not a main folder name
+      return folderPathStack.findIndex(n =>
+        !KNOWN_NAV_IDS.has(n.id) && !VESSEL_MAIN_FOLDERS.some(mf => mf.key === n.name)
+      );
+    })();
+    const vesselNodeInStack = vesselStackIdx !== -1 ? folderPathStack[vesselStackIdx] : null;
+    const atVesselMainFolderSelect = vesselNodeInStack !== null && !docMainFolder && stackLevel === vesselStackIdx + 1;
+    const currentVesselNameFromStack = vesselNodeInStack?.name || null;
 
     if (currentVesselNameFromStack && !host._filesLoadedForVessels.has(currentVesselNameFromStack)) {
       host._filesLoadedForVessels.add(currentVesselNameFromStack);
       setTimeout(() => host._loadFilesForVessel(currentVesselNameFromStack!).catch(() => undefined), 0);
     }
 
+    const currentFolderNode = folderPathStack.length > 0 ? folderPathStack[folderPathStack.length - 1] : null;
+    const currentFolderName = currentFolderNode ? currentFolderNode.name : null;
+
+    const DEFAULT_VESSEL_MAINS: Record<string, string[]> = {
+      'Technical & Crewing': ['Month End Reports', 'Service Agreements', 'Registration', 'Drawings and Manuals', 'PO & Invoice', 'Incidents', 'Crewing', 'To be Classified'],
+      'Commercial & Chartering': ['Agreements', 'Invoices & Payments', 'Claims & Disputes', 'To be Classified'],
+      'Insurance': ['P&I', 'H&M', 'War Risk', 'Flag & MPA', 'USA Related'],
+      'Kaizen - Knowledge Bank': ['Templates', 'Procedures and Work Instructions', 'Lessons Learned', 'Circulars and Guidance'],
+      'Knowledge Bank': ['Templates', 'Procedures and Work Instructions', 'Lessons Learned', 'Circulars and Guidance'],
+    };
+
+    const SUBFOLDERS_MAP: Record<string, string[]> = {
+      'Month End Reports': ['Main Engine', 'Aux Engine', 'Cooling Water', 'Inspection Reports', 'Defect Reports', 'Guarantee Claims', 'To be Classified'],
+      'Service Agreements': ['Technical Management', 'Crew Management', 'Vendor & Service Provider', 'To be Classified'],
+      'Registration': ['Flag & MPA', 'Ship Builder', 'Radio & Telecom', 'Crewing & SMOU', 'Novation', 'To be Classified'],
+      'Drawings and Manuals': ['Drawing', 'Manual', 'To be Classified'],
+      'PO & Invoice': ['Purchase Order', 'Vendor Invoice'],
+      'Agreements': ['Charter party', 'Pool Agreement', 'Commission Agreement', 'To be Classified'],
+      'Invoices & Payments': ['Invoice', 'Payments', 'To be Classified'],
+      'Claims & Disputes': ['Disputes', 'Claims', 'To be Classified'],
+      'Circulars and Guidance': ['Equipment Maker', 'Class', 'Flag / Port State', 'SIRE/OCIMF/RightShip', 'Shipyard'],
+     'Vendor & Service Agreements': ['Vendor & Service Provider Agreement', 'To be Classified'],
+    };
+
+    const COMMON_DEFAULT_MAINS: Record<string, string[]> = {
+      'Technical & Crewing': ['Vendor & Service Agreements', 'Vendor Management', 'To be Classified'],
+      'Commercial & Chartering': ['Agreements', 'To be Classified'],
+      'Insurance': ['Agreements', 'Miscellaneous'],
+    };
+
+    // Resolve real SPO folder ID for the current folder node from rows
+    const resolvedCurrentFolderId: string | null = (() => {
+      if (!currentFolderNode) return null;
+      if (!/^(sf_|common|vessels_root|specific_vessels|kaizen_root)/.test(currentFolderNode.id)) return currentFolderNode.id;
+      // Try to find a matching row by vessel + folder name chain
+      const vesselName = currentVesselNameFromStack || (folderPathStack.length > 0 ? folderPathStack[0].name : null);
+      if (!vesselName) return null;
+      const folderName = currentFolderNode.name;
+      const candidateSubPath = `${vesselName} > ${docMainFolder || ''} > ${folderName}`;
+      const liveId = host._getLiveSharePointFolderId(candidateSubPath);
+      if (liveId) return liveId;
+      // Determine the parent folder name from the navigation stack so we can
+      // disambiguate "To be Classified" (or any folder name that appears under
+      // multiple parents).  e.g. "To be Classified" under "Month End Reports"
+      // vs "To be Classified" directly under "Technical & Crewing".
+      const parentInStack = folderPathStack.length >= 2 ? folderPathStack[folderPathStack.length - 2] : null;
+      const matchRow = host.state.rows.find(r =>
+        r.vesselName === vesselName &&
+        r.uploadFolderId &&
+        !r.uploadFolderId.includes('/') &&
+        (r.subCategory === folderName || r.category === folderName) &&
+        (docMainFolder ? r.group === docMainFolder : true) &&
+        (parentInStack && parentInStack.name !== vesselName
+          ? (r.category === parentInStack.name || r.subCategory === parentInStack.name)
+          : true)
+      );
+      return matchRow?.uploadFolderId || null;
+    })();
 
     // Determine subfolders for current depth
-    const subfolderNames: string[] = currentFolderName
-      ? (SUBFOLDERS_MAP[currentFolderName] || (
-          // If we are at vessel-level depth (stack[0] is a vessel), show main folder's default top-level folders
-          folderPathStack.length === 1 && docMainFolder
-            ? DEFAULT_VESSEL_MAINS[docMainFolder]
-            : []
-        ))
-      : [];
-
-
-    const currentFolderFiles = currentFolderName ? (uploadedFilesByFolder[currentFolderName] || []).filter((f: any) => !f.pending) : [];
-
-    // Also include approved files from backend rows that match the current folder node
-    const backendFolderFiles: Array<{ name: string; size: string; date: string }> = [];
-    if (currentFolderNode && !/^(sf_|common)/.test(currentFolderNode.id)) {
-      rows.filter(r => r.uploadFolderId === currentFolderNode.id && r.fileName && !r.filePending)
-        .forEach(r => backendFolderFiles.push({ name: r.fileName!, size: '—', date: '—' }));
+   // Determine subfolders for current depth
+    const mainsDefaultsSource = atCommonShips ? COMMON_DEFAULT_MAINS : DEFAULT_VESSEL_MAINS;
+    let subfolderNames: string[] = [];
+    if (currentFolderName && SUBFOLDERS_MAP[currentFolderName]) {
+      subfolderNames = SUBFOLDERS_MAP[currentFolderName];
+    } else if (docMainFolder && mainsDefaultsSource[docMainFolder]) {
+      // If we are at the main folder level inside a vessel (or inside Common for all ships)
+      if (
+        !currentFolderName ||
+        currentFolderName === docMainFolder ||
+        (vesselNodeInStack && currentFolderNode?.id === vesselNodeInStack.id) ||
+        atVesselsRoot ||
+        atSpecificVessels ||
+        atCommonShips ||
+        folderPathStack.length <= 3
+      ) {
+        subfolderNames = mainsDefaultsSource[docMainFolder];
+      }
     }
-    const allCurrentFolderFiles = [
-      ...backendFolderFiles,
-      ...currentFolderFiles.filter(f => !backendFolderFiles.some(b => b.name === f.name)),
-    ];
 
+
+    // Collect all keys under which files for the current folder may be stored
+    const currentFolderLiveId = resolvedCurrentFolderId
+      ? host._getLiveSharePointFolderId(
+          currentVesselNameFromStack && docMainFolder && currentFolderNode
+            ? `${currentVesselNameFromStack} > ${docMainFolder} > ${currentFolderNode.name}`
+            : ''
+        ) || resolvedCurrentFolderId
+      : null;
+    // Also find the matching row's groupKey for this folder — scope by main folder
+    // and parent in stack so that "To be Classified" under different parents resolves correctly.
+    const parentInStack = folderPathStack.length >= 2 ? folderPathStack[folderPathStack.length - 2] : null;
+    const currentFolderMatchRow = currentFolderNode && currentVesselNameFromStack
+      ? host.state.rows.find(r =>
+          r.vesselName === currentVesselNameFromStack &&
+          (r.subCategory === currentFolderNode.name || r.category === currentFolderNode.name) &&
+          (docMainFolder ? r.group === docMainFolder : true) &&
+          (parentInStack && parentInStack.name !== currentVesselNameFromStack
+            ? (r.category === parentInStack.name || r.subCategory === parentInStack.name)
+            : true)
+        )
+      : null;
+
+    // Trigger live SPO file refresh when we have a real folder ID
+    if (resolvedCurrentFolderId && !/^(sf_|common)/.test(resolvedCurrentFolderId) && !/^\d+$/.test(resolvedCurrentFolderId)) {
+      const alreadyLoaded = host._filesLoadedForFolders.has(resolvedCurrentFolderId);
+      const inFlight = host._refreshFolderFilesInFlight.has(resolvedCurrentFolderId);
+      if (!alreadyLoaded && !inFlight) {
+        const triggerGroupKey = currentFolderMatchRow?.groupKey || resolvedCurrentFolderId;
+        setTimeout(() => host._refreshFolderFiles(resolvedCurrentFolderId!, triggerGroupKey, true).catch(() => undefined), 0);
+      }
+    }
+
+    const allCurrentFolderFilesRaw: Array<{ name: string; size: string; date: string; pending?: boolean; id?: string }> = [];
+    const seenFileNames = new Set<string>();
+    const addFiles = (list: Array<{ name: string; size: string; date: string; pending?: boolean; id?: string }> | undefined): void => {
+      (list || []).forEach(f => {
+        if (f?.name && !seenFileNames.has(f.name.toLowerCase())) {
+          seenFileNames.add(f.name.toLowerCase());
+          allCurrentFolderFilesRaw.push(f);
+        }
+      });
+    };
+    // Check all possible keys: resolvedCurrentFolderId, live upload ID, groupKey, node ID, display name
+    if (resolvedCurrentFolderId) addFiles(uploadedFilesByFolder[resolvedCurrentFolderId]);
+    if (currentFolderLiveId && currentFolderLiveId !== resolvedCurrentFolderId) addFiles(uploadedFilesByFolder[currentFolderLiveId]);
+    if (currentFolderMatchRow?.groupKey) addFiles(uploadedFilesByFolder[currentFolderMatchRow.groupKey]);
+    if (currentFolderMatchRow?.uploadFolderId && currentFolderMatchRow.uploadFolderId !== resolvedCurrentFolderId) addFiles(uploadedFilesByFolder[currentFolderMatchRow.uploadFolderId]);
+    if (currentFolderNode && !/^(sf_|common)/.test(currentFolderNode.id) && currentFolderNode.id !== resolvedCurrentFolderId) addFiles(uploadedFilesByFolder[currentFolderNode.id]);
+    // Also check by display folder name (used as key by the top-level upload handler)
+    if (currentFolderName) addFiles(uploadedFilesByFolder[currentFolderName]);
+    // Also check by the full breadcrumb path (lowercase) — stored by the top-level upload handler as normSub
+    if (currentVesselNameFromStack && docMainFolder && currentFolderName) {
+      const breadcrumbKey = `${currentVesselNameFromStack} > ${docMainFolder} > ${currentFolderName}`.trim().toLowerCase();
+      addFiles(uploadedFilesByFolder[breadcrumbKey]);
+      // Also check all rows matching this folder for their subFolderPath keys — scoped by parent context
+      host.state.rows
+        .filter(r => r.vesselName === currentVesselNameFromStack && (r.subCategory === currentFolderName || r.category === currentFolderName) &&
+          (docMainFolder ? r.group === docMainFolder : true) &&
+          (parentInStack && parentInStack.name !== currentVesselNameFromStack
+            ? (r.category === parentInStack.name || r.subCategory === parentInStack.name)
+            : true))
+        .forEach(r => {
+          if (r.subFolderPath) addFiles(uploadedFilesByFolder[r.subFolderPath.trim().toLowerCase()]);
+          if (r.groupKey) addFiles(uploadedFilesByFolder[r.groupKey]);
+          if (r.uploadFolderId && r.uploadFolderId !== resolvedCurrentFolderId) addFiles(uploadedFilesByFolder[r.uploadFolderId]);
+        });
+    }
+    // Scan all uploadedFilesByFolder entries whose key contains the current folder's Graph ID
+    // (handles the case where the upload stored files under the confirmed Graph folder ID)
+    if (currentFolderNode) {
+      const knownIds = new Set([resolvedCurrentFolderId, currentFolderLiveId, currentFolderMatchRow?.uploadFolderId, currentFolderNode.id].filter(Boolean) as string[]);
+      for (const [key, files] of Object.entries(uploadedFilesByFolder)) {
+        if (!knownIds.has(key) && key !== currentFolderName) {
+          // Only include if the key looks like a Graph drive item ID (not a path or display name)
+          // and matches one of the IDs we know about via the spoFolderMap
+          if (host.state.spoFolderMap.has(key) && (key === resolvedCurrentFolderId || key === currentFolderLiveId ||
+              (currentFolderMatchRow && key === currentFolderMatchRow.uploadFolderId))) {
+            addFiles(files);
+          }
+        }
+      }
+    }
+    // Also include files from backend rows matching this folder
+    if (currentFolderNode) {
+      const matchIds = new Set<string>();
+      if (!/^(sf_|common)/.test(currentFolderNode.id)) matchIds.add(currentFolderNode.id);
+      if (resolvedCurrentFolderId) matchIds.add(resolvedCurrentFolderId);
+      rows.filter(r => matchIds.has(r.uploadFolderId) && r.fileName && !r.filePending)
+        .forEach(r => {
+          if (!seenFileNames.has(r.fileName!.toLowerCase())) {
+            seenFileNames.add(r.fileName!.toLowerCase());
+            allCurrentFolderFilesRaw.push({ name: r.fileName!, size: '—', date: '—' });
+          }
+        });
+    }
+    // Also include files from rows matched by groupKey (covers post-upload state updates)
+    if (currentFolderMatchRow) {
+      rows.filter(r => r.groupKey === currentFolderMatchRow.groupKey && r.fileName && !r.filePending)
+        .forEach(r => {
+          if (!seenFileNames.has(r.fileName!.toLowerCase())) {
+            seenFileNames.add(r.fileName!.toLowerCase());
+            allCurrentFolderFilesRaw.push({ name: r.fileName!, size: '—', date: '—', id: r.fileId || undefined });
+          }
+        });
+    }
+    const allCurrentFolderFiles = [...allCurrentFolderFilesRaw].sort(
+      (a, b) => ((b as any).uploadedAt || 0) - ((a as any).uploadedAt || 0)
+    );
     // ── Build source rows from API only — no mock fallback ──
     const allRows: FlatRow[] = rows || [];
 
@@ -129,17 +306,24 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       ],
     };
 
+    // Vessels are returned newest first. Start with four and extend in pages
+    // of eight when the user chooses "More vessels".
+    const visibleVesselNames = new Set(vessels.slice(0, documentVesselCount).map(v => v.name));
+
     let filtered = allRows.filter(r => {
-      // Filter by active main folder using template-based group membership
+      // Keep the list aligned with the vessels currently loaded for Documents.
+      if (!activeVesselName) {
+        if (!visibleVesselNames.has(r.vesselName)) return false;
+      }
+      // Filter by active main folder
       if (docMainFolder) {
-        const allowedGroups = mainFolderGroupMap[docMainFolder];
-        // If allowedGroups is defined, filter to only matching groups.
-        // If the group is not in the map (e.g. flat folder or unknown), still show all rows.
-        if (allowedGroups && allowedGroups.length > 0) {
-          if (!allowedGroups.includes(r.group) && !r.subFolderPath.toLowerCase().includes(docMainFolder.toLowerCase().split(' ')[0].toLowerCase())) {
-            return false;
-          }
-        }
+        const allowedCats = mainFolderGroupMap[docMainFolder] || [];
+        const mainMatch = r.group === docMainFolder ||
+          r.group.toLowerCase().includes(docMainFolder.toLowerCase().split(' ')[0].toLowerCase()) ||
+          allowedCats.includes(r.group) ||
+          allowedCats.includes(r.category) ||
+          (r.subFolderPath || '').toLowerCase().includes(docMainFolder.toLowerCase().split(' ')[0].toLowerCase());
+        if (!mainMatch) return false;
       }
       if (activeVesselName && r.vesselName !== activeVesselName) return false;
       if (docGroupFilter !== 'all' && r.group !== docGroupFilter) return false;
@@ -147,35 +331,54 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       if (textFilter) {
         const q = textFilter.toLowerCase();
         return r.vesselName.toLowerCase().includes(q) || r.group.toLowerCase().includes(q) ||
-          r.category.toLowerCase().includes(q) || (r.subFolderPath || '').toLowerCase().includes(q) ||
+          r.category.toLowerCase().includes(q) || (r.subCategory || '').toLowerCase().includes(q) ||
+          (r.subFolderPath || '').toLowerCase().includes(q) ||
           (r.fileName || '').toLowerCase().includes(q);
       }
       return true;
     });
 
-    // ── Group filtered rows by groupKey (category/folder level) ──
+    // ── Group filtered rows by folder path (category/folder level) ──
     const groupedMap = new Map<string, GroupedRow>();
     for (const r of filtered) {
-      const folderUploads = (uploadedFilesByFolder[r.groupKey] || [])
-        .concat(uploadedFilesByFolder[r.uploadFolderId] || [])
-        .concat(uploadedFilesByFolder[r.category] || []);
+      const dedupeKey = (r.subFolderPath || r.groupKey).trim().toLowerCase();
+      const normSub = (r.subFolderPath || '').trim().toLowerCase();
+      const liveId = host._getLiveSharePointFolderId(r.subFolderPath);
+      const liveNode = liveId ? host.state.spoFolderMap.get(liveId) : null;
+      const memFiles = (liveNode?.children || []).filter(c => !c.isFolder).map(c => ({ id: c.id, name: c.name, size: '—', date: 'Today', pending: false }));
 
-      const existing = groupedMap.get(r.groupKey);
+      const liveUploads = liveId ? (uploadedFilesByFolder[liveId] || []) : [];
+      const subFolderUploads = normSub ? (uploadedFilesByFolder[normSub] || []) : [];
+      const dedupeUploads = dedupeKey ? (uploadedFilesByFolder[dedupeKey] || []) : [];
+      const groupUploads = r.groupKey ? (uploadedFilesByFolder[r.groupKey] || []) : [];
+      // Do NOT read from r.uploadFolderId — it may be a backend DB ID shared across multiple "To be Classified" rows
+      // Only read from live Graph folder IDs and unique per-row keys (groupKey, normSub, dedupeKey)
+
+      const folderUploads = [
+        ...groupUploads,
+        ...liveUploads,
+        ...subFolderUploads,
+        ...dedupeUploads,
+        ...memFiles,
+      ];
+
+           const existing = groupedMap.get(dedupeKey);
       if (!existing) {
-        const files: Array<{ id: string; name: string }> = [];
+        const files: Array<{ id: string; name: string; uploadedAt?: number }> = [];
         if (r.fileName) {
-          files.push({ id: r.fileId || r.fileName, name: r.fileName });
+          files.push({ id: r.fileId || r.fileName, name: r.fileName, uploadedAt: r.fileUploadedAt });
         }
         for (const f of folderUploads) {
-          if (!files.some(ex => ex.name === f.name)) {
-            files.push({ id: (f as any).id || f.name, name: f.name });
+          if (f?.name && !files.some(ex => ex.name.toLowerCase() === f.name.toLowerCase())) {
+            files.push({ id: (f as any).id || f.name, name: f.name, uploadedAt: (f as any).uploadedAt });
           }
         }
-        groupedMap.set(r.groupKey, {
+        groupedMap.set(dedupeKey, {
           srNo: r.srNo,
           vesselName: r.vesselName,
           group: r.group,
           category: r.category,
+          subCategory: r.subCategory || r.category,
           subFolderPath: r.subFolderPath,
           groupKey: r.groupKey,
           uploadFolderId: r.uploadFolderId,
@@ -184,61 +387,116 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           files,
         });
       } else {
-        if (r.fileName && !existing.files.some(f => f.name === r.fileName)) {
-          existing.files.push({ id: r.fileId || r.fileName, name: r.fileName });
+        if (r.fileName && !existing.files.some(f => f.name.toLowerCase() === r.fileName!.toLowerCase())) {
+          existing.files.push({ id: r.fileId || r.fileName, name: r.fileName, uploadedAt: r.fileUploadedAt });
         }
         for (const f of folderUploads) {
-          if (!existing.files.some(ex => ex.name === f.name)) {
-            existing.files.push({ id: (f as any).id || f.name, name: f.name });
+          if (f?.name && !existing.files.some(ex => ex.name.toLowerCase() === f.name.toLowerCase())) {
+            existing.files.push({ id: (f as any).id || f.name, name: f.name, uploadedAt: (f as any).uploadedAt });
           }
+        }
+        if (r.uploadFolderId && !r.uploadFolderId.includes('/') && (!existing.uploadFolderId || existing.uploadFolderId.includes('/'))) {
+          existing.uploadFolderId = r.uploadFolderId;
         }
       }
     }
 
     let groupedList = Array.from(groupedMap.values());
-    if (docListSort === 'name_az') groupedList.sort((a, b) => a.category.localeCompare(b.category));
-    else if (docListSort === 'newest') groupedList.reverse();
+    if (docListSort === 'name_az') {
+      groupedList.sort((a, b) => a.category.localeCompare(b.category));
+    } else {
+      // 'default' and 'newest' both float recently-uploaded rows to the top,
+      // ordered by the real upload timestamp. Rows with no timestamped files
+      // (nothing uploaded through the app yet) keep their original relative
+      // order — this is a stable sort, so nothing else shuffles around.
+      groupedList = groupedList
+        .map((row, i) => ({
+          row, i,
+          ts: row.files.reduce((max, f) => Math.max(max, f.uploadedAt || 0), 0),
+        }))
+        .sort((a, b) => (b.ts - a.ts) || (a.i - b.i))
+        .map(x => x.row);
+    }
 
     const totalPages = Math.max(1, Math.ceil(groupedList.length / PAGE_ROWS));
     const safePage = Math.min(docListPage, totalPages - 1);
     const pageGroupedRows = groupedList.slice(safePage * PAGE_ROWS, (safePage + 1) * PAGE_ROWS);
 
-    const displayVessels = showAllVesselsInFolderView ? vessels : vessels.slice(0, 4);
+    // Navigation folder names that should never appear as vessel cards
+    const NAV_FOLDER_NAMES = new Set(['specific vessels', 'common for all ships', 'vessels', 'kaizen - knowledge bank', 'knowledge bank', 'common']);
+    // Deduplicate by name and exclude any vessel whose name matches a navigation folder
+    const displayVessels = vessels.slice(0, documentVesselCount).filter(
+      (v, i, arr) =>
+        arr.findIndex(x => x.name.trim().toLowerCase() === v.name.trim().toLowerCase()) === i &&
+        !NAV_FOLDER_NAMES.has(v.name.trim().toLowerCase())
+    );
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {/* Breadcrumb Navigation Trail */}
         <div style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span style={{ cursor: 'pointer', color: '#0284c7' }} onClick={() => host.setState({ docMainFolder: null, folderPathStack: [] })}>Home</span>
+          {/* Back / Forward navigation buttons */}
+          <button
+            onClick={goBack}
+            disabled={!canGoBack}
+            title="Go back"
+            style={{
+              width: 28, height: 28, borderRadius: 6, border: '1px solid #cbd5e1',
+              background: canGoBack ? '#fff' : '#f1f5f9',
+              color: canGoBack ? '#334155' : '#cbd5e1',
+              cursor: canGoBack ? 'pointer' : 'not-allowed',
+              fontSize: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >‹</button>
+          <button
+            onClick={goForward}
+            disabled={!canGoForward}
+            title="Go forward"
+            style={{
+              width: 28, height: 28, borderRadius: 6, border: '1px solid #cbd5e1',
+              background: canGoForward ? '#fff' : '#f1f5f9',
+              color: canGoForward ? '#334155' : '#cbd5e1',
+              cursor: canGoForward ? 'pointer' : 'not-allowed',
+              fontSize: 14, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >›</button>
+          <span style={{ cursor: 'pointer', color: '#0284c7' }} onClick={() => host._pushFolderNav([], null)}>Home</span>
           <span>›</span>
           <span
-            style={{ cursor: 'pointer', color: !docMainFolder ? '#0f172a' : '#0284c7', fontWeight: !docMainFolder ? 600 : 400 }}
-            onClick={() => host.setState({ docMainFolder: null, folderPathStack: [] })}
+            style={{ cursor: stackLevel === 0 && !docMainFolder ? 'default' : 'pointer', color: stackLevel === 0 && !docMainFolder ? '#0f172a' : '#0284c7', fontWeight: stackLevel === 0 && !docMainFolder ? 600 : 400 }}
+            onClick={() => host._pushFolderNav([], null)}
           >
             Documents
           </span>
-          {docMainFolder && (
-            <>
-              <span>›</span>
-              <span
-                style={{ cursor: folderPathStack.length === 0 ? 'default' : 'pointer', color: folderPathStack.length === 0 ? '#0f172a' : '#0284c7', fontWeight: folderPathStack.length === 0 ? 600 : 400 }}
-                onClick={() => host.setState({ folderPathStack: [] })}
-              >
-                {docMainFolder}
-              </span>
-            </>
-          )}
-          {folderPathStack.map((item, idx) => {
-            const isLast = idx === folderPathStack.length - 1;
+         {folderPathStack.map((item, idx) => {
+            const mainFolderFollows = !!docMainFolder && idx === vesselStackIdx;
+            const isLast = idx === folderPathStack.length - 1 && !mainFolderFollows;
             return (
               <React.Fragment key={item.id + idx}>
                 <span>›</span>
                 <span
-                  onClick={() => host.setState({ folderPathStack: folderPathStack.slice(0, idx + 1) })}
+                  onClick={() => host._pushFolderNav(folderPathStack.slice(0, idx + 1), idx < vesselStackIdx ? null : docMainFolder)}
                   style={{ cursor: isLast ? 'default' : 'pointer', color: isLast ? '#0f172a' : '#0284c7', fontWeight: isLast ? 600 : 400 }}
                 >
                   {item.name}
                 </span>
+                {mainFolderFollows && (
+                  <>
+                    <span>›</span>
+                    <span
+                      onClick={() => host._pushFolderNav(folderPathStack.slice(0, idx + 1), docMainFolder)}
+                      style={{
+                        cursor: idx === folderPathStack.length - 1 ? 'default' : 'pointer',
+                        color: idx === folderPathStack.length - 1 ? '#0f172a' : '#0284c7',
+                        fontWeight: idx === folderPathStack.length - 1 ? 600 : 400,
+                      }}
+                    >
+                      {docMainFolder}
+                    </span>
+                  </>
+                )}
               </React.Fragment>
             );
           })}
@@ -249,16 +507,20 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           <div>
             <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 20 }}>📁</span>
-              {currentFolderName || docMainFolder || 'Documents'}
+              {(currentFolderNode && currentFolderNode !== vesselNodeInStack && currentFolderNode.id !== 'vessels_root' && currentFolderNode.id !== 'specific_vessels' ? currentFolderNode.name : docMainFolder) || currentFolderName || 'Documents'}
             </h2>
             <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>
               {docViewMode === 'list'
                 ? `${filtered.length} rows · flattened list view`
-                : !docMainFolder
-                  ? `${MAIN_FOLDERS.length} main folders`
-                  : folderPathStack.length === 0
-                    ? `${vessels.length} vessels · folder view`
-                    : `${subfolderNames.length} folders · ${allCurrentFolderFiles.length} files`}
+                : stackLevel === 0 && !docMainFolder
+                  ? '2 top-level folders'
+                  : atVesselsRoot
+                    ? '2 folders · Specific Vessels & Common'
+                    : atSpecificVessels
+                      ? `${vessels.length} vessels`
+                      : atVesselMainFolderSelect
+                        ? '3 main folders'
+                        : `${subfolderNames.length} folders · ${allCurrentFolderFiles.length} files`}
             </p>
           </div>
 
@@ -276,7 +538,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 ⊞ Folder view
               </button>
               <button
-                onClick={() => host.setState({ docViewMode: 'list' })}
+                onClick={() => host.setState({ docViewMode: 'list', docMainFolder: null, folderPathStack: [] })}
                 style={{
                   padding: '5px 12px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
                   background: docViewMode === 'list' ? '#0f172a' : 'transparent',
@@ -299,6 +561,62 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               🗑 Archive
             </button>
 
+            {/* Global Delete Button - List View */}
+            {docViewMode === 'list' && (
+              <button
+                disabled={listViewSelectedFiles.size === 0}
+                onClick={() => {
+                  if (listViewSelectedFiles.size === 0) return;
+                  const filesToDelete = groupedList
+                    .flatMap(r => r.files.filter(f => listViewSelectedFiles.has(f.id)).map(f => ({ id: f.id, name: f.name, folderId: r.uploadFolderId, folderPath: r.subFolderPath })))
+                    .filter(f => f.id);
+                  host._openFileDeleteDialog(filesToDelete);
+                }}
+                style={{
+                  background: listViewSelectedFiles.size > 0 ? '#fff5f5' : '#f8fafc',
+                  color: listViewSelectedFiles.size > 0 ? '#ef4444' : '#cbd5e1',
+                  border: `1px solid ${listViewSelectedFiles.size > 0 ? '#fca5a5' : '#e2e8f0'}`,
+                  borderRadius: 8, padding: '7px 16px', fontSize: 13, fontWeight: 600,
+                  cursor: listViewSelectedFiles.size > 0 ? 'pointer' : 'not-allowed',
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                }}
+                title={listViewSelectedFiles.size > 0 ? `Delete ${listViewSelectedFiles.size} selected file(s)` : 'Select files to delete'}
+              >
+                🗑 Delete{listViewSelectedFiles.size > 0 ? ` (${listViewSelectedFiles.size})` : ''}
+              </button>
+            )}
+
+            {/* Global Delete Button - Folder View */}
+            {docViewMode === 'folder' && allCurrentFolderFiles.length > 0 && (
+              <button
+                disabled={folderViewSelectedFiles.size === 0}
+                onClick={() => {
+                  if (folderViewSelectedFiles.size === 0) return;
+                  const filesToDelete = allCurrentFolderFiles
+                    .filter(file => folderViewSelectedFiles.has((file as any).id || file.name))
+                    .map(file => ({
+                      id: (file as any).id || file.name,
+                      name: file.name,
+                      folderId: currentFolderNode?.id || '',
+                      folderPath: currentFolderNode?.name || '',
+                    }));
+                  host.setState({ folderViewSelectedFiles: new Set() });
+                  host._openFileDeleteDialog(filesToDelete);
+                }}
+                style={{
+                  background: folderViewSelectedFiles.size > 0 ? '#fff5f5' : '#f8fafc',
+                  color: folderViewSelectedFiles.size > 0 ? '#ef4444' : '#cbd5e1',
+                  border: `1px solid ${folderViewSelectedFiles.size > 0 ? '#fca5a5' : '#e2e8f0'}`,
+                  borderRadius: 8, padding: '7px 16px', fontSize: 13, fontWeight: 600,
+                  cursor: folderViewSelectedFiles.size > 0 ? 'pointer' : 'not-allowed',
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                }}
+                title={folderViewSelectedFiles.size > 0 ? `Delete ${folderViewSelectedFiles.size} selected file(s)` : 'Select files to delete'}
+              >
+                🗑 Delete{folderViewSelectedFiles.size > 0 ? ` (${folderViewSelectedFiles.size})` : ''}
+              </button>
+            )}
+
             {/* Top-Right Upload Button */}
             <label style={{
               background: '#0284c7', color: '#fff', border: 'none', borderRadius: 8,
@@ -311,10 +629,26 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 onChange={async e => {
                   const file = e.target.files?.[0];
                   if (!file) return;
-                  const folderKey = currentFolderName || (docMainFolder as string) || 'Documents';
-                  const topFolderId = currentFolderNode && !/^(sf_|common)/.test(currentFolderNode.id) ? currentFolderNode.id : '';
-                  const currentVessel = folderPathStack.length > 0 ? folderPathStack[0].name : (vessels.length > 0 ? vessels[0].name : 'Bow Fighter');
-                  const subFolderPath = currentFolderNode ? `${currentVessel} > ${docMainFolder || ''} > ${currentFolderNode.name}` : `${currentVessel} > ${docMainFolder || ''}`;
+                  // Build a unique folderKey that includes the parent path so that
+                  // "To be Classified" under "Technical & Crewing" is distinct from
+                  // "To be Classified" under "Commercial & Chartering".
+                  const folderKey = (docMainFolder && currentFolderName && currentFolderName !== docMainFolder)
+                    ? `${currentVesselNameFromStack || ''} > ${docMainFolder} > ${currentFolderName}`
+                    : (docMainFolder ? `${currentVesselNameFromStack || ''} > ${docMainFolder}` : currentFolderName || 'Documents');
+                  const topFolderId = currentFolderNode && !/^(sf_|common|vessels_root|specific_vessels|kaizen_root)/.test(currentFolderNode.id) ? currentFolderNode.id : '';
+                  const currentVessel = currentVesselNameFromStack || (vessels.length > 0 ? vessels[0].name : 'Bow Fighter');
+                  let subFolderPath: string;
+                if (vesselStackIdx !== -1) {
+  // docMainFolder (e.g. "Technical & Crewing") is tracked separately from
+  // folderPathStack, so it must be spliced back in here or it silently
+  // disappears from the breadcrumb used to resolve the SPO upload path.
+  const afterVesselItems = folderPathStack.slice(vesselStackIdx + 1).map(n => n.name);
+  subFolderPath = [currentVessel, ...(docMainFolder ? [docMainFolder] : []), ...afterVesselItems].join(' > ');
+} else {
+                    subFolderPath = currentFolderNode
+                      ? `${currentVessel} > ${docMainFolder || ''} > ${currentFolderNode.name}`
+                      : `${currentVessel} > ${docMainFolder || ''}`;
+                  }
 
                   // Map display folder names to actual SharePoint folder path names
                   const mainFolderPathMap: Record<string, string> = {
@@ -326,6 +660,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   };
                   const spoMainFolder = (docMainFolder && mainFolderPathMap[docMainFolder]) || 'Technical & Crewing';
 
+                  const liveId = host._getLiveSharePointFolderId(subFolderPath);
                   // Try to find a real backend uploadFolderId from existing rows for host vessel+folder
                   const matchingRow = host.state.rows.find(r =>
                     r.vesselName === currentVessel &&
@@ -333,11 +668,20 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     !r.uploadFolderId.includes('/') &&
                     (docMainFolder ? r.group.toLowerCase().includes(docMainFolder.toLowerCase().split(' ')[0]) : true)
                   );
-                  const resolvedFolderId = topFolderId || (matchingRow?.uploadFolderId) || `${host.VESSEL_ROOT}/${spoMainFolder}/${currentVessel}`;
+                  // Build fallback path that includes the subfolder (category/sub-category) if we're in one
+                  // This ensures uploads go to the exact folder shown in the folder view, not just the main folder
+                  const fallbackPathParts = [host.VESSEL_ROOT, 'Specific Vessels', currentVessel];
+                  if (docMainFolder) fallbackPathParts.push(spoMainFolder);
+                  // Include the current folder name if it's a subfolder (not the main folder itself)
+                  if (currentFolderNode && currentFolderName && currentFolderName !== docMainFolder && currentFolderName !== 'Documents') {
+                    fallbackPathParts.push(currentFolderName);
+                  }
+                  const fallbackPath = fallbackPathParts.join('/');
+                  const resolvedFolderId = topFolderId || liveId || (matchingRow?.uploadFolderId) || fallbackPath;
 
                   host.setState({ docUploadMsg: null });
                   try {
-                    const { fileId, statusPending } = await host._uploadFileToFolder(
+                    const { fileId, statusPending, folderId, isGraphUpload } = await host._uploadFileToFolder(
                       resolvedFolderId,
                       subFolderPath,
                       currentVessel,
@@ -348,14 +692,91 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       ? `"${file.name}" submitted for approval.`
                       : `"${file.name}" uploaded successfully to ${folderKey}!`;
 
-                    const newUpload = { name: file.name, size: `${(file.size / 1024).toFixed(1)} KB`, date: 'Just now', pending: statusPending, id: fileId };
-                    const existing = uploadedFilesByFolder[folderKey] || [];
-                    host.setState({
-                      uploadedFilesByFolder: {
-                        ...uploadedFilesByFolder,
-                        [folderKey]: [...existing.filter(f => f.name !== file.name), newUpload],
-                      },
-                      docUploadMsg: msg,
+                                       const newUpload = { name: file.name, size: `${(file.size / 1024).toFixed(1)} KB`, date: 'Just now', pending: statusPending, id: fileId, uploadedAt: Date.now() };
+                    const liveFolderId = folderId || topFolderId;
+
+                    // If the upload returned a confirmed Graph folder ID, patch the
+                    // folderPathStack so resolvedCurrentFolderId uses the correct ID.
+                    if (liveFolderId && currentFolderNode && currentFolderNode.id !== liveFolderId) {
+                      const patchedStack = host.state.folderPathStack.map(n =>
+                        n.name === currentFolderNode.name && n.id === currentFolderNode.id
+                          ? { ...n, id: liveFolderId }
+                          : n
+                      );
+                      host.setState({ folderPathStack: patchedStack });
+                    }
+
+                    host.setState(prev => {
+                      // Use functional setState to avoid stale closure
+                      const uploadedFilesByFolder = prev.uploadedFilesByFolder;
+                      const rows = (prev.rows || []) as FlatRow[];
+
+                      // Find matching row from latest state — try folder ID match first,
+                      // then fall back to breadcrumb match (rows from DB have DB IDs, not Graph IDs)
+                    const matchingRowForUpload = rows.find(r =>
+                    r.uploadFolderId === (liveFolderId || resolvedFolderId) ||
+                      r.uploadFolderId === resolvedFolderId
+) || rows.find(r =>
+  r.vesselName === currentVessel &&
+  (docMainFolder ? r.group === docMainFolder : true) &&
+  (currentFolderNode && currentFolderNode.id !== 'vessels_root' && currentFolderNode.id !== 'specific_vessels'
+    ? (r.subCategory === currentFolderNode.name || r.category === currentFolderNode.name)
+    : true) &&
+  (parentInStack && parentInStack.name !== currentVessel
+    ? (r.category === parentInStack.name || r.subCategory === parentInStack.name)
+    : true)
+);
+
+                      const updatedByFolder: Record<string, any[]> = { ...uploadedFilesByFolder };
+                      const normSub = (subFolderPath || '').trim().toLowerCase();
+                      // Always store under both the confirmed live ID and the resolved ID so
+                      // resolvedCurrentFolderId (whichever ID it ends up being) finds the files.
+                      // Only write to liveFolderId if isGraphUpload = true (real Graph drive item ID)
+                      const keysToSet = [folderKey, resolvedFolderId, normSub, matchingRowForUpload?.groupKey].filter(Boolean) as string[];
+                      if (isGraphUpload === true && liveFolderId) {
+                        keysToSet.push(liveFolderId);
+                      }
+                      for (const key of keysToSet) {
+                        updatedByFolder[key] = [...(uploadedFilesByFolder[key] || []).filter((f: any) => f.name !== file.name), newUpload];
+                      }
+
+                      console.log('[VesselDMS] Top-level upload optimistic update:', {
+                        folderKey,
+                        liveFolderId,
+                        resolvedFolderId,
+                        matchingRowGroupKey: matchingRowForUpload?.groupKey,
+                        fileName: file.name,
+                        updatedKeys: Object.keys(updatedByFolder),
+                      });
+
+                      return { uploadedFilesByFolder: updatedByFolder, docUploadMsg: msg };
+                    }, () => {
+                      // Refresh the actual folder contents so the newly uploaded file and
+                      // every file already in this SharePoint folder appear together.
+                      // Single refresh - _refreshFolderFiles now handles Graph consistency window
+                      // by preserving local uploads when Graph returns empty.
+                      const refreshId = liveFolderId || resolvedFolderId;
+                      // Use isGraphUpload from _uploadFileToFolder (true = Graph drive item ID)
+                      const isRealGraphId = isGraphUpload === true;
+                      // Find matching row for refresh after state updates
+                                           const matchingRow = host.state.rows.find(r =>
+                        r.uploadFolderId === (liveFolderId || resolvedFolderId) ||
+                        r.uploadFolderId === resolvedFolderId
+                      ) || host.state.rows.find(r =>
+                        r.vesselName === currentVessel &&
+                        (docMainFolder ? r.group === docMainFolder : true) &&
+                        (currentFolderNode && currentFolderNode.id !== 'vessels_root' && currentFolderNode.id !== 'specific_vessels'
+                          ? (r.subCategory === currentFolderNode.name || r.category === currentFolderNode.name)
+                          : true) &&
+                        (parentInStack && parentInStack.name !== currentVessel
+                          ? (r.category === parentInStack.name || r.subCategory === parentInStack.name)
+                          : true)
+                      );
+                      const gKey = matchingRow?.groupKey || refreshId;
+                      // Always refresh using the confirmed live folder ID (folderId from upload)
+                      // to avoid fetching from the wrong folder when _getLiveSharePointFolderId
+                      // resolves to a different node than where the file actually landed.
+                      void host._refreshFolderFiles(refreshId, gKey, true, isRealGraphId).catch(() => undefined);
                     });
                   } catch (err: any) {
                     host.setState({ docUploadMsg: `Upload failed: ${err?.message || 'Error'}` });
@@ -418,6 +839,33 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             <option value="name_az">Name A–Z</option>
             <option value="newest">Newest</option>
           </select>
+          {/* Toggle for 4 Recent Vessels vs All Vessels */}
+          {false && vessels.length > 4 && (
+            <button
+              onClick={() => host.setState({ showAllVesselsInFolderView: !showAllVesselsInFolderView })}
+              style={{
+                padding: '6px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12,
+                background: showAllVesselsInFolderView ? '#0f172a' : '#f1f5f9',
+                color: showAllVesselsInFolderView ? '#fff' : '#334155',
+                fontWeight: 600, cursor: 'pointer', outline: 'none', display: 'inline-flex', alignItems: 'center', gap: 4
+              }}
+            >
+              {showAllVesselsInFolderView ? 'Showing All Vessels ⌃' : `Show All Vessels (${vessels.length}) ⌄`}
+            </button>
+          )}
+          {documentVesselCount < vessels.length && (
+            <button
+              onClick={() => void host._loadMoreDocumentVessels()}
+              disabled={documentVesselsLoadingMore}
+              style={{
+                padding: '6px 12px', borderRadius: 8, border: '1px solid #0284c7', fontSize: 12,
+                background: documentVesselsLoadingMore ? '#e2e8f0' : '#0284c7', color: documentVesselsLoadingMore ? '#64748b' : '#fff',
+                fontWeight: 600, cursor: documentVesselsLoadingMore ? 'wait' : 'pointer', outline: 'none',
+              }}
+            >
+              {documentVesselsLoadingMore ? 'Loading vessels...' : `More vessels (+${Math.min(8, vessels.length - documentVesselCount)})`}
+            </button>
+          )}
           <div style={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: 8, overflow: 'hidden', marginLeft: 'auto' }}>
             <button
               onClick={() => host.setState({ docViewMode: 'folder' })}
@@ -425,7 +873,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               title="Folder view"
             >::</button>
             <button
-              onClick={() => host.setState({ docViewMode: 'list' })}
+              onClick={() => host.setState({ docViewMode: 'list', docMainFolder: null, folderPathStack: [] })}
               style={{ padding: '5px 10px', background: docViewMode === 'list' ? '#e2e8f0' : '#fff', border: 'none', borderLeft: '1px solid #cbd5e1', cursor: 'pointer', fontSize: 13 }}
               title="List view"
             >☰</button>
@@ -440,64 +888,62 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           </div>
         )}
 
-        {/* View Mode Content */}
         {docViewMode === 'folder' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24, marginTop: 4 }}>
 
-            {/* ── Level 0: Four Main Folders ── */}
-            {!docMainFolder ? (
+            {/* Level 0: Vessels + Kaizen - Knowledge Bank */}
+            {stackLevel === 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
-                  {MAIN_FOLDERS.map(mf => (
+                  {[
+                    { id: 'vessels_root', name: 'Vessels', emoji: '🚢', bg: '#e0f2fe', sub: `${vessels.length} vessels` },
+                    { id: 'kaizen_root', name: 'Kaizen - Knowledge Bank', emoji: '📚', bg: '#ede9fe', sub: 'Knowledge base' },
+                  ].map(item => (
                     <div
-                      key={mf.key}
-                      onClick={() => host.setState({ docMainFolder: mf.key, folderPathStack: [], vesselFilter: 'all' })}
+                      key={item.id}
+                      onClick={() => {
+                        if (item.id === 'kaizen_root') {
+                          host._pushFolderNav([{ id: 'kaizen_root', name: 'Kaizen - Knowledge Bank' }], 'Kaizen - Knowledge Bank');
+                          host.setState({ vesselFilter: 'all' });
+                        } else {
+                          host._pushFolderNav([{ id: 'vessels_root', name: 'Vessels' }], null);
+                        }
+                      }}
                       style={{
                         background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
                         display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'transform 0.15s, box-shadow 0.15s',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
                       }}
                     >
-                      <div style={{ width: 44, height: 44, borderRadius: 10, background: mf.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>
-                        {mf.emoji}
-                      </div>
+                      <div style={{ width: 44, height: 44, borderRadius: 10, background: item.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{item.emoji}</div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{mf.key}</div>
-                        <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{vessels.length} vessels</div>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.name}</div>
+                        <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{item.sub}</div>
                       </div>
                       <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
                     </div>
                   ))}
                 </div>
 
-                {/* ── Segregated Section: Main Folder Level Unmatched Items ── */}
+                {/* Anomalies at root level */}
                 {(() => {
                   const mainAnomalies = (host.state.folderAnomalies || []).filter(a => a.anomaly_type === 'main_folder_unmatched');
                   if (mainAnomalies.length === 0) return null;
-
                   const mainFolders = mainAnomalies.filter(a => a.item_type === 'folder');
                   const mainFiles   = mainAnomalies.filter(a => a.item_type === 'file');
-
                   return (
                     <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
-                      {/* Unrecognised Folders Section */}
                       {mainFolders.length > 0 && (
                         <div style={{ background: 'linear-gradient(135deg, #fffbeb 0%, #fff9e6 100%)', border: '2px solid #f59e0b', borderRadius: 14, padding: 20 }}>
                           <h4 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 700, color: '#92400e', display: 'flex', alignItems: 'center', gap: 8 }}>
                             ⚠️ Folders Created Outside Standard Main Folders ({mainFolders.length})
                           </h4>
                           <p style={{ margin: '0 0 12px', fontSize: 12, color: '#a16207' }}>
-                            These folders were created directly in SharePoint Online at the main folder root level (`Vessel Management`) outside standard category structures.
+                            These folders were created directly in SharePoint Online at the main folder root level outside standard category structures.
                           </p>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                             {mainFolders.map(item => (
-                              <div
-                                key={item.id}
-                                style={{
-                                  background: '#fff', borderRadius: 10, border: '1px solid #fde68a', padding: '12px 16px',
-                                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
-                                }}
-                              >
+                              <div key={item.id} style={{ background: '#fff', borderRadius: 10, border: '1px solid #fde68a', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 200 }}>
                                   <span style={{ fontSize: 24 }}>📁</span>
                                   <div>
@@ -506,21 +952,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   </div>
                                 </div>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                  <button
-                                    onClick={() => host.setState({ spoClassifyDialog: { anomaly: item, provisioning: false, done: false, error: null } })}
-                                    style={{
-                                      background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-                                      color: '#fff', border: 'none', borderRadius: 6, padding: '6px 12px',
-                                      fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                                      display: 'inline-flex', alignItems: 'center', gap: 4,
-                                    }}
-                                  >
+                                  <button onClick={() => host.setState({ spoClassifyDialog: { anomaly: item, provisioning: false, done: false, error: null } })} style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                                     🔍 Classify
                                   </button>
-                                  <button
-                                    onClick={() => host._dismissAnomaly(item.id)}
-                                    style={{ background: '#fff', color: '#78716c', border: '1px solid #d6d3d1', borderRadius: 6, padding: '6px 10px', fontSize: 11, cursor: 'pointer' }}
-                                  >
+                                  <button onClick={() => host._dismissAnomaly(item.id)} style={{ background: '#fff', color: '#78716c', border: '1px solid #d6d3d1', borderRadius: 6, padding: '6px 10px', fontSize: 11, cursor: 'pointer' }}>
                                     ✕ Dismiss
                                   </button>
                                 </div>
@@ -529,8 +964,6 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           </div>
                         </div>
                       )}
-
-                      {/* Main Level Uploaded Files Section */}
                       {mainFiles.length > 0 && (
                         <div style={{ background: 'linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%)', border: '2px solid #a855f7', borderRadius: 14, padding: 20 }}>
                           <h4 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 700, color: '#6b21a8', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -543,13 +976,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             {mainFiles.map(item => {
                               const ext = item.name.split('.').pop()?.toUpperCase() || 'FILE';
                               return (
-                                <div
-                                  key={item.id}
-                                  style={{
-                                    background: '#fff', borderRadius: 10, border: '1px solid #e9d5ff', padding: '10px 14px',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
-                                  }}
-                                >
+                                <div key={item.id} style={{ background: '#fff', borderRadius: 10, border: '1px solid #e9d5ff', padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                                     <span style={{ background: '#f3e8ff', color: '#6b21a8', borderRadius: 4, padding: '2px 6px', fontSize: 10, fontWeight: 700 }}>{ext}</span>
                                     <div>
@@ -557,10 +984,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                       <span style={{ fontSize: 11, color: '#64748b', marginLeft: 8, fontFamily: 'monospace' }}>{item.spo_path}</span>
                                     </div>
                                   </div>
-                                  <button
-                                    onClick={() => host._dismissAnomaly(item.id)}
-                                    style={{ background: '#fff', color: '#6b21a8', border: '1px solid #e9d5ff', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}
-                                  >
+                                  <button onClick={() => host._dismissAnomaly(item.id)} style={{ background: '#fff', color: '#6b21a8', border: '1px solid #e9d5ff', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}>
                                     ✕ Dismiss
                                   </button>
                                 </div>
@@ -574,98 +998,220 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 })()}
               </div>
 
+            ) : atVesselsRoot ? (
 
-            ) : folderPathStack.length === 0 ? (
-
-              /* ── Level 1: Vessel list inside the selected main folder ── */
-              <>
-                {/* Common Documents section */}
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', color: '#94a3b8', textTransform: 'uppercase', marginBottom: 12 }}>COMMON AGREEMENTS / DOCUMENTS</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 340px))', gap: 16 }}>
-                    <div
-                      onClick={() => host.setState({ folderPathStack: [{ id: 'common', name: 'Common for all ships' }] })}
-                      style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }}
-                    >
-                      <div style={{ width: 44, height: 44, borderRadius: 10, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#d97706' }}>📁</div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a' }}>Common for all ships</div>
-                        <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Common</div>
-                      </div>
-                      <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Vessels section */}
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', color: '#94a3b8', textTransform: 'uppercase', marginBottom: 12 }}>VESSELS</div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
-                    {displayVessels.map(v => (
-                      <div
-                        key={v.id}
-                        onClick={() => {
-                          host.setState({ vesselFilter: v.name, folderPathStack: [{ id: v.id, name: v.name }] });
-                          // Pre-load files & scan live SPO structure for host vessel so new SPO folders show immediately
-                          host._loadFilesForVessel(v.name).catch(() => undefined);
-                        }}
-
-                        style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }}
-                      >
-                        <div style={{ width: 44, height: 44, borderRadius: 10, background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#0284c7' }}>🚢</div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.name}</div>
-                          <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Vessel</div>
-                        </div>
-                        <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
-                      </div>
-                    ))}
-                  </div>
-                  {vessels.length > 4 && (
-                    <div style={{ display: 'flex', justifyContent: 'center', marginTop: 20 }}>
-                      <button
-                        onClick={() => host.setState({ showAllVesselsInFolderView: !showAllVesselsInFolderView })}
-                        style={{ background: '#fff', border: '1px solid #cbd5e1', borderRadius: 20, padding: '8px 20px', fontSize: 13, fontWeight: 600, color: '#334155', cursor: 'pointer' }}
-                      >
-                        {showAllVesselsInFolderView ? 'Show Less ⌃' : `More Vessels (${vessels.length - 4}) ⌄`}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </>
-            ) : subfolderNames.length > 0 ? (
-              /* Subfolders Grid (Screenshot 1) */
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
-                {subfolderNames.map((sfName, idx) => (
+              /* Level 1: Inside Vessels - Specific Vessels + Common for all ships */
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
+                {[
+                  { id: 'specific_vessels', name: 'Specific Vessels', emoji: '🚢', bg: '#e0f2fe', sub: `${vessels.length} vessels` },
+                  { id: 'common', name: 'Common for all ships', emoji: '📁', bg: '#fef3c7', sub: 'Shared documents' },
+                ].map(item => (
                   <div
-                    key={sfName + idx}
-                    onClick={() => {
-                      const newStack = [...folderPathStack, { id: `sf_${idx}`, name: sfName }];
-                      host.setState({ folderPathStack: newStack });
-                      // If the current folder node has a real backend ID, refresh its files
-                      if (currentFolderNode && !/^(sf_|common)/.test(currentFolderNode.id)) {
-                        host._refreshFolderFiles(currentFolderNode.id, currentFolderNode.id).catch(() => undefined);
-                      }
-                    }}
-                    style={{
-                      background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
-                      display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'transform 0.15s, box-shadow 0.15s',
-                    }}
+                    key={item.id}
+                    onClick={() => host._pushFolderNav([...folderPathStack, { id: item.id, name: item.name }], null)}
+                    style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }}
                   >
-                    <div style={{
-                      width: 44, height: 44, borderRadius: 10, background: '#e0f2fe',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#0284c7',
-                    }}>
-                      📁
-                    </div>
+                    <div style={{ width: 44, height: 44, borderRadius: 10, background: item.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{item.emoji}</div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sfName}</div>
-                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Folder</div>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a' }}>{item.name}</div>
+                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{item.sub}</div>
                     </div>
                     <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
                   </div>
                 ))}
+              </div>
+
+            ) : atSpecificVessels ? (
+
+              /* Level 2: Vessel list under Specific Vessels */
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
+                {displayVessels.map(v => (
+                  <div
+                    key={v.id}
+                    onClick={() => {
+                      host._pushFolderNav([...folderPathStack, { id: v.id, name: v.name }], null);
+                      host.setState({ vesselFilter: v.name });
+                      host._loadFilesForVessel(v.name).catch(() => undefined);
+                    }}
+                    style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }}
+                  >
+                    <div style={{ width: 44, height: 44, borderRadius: 10, background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#0284c7' }}>🚢</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.name}</div>
+                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Vessel</div>
+                    </div>
+                    <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
+                  </div>
+                ))}
+              </div>
+
+              ) : atCommonShips && !docMainFolder ? (
+
+              /* Main folder selection inside "Common for all ships" */
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
+                {VESSEL_MAIN_FOLDERS.map(mf => (
+                  <div
+                    key={mf.key}
+                    onClick={() => {
+                      host._pushFolderNav(folderPathStack, mf.key);
+                      host.setState({ vesselFilter: 'all' });
+                    }}
+                    style={{
+                      background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
+                      display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                    }}
+                  >
+                    <div style={{ width: 44, height: 44, borderRadius: 10, background: mf.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{mf.emoji}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{mf.key}</div>
+                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Common folder</div>
+                    </div>
+                    <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
+                  </div>
+                ))}
+              </div>
+
+            ) : atVesselMainFolderSelect ? (
+
+              /* Level 3: Main folder selection inside a vessel */
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
+                {VESSEL_MAIN_FOLDERS.map(mf => (
+                  <div
+                    key={mf.key}
+                    onClick={() => {
+                      host._pushFolderNav(folderPathStack, mf.key);
+                      host.setState({ vesselFilter: currentVesselNameFromStack || 'all' });
+                    }}
+                    style={{
+                      background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
+                      display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                    }}
+                  >
+                    <div style={{ width: 44, height: 44, borderRadius: 10, background: mf.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{mf.emoji}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{mf.key}</div>
+                      <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Main folder</div>
+                    </div>
+                    <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
+                  </div>
+                ))}
+              </div>
+            ) : subfolderNames.length > 0 ? (
+              /* Subfolders Grid */
+              <div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
+                  {subfolderNames.map((sfName, idx) => (
+                    <div
+                      key={sfName + idx}
+                      onClick={() => {
+                        const vesselName = currentVesselNameFromStack || (folderPathStack.length > 0 ? folderPathStack[0].name : null);
+                        const candidateSubPath = vesselName ? `${vesselName} > ${docMainFolder || ''} > ${sfName}` : '';
+                        const liveFolderId = candidateSubPath ? host._getLiveSharePointFolderId(candidateSubPath) : null;
+                        const matchingSubRow = vesselName ? host.state.rows.find(r =>
+                          r.vesselName === vesselName &&
+                          r.uploadFolderId &&
+                          !r.uploadFolderId.includes('/') &&
+                          (r.subCategory === sfName || r.category === sfName) &&
+                          (docMainFolder ? r.group === docMainFolder : true) &&
+                          (currentFolderNode && currentFolderNode.name !== vesselName
+                            ? (r.category === currentFolderNode.name || r.group === currentFolderNode.name)
+                            : true)
+                        ) : null;
+                        const realFolderId = liveFolderId || matchingSubRow?.uploadFolderId || `sf_${idx}`;
+                        const newStack = [...folderPathStack, { id: realFolderId, name: sfName }];
+                        host._pushFolderNav(newStack, docMainFolder);
+                        // Immediately refresh files for this folder from live SPO
+                        if (!/^sf_/.test(realFolderId)) {
+                          const subGroupKey = matchingSubRow?.groupKey || realFolderId;
+                          void host._refreshFolderFiles(realFolderId, subGroupKey, true).catch(() => undefined);
+                        } else if (currentFolderNode && !/^(sf_|common)/.test(currentFolderNode.id)) {
+                          const parentGroupKey = currentFolderMatchRow?.groupKey || currentFolderNode.id;
+                          host._refreshFolderFiles(currentFolderNode.id, parentGroupKey).catch(() => undefined);
+                        }
+                      }}
+                      style={{
+                        background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
+                        display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'transform 0.15s, box-shadow 0.15s',
+                      }}
+                    >
+                      <div style={{
+                        width: 44, height: 44, borderRadius: 10, background: '#e0f2fe',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#0284c7',
+                      }}>
+                        📁
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sfName}</div>
+                        <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Folder</div>
+                      </div>
+                      <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
+                    </div>
+                  ))}
+                </div>
+
+                {allCurrentFolderFiles.length > 0 && (
+                  <div style={{ marginTop: 24, background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
+                          <th style={{ padding: '10px 16px', width: 40, textAlign: 'center' }}></th>
+                          <th style={{ padding: '10px 16px' }}>FILE NAME</th>
+                          <th style={{ padding: '10px 16px' }}>SIZE</th>
+                          <th style={{ padding: '10px 16px' }}>DATE & TIME UPLOADED</th>
+                          <th style={{ padding: '10px 16px', textAlign: 'right' }}>ACTION</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {allCurrentFolderFiles.map((file, idx) => {
+                          const fileId = (file as any).id || file.name;
+                          const isSelected = folderViewSelectedFiles.has(fileId);
+                          return (
+                            <tr key={file.name + idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                              <td style={{ padding: '12px 16px', textAlign: 'center', width: 40 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => {
+                                    host.setState(prev => {
+                                      const next = new Set(prev.folderViewSelectedFiles);
+                                      if (next.has(fileId)) next.delete(fileId); else next.add(fileId);
+                                      return { folderViewSelectedFiles: next };
+                                    });
+                                  }}
+                                  style={{ width: 16, height: 16, accentColor: '#ef4444', cursor: 'pointer' }}
+                                />
+                              </td>
+                              <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <span style={{ fontSize: 18 }}>{(file as any).pending ? '⏳' : '📄'}</span>
+                                {file.name}
+                                {(file as any).pending && <span style={{ fontSize: 11, color: '#d97706', fontWeight: 600, background: '#fef3c7', borderRadius: 4, padding: '1px 6px' }}>Pending Approval</span>}
+                              </td>
+                              <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.size}</td>
+                              <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.date}</td>
+                              <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                                <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                                  <button style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#0078d4' }}>
+                                    View / Download
+                                  </button>
+                                  <button
+                                    onClick={() => host._openFileDeleteDialog([{ id: fileId, name: file.name, folderId: currentFolderNode?.id || '', folderPath: currentFolderNode?.name || '' }])}
+                                    style={{ border: '1px solid #fca5a5', background: '#fff5f5', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#ef4444' }}
+                                    title="Delete file"
+                                  >
+                                    🗑 Delete
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             ) : allCurrentFolderFiles.length > 0 ? (
               /* Folder File Items List */
@@ -673,27 +1219,57 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
                     <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
+                      <th style={{ padding: '10px 16px', width: 40, textAlign: 'center' }}></th>
                       <th style={{ padding: '10px 16px' }}>FILE NAME</th>
                       <th style={{ padding: '10px 16px' }}>SIZE</th>
-                      <th style={{ padding: '10px 16px' }}>DATE UPLOADED</th>
+                      <th style={{ padding: '10px 16px' }}>DATE & TIME UPLOADED</th>
                       <th style={{ padding: '10px 16px', textAlign: 'right' }}>ACTION</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {allCurrentFolderFiles.map((file, idx) => (
-                      <tr key={file.name + idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <span style={{ fontSize: 18 }}>📄</span> {file.name}
-                        </td>
-                        <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.size}</td>
-                        <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.date}</td>
-                        <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                          <button style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#0078d4' }}>
-                            View / Download
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {allCurrentFolderFiles.map((file, idx) => {
+                      const fileId = (file as any).id || file.name;
+                      const isSelected = folderViewSelectedFiles.has(fileId);
+                      return (
+                        <tr key={file.name + idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '12px 16px', textAlign: 'center', width: 40 }}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {
+                                host.setState(prev => {
+                                  const next = new Set(prev.folderViewSelectedFiles);
+                                  if (next.has(fileId)) next.delete(fileId); else next.add(fileId);
+                                  return { folderViewSelectedFiles: next };
+                                });
+                              }}
+                              style={{ width: 16, height: 16, accentColor: '#ef4444', cursor: 'pointer' }}
+                            />
+                          </td>
+                          <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <span style={{ fontSize: 18 }}>{(file as any).pending ? '⏳' : '📄'}</span>
+                            {file.name}
+                            {(file as any).pending && <span style={{ fontSize: 11, color: '#d97706', fontWeight: 600, background: '#fef3c7', borderRadius: 4, padding: '1px 6px' }}>Pending Approval</span>}
+                          </td>
+                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.size}</td>
+                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.date}</td>
+                          <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                            <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                              <button style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#0078d4' }}>
+                                View / Download
+                              </button>
+                              <button
+                                onClick={() => host._openFileDeleteDialog([{ id: fileId, name: file.name, folderId: currentFolderNode?.id || '', folderPath: currentFolderNode?.name || '' }])}
+                                style={{ border: '1px solid #fca5a5', background: '#fff5f5', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#ef4444' }}
+                                title="Delete file"
+                              >
+                                🗑 Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -722,7 +1298,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
             {/* ── Segregated Section: Subfolder Level Unmatched Items Inside Vessel ── */}
             {(() => {
-              const currentVessel = folderPathStack.length > 0 ? folderPathStack[0].name : null;
+              const currentVessel = currentVesselNameFromStack || (folderPathStack.length > 0 ? folderPathStack[0].name : null);
               const subAnomalies = (host.state.folderAnomalies || []).filter(a =>
                 a.anomaly_type === 'subfolder_unmatched' && (!currentVessel || a.vessel_name === currentVessel)
               );
@@ -777,6 +1353,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     <th style={{ padding: '10px 10px', width: 44, textAlign: 'center' }}>SR.</th>
                     <th style={{ padding: '10px 12px' }}>VESSEL NAME</th>
                     <th style={{ padding: '10px 12px' }}>GROUP</th>
+                    <th style={{ padding: '10px 12px' }}>CATEGORY</th>
                     <th style={{ padding: '10px 12px' }}>SUB-CATEGORY</th>
                     <th style={{ padding: '10px 12px' }}>FOLDER PATH</th>
                     <th style={{ padding: '10px 12px' }}>FILE NAME</th>
@@ -786,7 +1363,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 <tbody>
                   {pageGroupedRows.length === 0 ? (
                     <tr>
-                      <td colSpan={7} style={{ padding: '36px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
+                      <td colSpan={8} style={{ padding: '36px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
                         No documents found. {textFilter || vesselFilter !== 'all' || docGroupFilter !== 'all' || catFilter !== 'all' ? 'Try clearing the filters.' : ''}
                       </td>
                     </tr>
@@ -794,6 +1371,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     const globalIdx = safePage * PAGE_ROWS + idx + 1;
                     const isUploading = docUploadRowKey === r.groupKey && docUploadBusy;
                     const hasFiles = r.files.length > 0;
+                    const rowFileIds = r.files.map(f => f.id);
+                    const rowSelectedCount = rowFileIds.filter(id => listViewSelectedFiles.has(id)).length;
 
                     return (
                       <tr key={`${r.groupKey}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.1s' }}
@@ -807,7 +1386,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             {r.group}
                           </span>
                         </td>
-                        <td style={{ padding: '10px 12px', fontWeight: 600, color: '#1e293b' }}>{r.category}</td>
+                        <td style={{ padding: '10px 12px', fontWeight: 600, color: '#334155' }}>{r.category}</td>
+                        <td style={{ padding: '10px 12px', fontWeight: 600, color: '#1e293b' }}>{r.subCategory || r.category}</td>
                         <td style={{ padding: '10px 12px', color: '#64748b', fontSize: 11 }} title={r.subFolderPath}>
                           {r.subFolderPath}
                         </td>
@@ -816,12 +1396,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                               {r.files.map(file => (
                                 <div key={file.name} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={listViewSelectedFiles.has(file.id)}
+                                    onChange={() => {
+                                      host.setState(prev => {
+                                        const next = new Set(prev.listViewSelectedFiles);
+                                        if (next.has(file.id)) next.delete(file.id); else next.add(file.id);
+                                        return { listViewSelectedFiles: next };
+                                      });
+                                    }}
+                                    style={{ width: 14, height: 14, accentColor: '#ef4444', cursor: 'pointer', flexShrink: 0 }}
+                                  />
                                   <span style={{ fontSize: 14 }}>📄</span>
                                   <span
                                     onClick={() => {
                                       if (file.id && !file.id.startsWith('file_')) {
-                                        // Numeric IDs are approval DB row IDs (pending files) — backend
-                                        // now resolves them to the staged drive_item_id for preview.
                                         window.open(`${host._base()}/api/files/${file.id}/content`, '_blank');
                                       } else {
                                         alert(`File "${file.name}" is pending — it will be available after approval.`);
@@ -841,28 +1431,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         </td>
                         <td style={{ padding: '10px 12px', textAlign: 'right' }}>
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                            {hasFiles ? (
-                              <button
-                                onClick={() => {
-                                  const firstFile = r.files[0];
-                                  if (firstFile.id && !firstFile.id.startsWith('file_')) {
-                                    window.open(`${host._base()}/api/files/${firstFile.id}/content`, '_blank');
-                                  } else {
-                                    alert(`File "${firstFile.name}" in folder: ${r.subFolderPath}`);
-                                  }
-                                }}
-                                style={{
-                                  background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe',
-                                  borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer',
-                                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                                }}
-                              >
-                                ↗ Open ({r.files.length})
-                              </button>
-                            ) : (
-                              <span style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>No attachment</span>
-                            )}
-
+                            <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
                             <label style={{
                               background: isUploading ? '#f1f5f9' : '#fff', border: '1px solid #cbd5e1', borderRadius: 6,
                               padding: '3px 8px', fontSize: 11, fontWeight: 600,
@@ -879,7 +1448,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   if (!file) return;
                                   host.setState({ docUploadRowKey: r.groupKey, docUploadBusy: true, docUploadMsg: null });
                                   try {
-                                    const { fileId, statusPending } = await host._uploadFileToFolder(
+                                    const { fileId, statusPending, folderId, isGraphUpload } = await host._uploadFileToFolder(
                                       r.uploadFolderId,
                                       r.subFolderPath,
                                       r.vesselName,
@@ -903,33 +1472,81 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                       host.setState(prev => ({ approvalsList: [newApproval, ...prev.approvalsList] }));
                                     }
 
-                                    const newUpload = { name: file.name, size: `${(file.size / 1024).toFixed(1)} KB`, date: 'Just now', pending: statusPending, id: fileId };
-                                    const updatedByFolder = {
-                                      ...uploadedFilesByFolder,
-                                      [r.groupKey]: [...(uploadedFilesByFolder[r.groupKey] || []).filter((f: any) => f.name !== file.name), newUpload],
-                                      [r.category]: [...(uploadedFilesByFolder[r.category] || []).filter((f: any) => f.name !== file.name), newUpload],
-                                      [r.group]: [...(uploadedFilesByFolder[r.group] || []).filter((f: any) => f.name !== file.name), newUpload],
-                                      [r.uploadFolderId]: [...(uploadedFilesByFolder[r.uploadFolderId] || []).filter((f: any) => f.name !== file.name), newUpload],
-                                    };
+                                    const newUpload = { name: file.name, size: `${(file.size / 1024).toFixed(1)} KB`, date: 'Just now', pending: statusPending, id: fileId, uploadedAt: Date.now() };
+                                    const liveFolderId = folderId || r.uploadFolderId;
 
-                                    const baseRows = (rows && rows.length > 0) ? rows : allRows;
-                                    const updatedRows = baseRows.map(row =>
-                                      row.groupKey === r.groupKey
-                                        ? { ...row, fileName: file.name, fileId: fileId || row.fileId || `file_${Date.now()}`, filePending: statusPending }
-                                        : row
-                                    );
+                                    host.setState(prev => {
+                                      // Use functional setState to avoid stale closure on rows/uploadedFilesByFolder
+                                      const uploadedFilesByFolder = prev.uploadedFilesByFolder;
+                                      const rows = (prev.rows || []) as FlatRow[];
+                                      const baseRows = rows.length > 0 ? rows : (prev.rows || []) as FlatRow[];
 
-                                    host.setState({
-                                      docUploadBusy: false,
-                                      docUploadRowKey: null,
-                                      docUploadMsg: msg,
-                                      uploadedFilesByFolder: updatedByFolder,
-                                      rows: updatedRows,
+                                      const normSub = (r.subFolderPath || '').trim().toLowerCase();
+                                      const dedupeKey = (r.subFolderPath || r.groupKey).trim().toLowerCase();
+                                      const updatedByFolder: Record<string, any[]> = {
+                                        ...uploadedFilesByFolder,
+                                        [r.groupKey]: [...(uploadedFilesByFolder[r.groupKey] || []).filter((f: any) => f.name !== file.name), newUpload],
+                                      };
+                                      // Write to liveFolderId only if it's a real Graph drive item ID (isGraphUpload = true)
+                                      // Do NOT write to r.uploadFolderId — it may be a backend DB ID shared across rows
+                                      if (isGraphUpload === true && liveFolderId) {
+                                        updatedByFolder[liveFolderId] = [...(uploadedFilesByFolder[liveFolderId] || []).filter((f: any) => f.name !== file.name), newUpload];
+                                      }
+                                      if (normSub) {
+                                        updatedByFolder[normSub] = [...(uploadedFilesByFolder[normSub] || []).filter((f: any) => f.name !== file.name), newUpload];
+                                      }
+                                      if (dedupeKey && dedupeKey !== normSub) {
+                                        updatedByFolder[dedupeKey] = [...(uploadedFilesByFolder[dedupeKey] || []).filter((f: any) => f.name !== file.name), newUpload];
+                                      }
+
+                                      // Find the matching row; if it already has a file, add a new row instead of overwriting
+                                      const existingRowIdx = baseRows.findIndex((row: FlatRow) => row.groupKey === r.groupKey && !row.fileName);
+                                      let updatedRows: FlatRow[];
+                                      if (existingRowIdx !== -1) {
+                                        updatedRows = baseRows.map((row: FlatRow, i: number) =>
+                                          i === existingRowIdx
+                                            ? { ...row, fileName: file.name, fileId: fileId || `file_${Date.now()}`, filePending: statusPending }
+                                            : row
+                                        );
+                                      } else {
+                                        // All rows for this groupKey already have files — append a new row
+                                        const refRow = baseRows.find((row: FlatRow) => row.groupKey === r.groupKey) || r;
+                                        const newRow = { ...refRow, fileName: file.name, fileId: fileId || `file_${Date.now()}`, filePending: statusPending };
+                                        updatedRows = [...baseRows, newRow];
+                                      }
+
+                                      console.log('[VesselDMS] Upload optimistic update:', {
+                                        groupKey: r.groupKey,
+                                        uploadFolderId: r.uploadFolderId,
+                                        liveFolderId,
+                                        fileName: file.name,
+                                        existingRowIdx,
+                                        updatedRowsCount: updatedRows.length,
+                                        rowsBefore: baseRows.length,
+                                      });
+
+                                      return {
+                                        docUploadBusy: false,
+                                        docUploadRowKey: null,
+                                        docUploadMsg: msg,
+                                        uploadedFilesByFolder: updatedByFolder,
+                                        rows: updatedRows,
+                                      };
+                                    }, () => {
+                                      // Call _refreshFolderFiles in setState callback to ensure state is updated first
+                                      // Refresh the live folder, rather than replacing this
+                                      // vessel's rows with the DB-only response. The latter can
+                                      // temporarily hide files that were already in SharePoint.
+                                      // Single refresh - _refreshFolderFiles now handles Graph consistency window
+                                      // by preserving local uploads when Graph returns empty.
+                                      const refreshFolderId = folderId || r.uploadFolderId;
+                                      // Use isGraphUpload flag from _uploadFileToFolder return value
+                                      // (true = folderId is a real Graph drive item ID, false = backend DB ID)
+                                      const isRealGraphId = isGraphUpload === true;
+                                      if (refreshFolderId && !/^f\d+$/.test(refreshFolderId)) {
+                                        void host._refreshFolderFiles(refreshFolderId, r.groupKey, true, isRealGraphId).catch(() => undefined);
+                                      }
                                     });
-
-                                    if (statusPending && r.uploadFolderId && !/^f\d+$/.test(r.uploadFolderId)) {
-                                      setTimeout(() => host._refreshFolderFiles(r.uploadFolderId, r.groupKey, true).catch(() => undefined), 1500);
-                                    }
                                   } catch (err: any) {
                                     host.setState({ docUploadBusy: false, docUploadRowKey: null, docUploadMsg: `Upload failed: ${err?.message || 'Error'}` });
                                   }
@@ -937,6 +1554,46 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                               />
                               {isUploading ? '⏳...' : '↑ Upload'}
                             </label>
+                            <button
+                              type="button"
+                              disabled={rowSelectedCount === 0}
+                              onClick={() => {
+                                if (rowSelectedCount === 0) return;
+                                const currentSelected = host.state.listViewSelectedFiles;
+                                const filesToDelete = r.files
+                                  .filter(f => currentSelected.has(f.id))
+                                  .map(f => ({ id: f.id, name: f.name, folderId: r.uploadFolderId, folderPath: r.subFolderPath }));
+                                if (filesToDelete.length === 0) return;
+                                host.setState({ listViewSelectedFiles: new Set() });
+                                host._openFileDeleteDialog(filesToDelete);
+                              }}
+                              style={{
+                                border: `1px solid ${rowSelectedCount > 0 ? '#fca5a5' : '#e2e8f0'}`,
+                                background: rowSelectedCount > 0 ? '#fff5f5' : '#f8fafc',
+                                borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 600,
+                                cursor: rowSelectedCount > 0 ? 'pointer' : 'not-allowed',
+                                color: rowSelectedCount > 0 ? '#ef4444' : '#cbd5e1',
+                                display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
+                              }}
+                              title={rowSelectedCount > 0 ? `Delete ${rowSelectedCount} selected file(s)` : 'Select files to delete'}
+                            >
+                              🗑{rowSelectedCount > 0 ? ` Delete (${rowSelectedCount})` : ' Delete'}
+                            </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void host._openSharePointFolder(r)}
+                              title="Open this folder in SharePoint"
+                              aria-label={`Open ${r.subFolderPath} in SharePoint`}
+                              style={{
+                                width: 28, height: 27, padding: 0, borderRadius: 6,
+                                border: '1px solid #bfdbfe', background: '#eff6ff', color: '#1d4ed8',
+                                cursor: 'pointer', fontSize: 16, fontWeight: 700, lineHeight: 1,
+                                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                              }}
+                            >
+                              ↗
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -986,5 +1643,6 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       </div>
     );
 
-
+
+
 }

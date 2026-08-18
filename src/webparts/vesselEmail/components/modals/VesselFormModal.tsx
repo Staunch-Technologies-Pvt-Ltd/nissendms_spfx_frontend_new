@@ -21,8 +21,7 @@ export function renderVesselForm(host: VesselEmail, mode: 'create' | 'edit'): Re
 }
 
 function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' | 'edit' }): React.ReactElement {
-  const { form, modalBusy, modalMsg, modalError } = host.state;
-  const isCreate = mode === 'create';
+  const { form, modalBusy, modalMsg, modalError, formFieldErrors } = host.state;  const isCreate = mode === 'create';
   const [elapsed, setElapsed] = React.useState(0);
 
   React.useEffect(() => {
@@ -45,8 +44,8 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
 
   const isSuccess = modalMsg && modalMsg.startsWith('🎉');
 
-  const handleClose = () => {
-    host.setState({ modal: 'none', modalMsg: null, modalError: null });
+   const handleClose = () => {
+    host.setState({ modal: 'none', modalMsg: null, modalError: null, formFieldErrors: {} });
     if (isSuccess) {
       host._loadData();
     }
@@ -174,16 +173,29 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
                 <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 }}>
                   IMO number <span style={{ color: '#ef4444' }}>*</span>
                 </label>
-                <input
-                  style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 14, outline: 'none', boxSizing: 'border-box', color: '#0f172a' }}
+                             <input
+                  style={{
+                    width: '100%', padding: '10px 14px', borderRadius: 8,
+                    border: `1px solid ${formFieldErrors?.imo ? '#ef4444' : '#cbd5e1'}`,
+                    fontSize: 14, outline: 'none', boxSizing: 'border-box', color: '#0f172a',
+                  }}
                   value={form.imo}
                   onChange={e => {
                     const val = e.target.value.replace(/\D/g, '').slice(0, 7);
-                    host.setState({ form: { ...form, imo: val }, modalError: null });
+                    host.setState({
+                      form: { ...form, imo: val },
+                      modalError: null,
+                      formFieldErrors: { ...formFieldErrors, imo: '' },
+                    });
                   }}
                   placeholder="7 digits, e.g. 9074729"
                   maxLength={7}
                   inputMode="numeric" />
+                {formFieldErrors?.imo && (
+                  <div style={{ marginTop: 6, fontSize: 12, color: '#dc2626', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span>⚠️</span><span>{formFieldErrors.imo}</span>
+                  </div>
+                )}
               </div>
 
               <div>

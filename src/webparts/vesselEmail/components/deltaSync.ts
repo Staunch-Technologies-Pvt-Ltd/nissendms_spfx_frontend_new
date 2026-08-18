@@ -26,6 +26,8 @@ export interface SpoFolderNode {
   id: string;
   name: string;
   parentId: string | null;
+  /** True for folders; false for files emitted by the Graph delta feed. */
+  isFolder: boolean;
   /** Full server-relative path, e.g. "/sites/MySite/Shared Documents/Vessel Management/..." */
   serverRelativePath: string;
   children: SpoFolderNode[];
@@ -37,6 +39,8 @@ export interface DeltaSyncResult {
   updated: SpoFolderNode[];
   deleted: string[];   // item IDs
   newDeltaLink: string;
+  /** True when this result is from a full baseline scan (not an incremental delta). */
+  isBaseline?: boolean;
 }
 
 // ── Delta link persistence (localStorage) ────────────────────────────────────
@@ -99,15 +103,20 @@ export async function fetchFolderChildren(
   driveId: string,
   folderPath: string,
 ): Promise<SpoFolderNode[]> {
-  const encoded = folderPath
+  // Strip leading slash and any drive-relative prefix like /drives/{id}/root:
+  const cleanPath = folderPath
+    .replace(/^\/+/, '')
+    .replace(/^drives\/[^/]+\/root:\/?/i, '');
+
+  const encoded = cleanPath
     .split('/')
     .map(s => encodeURIComponent(s))
     .join('/');
 
   try {
-    const url = `/sites/${siteId}/drives/${driveId}/root:/${encoded}:/children?$filter=folder ne null&$select=id,name,parentReference,folder`;
+    const url = `/sites/${siteId}/drives/${driveId}/root:/${encoded}:/children?$select=id,name,parentReference,folder`;
     const result: any = await client.api(url).get();
-    return (result.value ?? []).map((item: any) => graphItemToNode(item));
+    return (result.value ?? []).filter((item: any) => !!item.folder).map((item: any) => graphItemToNode(item));
   } catch {
     return [];
   }
@@ -136,6 +145,7 @@ function graphItemToNode(item: any): SpoFolderNode {
     id: item.id,
     name: item.name,
     parentId: item.parentReference?.id ?? null,
+    isFolder: !!item.folder,
     serverRelativePath: resolveServerPath(item),
     children: [],
     deleted: !!item.deleted,
@@ -160,13 +170,17 @@ export async function pollDelta(
   client: MSGraphClientV3,
   siteId: string,
   driveId: string,
+  forceBaseline: boolean = false,
 ): Promise<DeltaSyncResult> {
-  const storedLink = loadDeltaLink(driveId);
+  // The delta link survives a browser reload, but the in-memory folder map
+  // does not. A new web part instance must therefore build a full baseline
+  // before it can safely use the persisted incremental token.
+  const storedLink = forceBaseline ? null : loadDeltaLink(driveId);
 
   // Use stored deltaLink for incremental sync, or start a fresh delta scan
   const startUrl = storedLink
     ? storedLink
-    : `/sites/${siteId}/drives/${driveId}/root/delta?$select=id,name,parentReference,folder,deleted`;
+    : `/sites/${siteId}/drives/${driveId}/root/delta?$select=id,name,parentReference,folder,file,deleted`;
 
   const { items, deltaLink } = await drainPages(client, startUrl);
 
@@ -177,16 +191,17 @@ export async function pollDelta(
   const deleted: string[] = [];
 
   for (const item of items) {
-    // Only care about folders (items without a 'folder' facet are files)
-    if (!item.folder && !item.deleted) continue;
-
+    // Track folders AND files — file changes from SPO-direct uploads must trigger a reload
     if (item.deleted) {
       deleted.push(item.id);
-    } else {
+    } else if (item.folder) {
       const node = graphItemToNode(item);
-      // Distinguish add vs update: callers can compare against their existing tree
-      // We emit both as separate arrays; the merger decides based on its own state.
-      added.push(node);   // caller deduplicates against existing tree
+      added.push(node);
+    } else if (item.file) {
+      // File added/modified in SPO directly — emit as a synthetic node so the
+      // caller's debounced _loadData fires and the list view refreshes.
+      const node = graphItemToNode(item);
+      added.push(node);
     }
   }
 
@@ -213,6 +228,7 @@ export function mergeNodeIntoMap(
     existing.name = node.name;
     existing.serverRelativePath = node.serverRelativePath;
     existing.parentId = node.parentId;
+    existing.isFolder = node.isFolder;
   } else {
     map.set(node.id, { ...node, children: [] });
   }
@@ -286,10 +302,19 @@ export function createSyncScheduler(
   onError?: (err: unknown) => void,
 ): SyncScheduler {
   let timerId: ReturnType<typeof setInterval> | null = null;
+  let hasBaseline = false;
 
   const run = async (): Promise<DeltaSyncResult | null> => {
     try {
-      const result = await pollDelta(client, siteId, driveId);
+      // isBaseline = true on the very first run of this scheduler instance,
+      // regardless of whether a stored deltaLink exists. The in-memory folder
+      // map is always empty on a fresh page load, so we treat the first result
+      // as a baseline (populate the map) and skip new-vessel alerts to avoid
+      // false positives before the vessels list has loaded from the DB.
+      const isFirstRun = !hasBaseline;
+      const result = await pollDelta(client, siteId, driveId, false);
+      result.isBaseline = isFirstRun;
+      hasBaseline = true;
       onResult(result);
       return result;
     } catch (err) {

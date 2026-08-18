@@ -14,76 +14,109 @@
  *     business owner confirms the exact subfolder structure from the source PDF.
  *     Add it here once confirmed; no other file needs to change.
  */
-exports.__esModule = true;
+Object.defineProperty(exports, "__esModule", { value: true });
 exports.MAIN_FOLDERS = exports.VESSEL_MANAGEMENT_ROOT = void 0;
 // ── Folder-1: Technical & Crewing ────────────────────────────────────────────
 var TECHNICAL_CREWING_PER_VESSEL = [
-    { name: 'Month End Reports' },
-    { name: 'Service Agreements' },
-    { name: 'Registration' },
+    {
+        name: 'Month End Reports',
+        children: [
+            { name: 'Main Engine' },
+            { name: 'Aux Engine' },
+            { name: 'Cooling Water' },
+            { name: 'Inspection Reports' },
+            { name: 'Defect Reports' },
+            { name: 'Guarantee Claims' },
+            { name: 'To be Classified' },
+        ],
+    },
+    {
+        name: 'Service Agreements',
+        children: [
+            { name: 'Technical Management' },
+            { name: 'Crew Management' },
+            { name: 'Vendor & Service Provider' },
+            { name: 'To be Classified' },
+        ],
+    },
+    {
+        name: 'Registration',
+        children: [
+            { name: 'Flag & MPA' },
+            { name: 'Ship Builder' },
+            { name: 'Radio & Telecom' },
+            { name: 'Crewing & SMOU' },
+            { name: 'Novation' },
+            { name: 'To be Classified' },
+        ],
+    },
     {
         name: 'Drawings and Manuals',
         children: [
-            {
-                name: 'Drawings',
-                children: [
-                    { name: 'Archive' },
-                    { name: 'Basic' },
-                    { name: 'Electrical' },
-                    { name: 'Engine' },
-                    { name: 'Hull' },
-                    { name: 'Other Drawings' },
-                    { name: 'Safety' },
-                ]
-            },
-            {
-                name: 'Manuals',
-                children: [
-                    { name: 'Automation' },
-                    { name: 'Auxiliary Engine' },
-                    { name: 'Boiler' },
-                    { name: 'Cargo' },
-                    { name: 'Deck Machinery' },
-                    { name: 'Electrical' },
-                    { name: 'Main Engine' },
-                    { name: 'Other Manuals' },
-                    { name: 'Pollution' },
-                    { name: 'Propulsion' },
-                    { name: 'Refrigeration' },
-                    { name: 'Safety' },
-                    { name: 'Shafting' },
-                    { name: 'Steering Gear' },
-                    { name: 'Thrusters' },
-                ]
-            },
-        ]
+            { name: 'Drawing' },
+            { name: 'Manual' },
+            { name: 'To be Classified' },
+        ],
+    },
+    {
+        name: 'PO & Invoice',
+        children: [
+            { name: 'Purchase Order and Vendor Invoice' },
+        ],
     },
     { name: 'Incidents' },
     { name: 'Crewing' },
+    { name: 'To be Classified' },
 ];
 var TECHNICAL_CREWING_COMMON = [
     {
-        name: 'Common (for all ships)',
+        name: 'Vendor & Service Agreements',
         children: [
-            { name: 'Vendor & Service Agreements' },
-            { name: 'Vendor Management' },
-        ]
+            { name: 'Vendor & Service Provider Agreement' },
+            { name: 'To be Classified' },
+        ],
     },
+    { name: 'Vendor Management' },
+    { name: 'To be Classified' },
 ];
 // ── Folder-2: Commercial and Chartering ──────────────────────────────────────
 var COMMERCIAL_CHARTERING_PER_VESSEL = [
-    { name: 'Agreements' },
-    { name: 'Invoices & Payments' },
-    { name: 'Claims & Disputes' },
+    {
+        name: 'Agreements',
+        children: [
+            { name: 'Charter party' },
+            { name: 'Pool Agreement' },
+            { name: 'Commission Agreement' },
+            { name: 'To be Classified' },
+        ],
+    },
+    {
+        name: 'Invoices & Payments',
+        children: [
+            { name: 'Invoice' },
+            { name: 'Payments' },
+            { name: 'To be Classified' },
+        ],
+    },
+    {
+        name: 'Claims & Disputes',
+        children: [
+            { name: 'Disputes' },
+            { name: 'Claims' },
+            { name: 'To be Classified' },
+        ],
+    },
     { name: 'To be Classified' },
 ];
 var COMMERCIAL_CHARTERING_COMMON = [
     {
-        name: 'Common Agreements (Not Ship Specific)',
+        name: 'Agreements',
         children: [
-            { name: 'Agreements' },
+            { name: 'Charter party' },
+            { name: 'Pool Agreement' },
+            { name: 'Commission Agreement' },
             { name: 'To be Classified' },
-        ]
+        ],
     },
 ];
 // ── Folder-3: Insurance ───────────────────────────────────────────────────────
@@ -91,21 +124,52 @@ var INSURANCE_PER_VESSEL = [
     { name: 'P&I' },
     { name: 'H&M' },
     { name: 'War Risk' },
-    { name: 'Flag and MPA' },
+    { name: 'Flag / MPA' },
+    { name: 'USA Related' },
 ];
 var INSURANCE_COMMON = [
+    { name: 'Agreements' },
+    { name: 'Miscellaneous' },
+];
+// ── Kaizen - Knowledge Bank ───────────────────────────────────────────────────
+// Every vessel has the same four top-level main folders.  Kaizen uses the
+// same category structure for a vessel as it does in the common area.
+var KAIZEN_KNOWLEDGE_BANK_PER_VESSEL = [
+    { name: 'Templates' },
     {
-        name: 'Common (Not Ship Specific)',
+        name: 'Procedures and Work Instructions',
         children: [
-            { name: 'Agreements' },
-            { name: 'Miscellaneous' },
-        ]
+            { name: 'Equipment Maker' },
+            { name: 'Class' },
+            { name: 'Flag / Port State' },
+            { name: 'SIRE/OCIMF/RightShip' },
+            { name: 'Shipyard' },
+        ],
+    },
+    { name: 'Lessons Learned' },
+    {
+        name: 'Circulars and Guidance',
+        children: [
+            { name: 'Equipment Maker' },
+            { name: 'Class' },
+            { name: 'Flag / Port State' },
+            { name: 'SIRE/OCIMF/RightShip' },
+            { name: 'Shipyard' },
+        ],
     },
 ];
-var KAIZEN_KNOWLEDGE_BANK_PER_VESSEL = [];
 var KAIZEN_KNOWLEDGE_BANK_COMMON = [
     { name: 'Templates' },
-    { name: 'Procedures and Work Instructions' },
+    {
+        name: 'Procedures and Work Instructions',
+        children: [
+            { name: 'Equipment Maker' },
+            { name: 'Class' },
+            { name: 'Flag ⁄ Port State' },
+            { name: 'SIRE⁄OCIMF⁄RightShip' },
+            { name: 'Shipyard' },
+        ],
+    },
     { name: 'Lessons Learned' },
     {
         name: 'Circulars and Guidance',
@@ -114,31 +178,31 @@ var KAIZEN_KNOWLEDGE_BANK_COMMON = [
             { name: 'Class' },
             { name: 'Flag ⁄ Port State' },
             { name: 'SIRE⁄OCIMF⁄RightShip' },
-            { name: 'Shipyard' }
-        ]
-    }
+            { name: 'Shipyard' },
+        ],
+    },
 ];
 // ── Exported template ─────────────────────────────────────────────────────────
-exports.VESSEL_MANAGEMENT_ROOT = 'Vessel Management';
+exports.VESSEL_MANAGEMENT_ROOT = '';
 exports.MAIN_FOLDERS = [
     {
         name: 'Technical & Crewing',
         perVesselTree: TECHNICAL_CREWING_PER_VESSEL,
-        commonTree: TECHNICAL_CREWING_COMMON
+        commonTree: TECHNICAL_CREWING_COMMON,
     },
     {
         name: 'Commercial & Chartering',
         perVesselTree: COMMERCIAL_CHARTERING_PER_VESSEL,
-        commonTree: COMMERCIAL_CHARTERING_COMMON
+        commonTree: COMMERCIAL_CHARTERING_COMMON,
     },
     {
         name: 'Insurance',
         perVesselTree: INSURANCE_PER_VESSEL,
-        commonTree: INSURANCE_COMMON
+        commonTree: INSURANCE_COMMON,
     },
     {
         name: 'Kaizen - Knowledge Bank',
         perVesselTree: KAIZEN_KNOWLEDGE_BANK_PER_VESSEL,
-        commonTree: KAIZEN_KNOWLEDGE_BANK_COMMON
-    }
+        commonTree: KAIZEN_KNOWLEDGE_BANK_COMMON,
+    },
 ];

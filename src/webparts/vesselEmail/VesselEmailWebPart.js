@@ -84,7 +84,8 @@ var VesselEmailWebPart = /** @class */ (function (_super) {
             siteId: this._siteId,
             driveId: this._driveId,
             sessionId: this._sessionId,
-            sessionInitialized: this._sessionInitialized
+            sessionInitialized: this._sessionInitialized,
+            siteUrl: this.context.pageContext.site.absoluteUrl
         });
         ReactDom.render(element, this.domElement);
     };
@@ -138,11 +139,11 @@ var VesselEmailWebPart = /** @class */ (function (_super) {
         });
     };
     VesselEmailWebPart.prototype._ensureSession = function () {
-        var _a, _b;
+        var _a, _b, _c, _d;
         return __awaiter(this, void 0, void 0, function () {
-            var base, res, data, _c, _d, _e, e_2;
-            return __generator(this, function (_f) {
-                switch (_f.label) {
+            var base, res, sslErr_1, localErr_1, data, _e, _f, _g, e_2;
+            return __generator(this, function (_h) {
+                switch (_h.label) {
                     case 0:
                         if (!this._userEmail) {
                             // Fallback: use SharePoint page context email directly
@@ -155,10 +156,14 @@ var VesselEmailWebPart = /** @class */ (function (_super) {
                             this.render();
                             return [2 /*return*/];
                         }
-                        base = (this.properties.apiBaseUrl || 'http://localhost:8000').replace(/\/$/, '');
-                        _f.label = 1;
+                        base = (this.properties.apiBaseUrl || 'https://nk-dms-dev.sg-nissenkaiun.com').replace(/\/$/, '');
+                        _h.label = 1;
                     case 1:
-                        _f.trys.push([1, 7, 8, 9]);
+                        _h.trys.push([1, 14, 15, 16]);
+                        res = null;
+                        _h.label = 2;
+                    case 2:
+                        _h.trys.push([2, 4, , 9]);
                         return [4 /*yield*/, fetch("".concat(base, "/api/auth/bypass-login"), {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
@@ -168,35 +173,59 @@ var VesselEmailWebPart = /** @class */ (function (_super) {
                                     tenant_id: ((_b = (_a = this.context.pageContext.aadInfo) === null || _a === void 0 ? void 0 : _a.tenantId) === null || _b === void 0 ? void 0 : _b.toString()) || ''
                                 })
                             })];
-                    case 2:
-                        res = _f.sent();
-                        if (!res.ok) return [3 /*break*/, 4];
-                        return [4 /*yield*/, res.json()];
                     case 3:
-                        data = _f.sent();
+                        res = _h.sent();
+                        return [3 /*break*/, 9];
+                    case 4:
+                        sslErr_1 = _h.sent();
+                        console.warn('[VesselDMS] Primary bypass-login failed (SSL/Network):', sslErr_1);
+                        if (!base.includes('nk-dms-dev.sg-nissenkaiun.com')) return [3 /*break*/, 8];
+                        _h.label = 5;
+                    case 5:
+                        _h.trys.push([5, 7, , 8]);
+                        return [4 /*yield*/, fetch("http://localhost:8000/api/auth/bypass-login", {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    email: this._userEmail,
+                                    display_name: this.context.pageContext.user.displayName,
+                                    tenant_id: ((_d = (_c = this.context.pageContext.aadInfo) === null || _c === void 0 ? void 0 : _c.tenantId) === null || _d === void 0 ? void 0 : _d.toString()) || ''
+                                })
+                            })];
+                    case 6:
+                        res = _h.sent();
+                        return [3 /*break*/, 8];
+                    case 7:
+                        localErr_1 = _h.sent();
+                        console.warn('[VesselDMS] Local fallback bypass-login failed:', localErr_1);
+                        return [3 /*break*/, 8];
+                    case 8: return [3 /*break*/, 9];
+                    case 9:
+                        if (!(res && res.ok)) return [3 /*break*/, 11];
+                        return [4 /*yield*/, res.json()];
+                    case 10:
+                        data = _h.sent();
                         if (data.session_id) {
                             this._sessionId = data.session_id;
                         }
                         else {
-                            // Backend is running in stub/no-DB mode (session_id intentionally null —
-                            // require_session() allows unauthenticated calls there). This is NOT a
-                            // failure: fall through and still mark init as done so the UI loads data.
                             console.warn('[VesselDMS] bypass-login succeeded without a session_id (stub/no-DB mode).');
                         }
-                        return [3 /*break*/, 6];
-                    case 4:
-                        _d = (_c = console).warn;
-                        _e = ['[VesselDMS] bypass-login failed:', res.status];
+                        return [3 /*break*/, 13];
+                    case 11:
+                        if (!res) return [3 /*break*/, 13];
+                        _f = (_e = console).warn;
+                        _g = ['[VesselDMS] bypass-login failed:', res.status];
                         return [4 /*yield*/, res.text()["catch"](function () { return ''; })];
-                    case 5:
-                        _d.apply(_c, _e.concat([_f.sent()]));
-                        _f.label = 6;
-                    case 6: return [3 /*break*/, 9];
-                    case 7:
-                        e_2 = _f.sent();
+                    case 12:
+                        _f.apply(_e, _g.concat([_h.sent()]));
+                        _h.label = 13;
+                    case 13: return [3 /*break*/, 16];
+                    case 14:
+                        e_2 = _h.sent();
                         console.warn('[VesselDMS] Session init failed:', e_2);
-                        return [3 /*break*/, 9];
-                    case 8:
+                        return [3 /*break*/, 16];
+                    case 15:
                         // ALWAYS mark session init as settled and re-render — regardless of whether
                         // a session_id was actually obtained. Previously this.render() was only
                         // called inside the `if (data.session_id)` branch, so when the backend had
@@ -207,7 +236,7 @@ var VesselEmailWebPart = /** @class */ (function (_super) {
                         this._sessionInitialized = true;
                         this.render();
                         return [7 /*endfinally*/];
-                    case 9: return [2 /*return*/];
+                    case 16: return [2 /*return*/];
                 }
             });
         });

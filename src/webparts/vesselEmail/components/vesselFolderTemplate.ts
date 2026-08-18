@@ -31,74 +31,108 @@ export interface MainFolder {
 // ── Folder-1: Technical & Crewing ────────────────────────────────────────────
 
 const TECHNICAL_CREWING_PER_VESSEL: FolderNode[] = [
-  { name: 'Month End Reports' },
-  { name: 'Service Agreements' },
-  { name: 'Registration' },
+  {
+    name: 'Month End Reports',
+    children: [
+      { name: 'Main Engine' },
+      { name: 'Aux Engine' },
+      { name: 'Cooling Water' },
+      { name: 'Inspection Reports' },
+      { name: 'Defect Reports' },
+      { name: 'Guarantee Claims' },
+      { name: 'To be Classified' },
+    ],
+  },
+  {
+    name: 'Service Agreements',
+    children: [
+      { name: 'Technical Management' },
+      { name: 'Crew Management' },
+      { name: 'Vendor & Service Provider' },
+      { name: 'To be Classified' },
+    ],
+  },
+  {
+    name: 'Registration',
+    children: [
+      { name: 'Flag & MPA' },
+      { name: 'Ship Builder' },
+      { name: 'Radio & Telecom' },
+      { name: 'Crewing & SMOU' },
+      { name: 'Novation' },
+      { name: 'To be Classified' },
+    ],
+  },
   {
     name: 'Drawings and Manuals',
     children: [
-      {
-        name: 'Drawings',
-        children: [
-          { name: 'Archive' },
-          { name: 'Basic' },
-          { name: 'Electrical' },
-          { name: 'Engine' },
-          { name: 'Hull' },
-          { name: 'Other Drawings' },
-          { name: 'Safety' },
-        ],
-      },
-      {
-        name: 'Manuals',
-        children: [
-          { name: 'Automation' },
-          { name: 'Auxiliary Engine' },
-          { name: 'Boiler' },
-          { name: 'Cargo' },
-          { name: 'Deck Machinery' },
-          { name: 'Electrical' },
-          { name: 'Main Engine' },
-          { name: 'Other Manuals' },
-          { name: 'Pollution' },
-          { name: 'Propulsion' },
-          { name: 'Refrigeration' },
-          { name: 'Safety' },
-          { name: 'Shafting' },
-          { name: 'Steering Gear' },
-          { name: 'Thrusters' },
-        ],
-      },
+      { name: 'Drawing' },
+      { name: 'Manual' },
+      { name: 'To be Classified' },
+    ],
+  },
+   {
+    name: 'PO & Invoice',
+    children: [
+      { name: 'Purchase Order' },
+      { name: 'Vendor Invoice' },
     ],
   },
   { name: 'Incidents' },
   { name: 'Crewing' },
+  { name: 'To be Classified' },
 ];
 
 const TECHNICAL_CREWING_COMMON: FolderNode[] = [
   {
-    name: 'Common (for all ships)',
+    name: 'Vendor & Service Agreements',
     children: [
-      { name: 'Vendor & Service Agreements' },
-      { name: 'Vendor Management' },
+      { name: 'Vendor & Service Provider Agreement' },
+      { name: 'To be Classified' },
     ],
   },
+  { name: 'Vendor Management' },
+  { name: 'To be Classified' },
 ];
 
 // ── Folder-2: Commercial and Chartering ──────────────────────────────────────
 
 const COMMERCIAL_CHARTERING_PER_VESSEL: FolderNode[] = [
-  { name: 'Agreements' },
-  { name: 'Invoices & Payments' },
-  { name: 'Claims & Disputes' },
+  {
+    name: 'Agreements',
+    children: [
+      { name: 'Charter party' },
+      { name: 'Pool Agreement' },
+      { name: 'Commission Agreement' },
+      { name: 'To be Classified' },
+    ],
+  },
+  {
+    name: 'Invoices & Payments',
+    children: [
+      { name: 'Invoice' },
+      { name: 'Payments' },
+      { name: 'To be Classified' },
+    ],
+  },
+  {
+    name: 'Claims & Disputes',
+    children: [
+      { name: 'Disputes' },
+      { name: 'Claims' },
+      { name: 'To be Classified' },
+    ],
+  },
   { name: 'To be Classified' },
 ];
 
 const COMMERCIAL_CHARTERING_COMMON: FolderNode[] = [
   {
-    name: 'Common Agreements (Not Ship Specific)',
+    name: 'Agreements',
     children: [
-      { name: 'Agreements' },
+      { name: 'Charter party' },
+      { name: 'Pool Agreement' },
+      { name: 'Commission Agreement' },
       { name: 'To be Classified' },
     ],
   },
@@ -110,26 +144,56 @@ const INSURANCE_PER_VESSEL: FolderNode[] = [
   { name: 'P&I' },
   { name: 'H&M' },
   { name: 'War Risk' },
-  { name: 'Flag and MPA' },
+  { name: 'Flag / MPA' },
+  { name: 'USA Related' },
 ];
 
 const INSURANCE_COMMON: FolderNode[] = [
-  {
-    name: 'Common (Not Ship Specific)',
-    children: [
-      { name: 'Agreements' },
-      { name: 'Miscellaneous' },
-    ],
-  },
+  { name: 'Agreements' },
+  { name: 'Miscellaneous' },
 ];
 
 // ── Kaizen - Knowledge Bank ───────────────────────────────────────────────────
 
-const KAIZEN_KNOWLEDGE_BANK_PER_VESSEL: FolderNode[] = [];
+// Every vessel has the same four top-level main folders.  Kaizen uses the
+// same category structure for a vessel as it does in the common area.
+const KAIZEN_KNOWLEDGE_BANK_PER_VESSEL: FolderNode[] = [
+  { name: 'Templates' },
+  {
+    name: 'Procedures and Work Instructions',
+    children: [
+      { name: 'Equipment Maker' },
+      { name: 'Class' },
+      { name: 'Flag / Port State' },
+      { name: 'SIRE/OCIMF/RightShip' },
+      { name: 'Shipyard' },
+    ],
+  },
+  { name: 'Lessons Learned' },
+  {
+    name: 'Circulars and Guidance',
+    children: [
+      { name: 'Equipment Maker' },
+      { name: 'Class' },
+      { name: 'Flag / Port State' },
+      { name: 'SIRE/OCIMF/RightShip' },
+      { name: 'Shipyard' },
+    ],
+  },
+];
 
 const KAIZEN_KNOWLEDGE_BANK_COMMON: FolderNode[] = [
   { name: 'Templates' },
-  { name: 'Procedures and Work Instructions' },
+  {
+    name: 'Procedures and Work Instructions',
+    children: [
+      { name: 'Equipment Maker' },
+      { name: 'Class' },
+      { name: 'Flag ⁄ Port State' },
+      { name: 'SIRE⁄OCIMF⁄RightShip' },
+      { name: 'Shipyard' },
+    ],
+  },
   { name: 'Lessons Learned' },
   {
     name: 'Circulars and Guidance',
@@ -145,7 +209,12 @@ const KAIZEN_KNOWLEDGE_BANK_COMMON: FolderNode[] = [
 
 // ── Exported template ─────────────────────────────────────────────────────────
 
-export const VESSEL_MANAGEMENT_ROOT = 'Vessel Management';
+// Root container under Documents
+export const VESSEL_MANAGEMENT_ROOT = 'Vessels';
+// Specific vessels go under Vessels/Specific Vessels/{VesselName}
+export const SPECIFIC_VESSELS_ROOT = 'Specific Vessels';
+// Common folders go under Vessels/Common for all ships
+export const COMMON_SHIPS_ROOT = 'Common for all ships';
 
 export const MAIN_FOLDERS: MainFolder[] = [
   {

@@ -20,12 +20,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 var __generator = (this && this.__generator) || function (thisArg, body) {
-    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
-    return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
     function verb(n) { return function (v) { return step([n, v]); }; }
     function step(op) {
         if (f) throw new TypeError("Generator is already executing.");
-        while (_) try {
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
             if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
             if (y = 0, t) op = [op[0] & 2, t.value];
             switch (op[0]) {
@@ -46,8 +46,14 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-exports.__esModule = true;
-exports.loadVesselImagePool = exports.VESSEL_IMAGE_POOL = exports.getVesselImagePool = exports.pickRandomVesselImage = exports.getVesselImageForId = exports.resolveImgUrl = exports.generateVesselSVG = void 0;
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.VESSEL_IMAGE_POOL = void 0;
+exports.generateVesselSVG = generateVesselSVG;
+exports.resolveImgUrl = resolveImgUrl;
+exports.getVesselImageForId = getVesselImageForId;
+exports.pickRandomVesselImage = pickRandomVesselImage;
+exports.getVesselImagePool = getVesselImagePool;
+exports.loadVesselImagePool = loadVesselImagePool;
 var PALETTES = [
     // 0: Deep Royal Blue & Crimson (Ocean Star)
     {
@@ -56,7 +62,7 @@ var PALETTES = [
         waterTop: '#1565a8', waterBot: '#0a3d72',
         hull: '#1a365d', hullShade: '#0f2942', keel: '#c53030',
         superstructure: '#f8fafc', funnel: '#dd6b20', funnelAccent: '#1a365d',
-        deckColor: '#243650'
+        deckColor: '#243650',
     },
     // 1: Emerald Green & Charcoal (Sea Breeze)
     {
@@ -65,7 +71,7 @@ var PALETTES = [
         waterTop: '#059669', waterBot: '#047857',
         hull: '#064e3b', hullShade: '#022c22', keel: '#9f1239',
         superstructure: '#f8fafc', funnel: '#eab308', funnelAccent: '#064e3b',
-        deckColor: '#16181b'
+        deckColor: '#16181b',
     },
     // 2: Midnight Cobalt & Wine Red (Blue Horizon)
     {
@@ -74,7 +80,7 @@ var PALETTES = [
         waterTop: '#1d4ed8', waterBot: '#1e3a8a',
         hull: '#1e40af', hullShade: '#172554', keel: '#881337',
         superstructure: '#ffffff', funnel: '#06b6d4', funnelAccent: '#1e40af',
-        deckColor: '#0d1640'
+        deckColor: '#0d1640',
     },
     // 3: Deep Burgundy & Bronze (Pacific Dawn)
     {
@@ -83,7 +89,7 @@ var PALETTES = [
         waterTop: '#0284c7', waterBot: '#0f766e',
         hull: '#701a75', hullShade: '#4a044e', keel: '#92400e',
         superstructure: '#fdf4ff', funnel: '#f59e0b', funnelAccent: '#701a75',
-        deckColor: '#4a044e'
+        deckColor: '#4a044e',
     },
     // 4: Vibrant Coral Red & Navy (Atlantic Wave)
     {
@@ -92,7 +98,7 @@ var PALETTES = [
         waterTop: '#2563eb', waterBot: '#1e40af',
         hull: '#dc2626', hullShade: '#991b1b', keel: '#450a0a',
         superstructure: '#ffffff', funnel: '#1d4ed8', funnelAccent: '#1e40af',
-        deckColor: '#1d2b3a'
+        deckColor: '#1d2b3a',
     },
     // 5: Sunset Amber & Charcoal (Golden Pearl)
     {
@@ -101,7 +107,7 @@ var PALETTES = [
         waterTop: '#0369a1', waterBot: '#0c4a6e',
         hull: '#78350f', hullShade: '#451a03', keel: '#b91c1c',
         superstructure: '#fffbeb', funnel: '#fbbf24', funnelAccent: '#78350f',
-        deckColor: '#0f1c28'
+        deckColor: '#0f1c28',
     },
     // 6: Steel Slate & Flame Orange (Titan Guard)
     {
@@ -110,7 +116,7 @@ var PALETTES = [
         waterTop: '#0f766e', waterBot: '#134e4a',
         hull: '#334155', hullShade: '#1e293b', keel: '#be123c',
         superstructure: '#f8fafc', funnel: '#f97316', funnelAccent: '#334155',
-        deckColor: '#0f2414'
+        deckColor: '#0f2414',
     },
     // 7: Royal Violet & Gold
     {
@@ -119,7 +125,7 @@ var PALETTES = [
         waterTop: '#4338ca', waterBot: '#312e81',
         hull: '#4c1d95', hullShade: '#2e1065', keel: '#d97706',
         superstructure: '#ffffff', funnel: '#8b5cf6', funnelAccent: '#4c1d95',
-        deckColor: '#2e1065'
+        deckColor: '#2e1065',
     },
     // 8: Deep Aqua Teal & Coral
     {
@@ -128,7 +134,7 @@ var PALETTES = [
         waterTop: '#0d9488', waterBot: '#115e59',
         hull: '#115e59', hullShade: '#042f2e', keel: '#e11d48',
         superstructure: '#f0fdf4', funnel: '#14b8a6', funnelAccent: '#115e59',
-        deckColor: '#042f2e'
+        deckColor: '#042f2e',
     },
     // 9: Terracotta Copper & Flame
     {
@@ -137,7 +143,7 @@ var PALETTES = [
         waterTop: '#0284c7', waterBot: '#075985',
         hull: '#c2410c', hullShade: '#7c2d12', keel: '#292524',
         superstructure: '#fff7ed', funnel: '#fb923c', funnelAccent: '#c2410c',
-        deckColor: '#1c1917'
+        deckColor: '#1c1917',
     },
 ];
 function getHash(str) {
@@ -158,7 +164,7 @@ function generateVesselSVG(name, type, id) {
     // Exact overrides for screenshot vessels
     var exact = {
         'Ocean Star': 0, 'Sea Breeze': 1, 'Blue Horizon': 2,
-        'Pacific Dawn': 3, 'Atlantic Wave': 4, 'Golden Pearl': 5
+        'Pacific Dawn': 3, 'Atlantic Wave': 4, 'Golden Pearl': 5,
     };
     if (exact[name] !== undefined)
         palIdx = exact[name];
@@ -224,22 +230,18 @@ function generateVesselSVG(name, type, id) {
     var svg = "\n<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 400 200\" width=\"100%\" height=\"100%\" style=\"display:block\">\n  <defs>\n    <linearGradient id=\"sky_".concat(palIdx, "\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0%\" stop-color=\"").concat(p.skyTop, "\"/>\n      <stop offset=\"100%\" stop-color=\"").concat(p.skyBot, "\"/>\n    </linearGradient>\n    <linearGradient id=\"water_").concat(palIdx, "\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0%\" stop-color=\"").concat(p.waterTop, "\"/>\n      <stop offset=\"100%\" stop-color=\"").concat(p.waterBot, "\"/>\n    </linearGradient>\n    <linearGradient id=\"hull_").concat(palIdx, "\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0%\" stop-color=\"").concat(p.hull, "\"/>\n      <stop offset=\"100%\" stop-color=\"").concat(p.hullShade, "\"/>\n    </linearGradient>\n    <linearGradient id=\"superHull_").concat(palIdx, "\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">\n      <stop offset=\"0%\" stop-color=\"").concat(p.hull, "\" stop-opacity=\"0.7\"/>\n      <stop offset=\"100%\" stop-color=\"").concat(p.hull, "\"/>\n    </linearGradient>\n  </defs>\n\n  <!-- \u2500\u2500 Sky \u2500\u2500 -->\n  <rect x=\"0\" y=\"0\" width=\"400\" height=\"126\" fill=\"url(#sky_").concat(palIdx, ")\"/>\n\n  <!-- Sun glow -->\n  <circle cx=\"360\" cy=\"34\" r=\"22\" fill=\"#fff9e0\" opacity=\"0.55\"/>\n  <circle cx=\"360\" cy=\"34\" r=\"14\" fill=\"#ffe082\" opacity=\"0.7\"/>\n\n  <!-- Clouds -->\n  <ellipse cx=\"60\" cy=\"28\" rx=\"32\" ry=\"10\" fill=\"#fff\" opacity=\"0.65\"/>\n  <ellipse cx=\"80\" cy=\"24\" rx=\"20\" ry=\"8\" fill=\"#fff\" opacity=\"0.55\"/>\n  <ellipse cx=\"195\" cy=\"22\" rx=\"38\" ry=\"11\" fill=\"#fff\" opacity=\"0.5\"/>\n  <ellipse cx=\"218\" cy=\"18\" rx=\"24\" ry=\"9\" fill=\"#fff\" opacity=\"0.45\"/>\n  <ellipse cx=\"310\" cy=\"30\" rx=\"22\" ry=\"8\" fill=\"#fff\" opacity=\"0.4\"/>\n\n  <!-- Horizon haze -->\n  <rect x=\"0\" y=\"118\" width=\"400\" height=\"8\" fill=\"").concat(p.waterTop, "\" opacity=\"0.35\"/>\n\n  <!-- \u2500\u2500 Ocean \u2500\u2500 -->\n  <rect x=\"0\" y=\"124\" width=\"400\" height=\"76\" fill=\"url(#water_").concat(palIdx, ")\"/>\n\n  <!-- Wave ripples -->\n  <path d=\"M0,130 Q25,127 50,130 Q75,133 100,130 Q125,127 150,130 Q175,133 200,130 Q225,127 250,130 Q275,133 300,130 Q325,127 350,130 Q375,133 400,130\" stroke=\"#fff\" stroke-width=\"0.9\" fill=\"none\" opacity=\"0.4\"/>\n  <path d=\"M0,138 Q30,135 60,138 Q90,141 120,138 Q150,135 180,138 Q210,141 240,138 Q270,135 300,138 Q330,141 360,138 Q380,141 400,138\" stroke=\"#fff\" stroke-width=\"0.6\" fill=\"none\" opacity=\"0.28\"/>\n  <path d=\"M0,148 Q40,145 80,148 Q120,151 160,148 Q200,145 240,148 Q280,151 320,148 Q360,145 400,148\" stroke=\"#fff\" stroke-width=\"0.5\" fill=\"none\" opacity=\"0.18\"/>\n  <path d=\"M0,158 Q50,155 100,158 Q150,161 200,158 Q250,155 300,158 Q350,161 400,158\" stroke=\"#fff\" stroke-width=\"0.4\" fill=\"none\" opacity=\"0.12\"/>\n\n  <!-- \u2500\u2500 Deck equipment (drawn BEHIND the hull shape) \u2500\u2500 -->\n  ").concat(deckEquipment, "\n\n  <!-- \u2500\u2500 Main Hull shape \u2500\u2500 -->\n  <!-- Hull body -->\n  <path d=\"\n    M 24,98\n    L 360,98\n    Q 378,98 385,108\n    L 390,124\n    L 14,124\n    Q 10,124 16,114\n    Z\n  \" fill=\"url(#hull_").concat(palIdx, ")\"/>\n\n  <!-- Hull highlight strip (deck rail top) -->\n  <rect x=\"24\" y=\"96\" width=\"338\" height=\"4\" fill=\"").concat(p.deckColor, "\" rx=\"1\"/>\n\n  <!-- Sharp bow -->\n  <path d=\"M 360,98 L 392,110 L 388,124 L 360,124 Z\" fill=\"").concat(p.hull, "\"/>\n  <path d=\"M 382,100 L 397,116 L 395,124 L 388,124 L 392,110 Z\" fill=\"").concat(p.hullShade, "\"/>\n\n  <!-- Stern curve -->\n  <path d=\"M 24,98 L 12,108 L 14,124 L 24,124 Z\" fill=\"").concat(p.hullShade, "\"/>\n\n  <!-- Waterline / keel stripe -->\n  <rect x=\"14\" y=\"118\" width=\"378\" height=\"6\" fill=\"").concat(p.keel, "\" rx=\"0\"/>\n\n  <!-- Portholes row -->\n  <circle cx=\"44\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"60\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"76\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"92\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"108\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"124\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"140\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"156\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"172\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"188\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"204\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"220\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"236\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"252\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"268\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n  <circle cx=\"284\" cy=\"110\" r=\"2.2\" fill=\"#fff\" opacity=\"0.7\"/>\n\n  <!-- Hull shadow band -->\n  <rect x=\"14\" y=\"114\" width=\"378\" height=\"4\" fill=\"rgba(0,0,0,0.12)\"/>\n\n  <!-- Water reflection / wake -->\n  <path d=\"M 390,120 Q 397,126 393,134 Q 388,140 380,136\" stroke=\"#fff\" stroke-width=\"1.4\" fill=\"none\" opacity=\"0.55\"/>\n  <path d=\"M 14,120 Q 7,126 11,134 Q 16,140 24,136\" stroke=\"#fff\" stroke-width=\"1.4\" fill=\"none\" opacity=\"0.55\"/>\n  <path d=\"M 0,140 Q 40,136 80,140 Q 120,144 160,140\" stroke=\"#fff\" stroke-width=\"0.6\" fill=\"none\" opacity=\"0.2\"/>\n  <path d=\"M 240,140 Q 280,136 320,140 Q 360,144 400,140\" stroke=\"#fff\" stroke-width=\"0.6\" fill=\"none\" opacity=\"0.2\"/>\n</svg>").trim();
     return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
 }
-exports.generateVesselSVG = generateVesselSVG;
 function resolveImgUrl(val, name, type, id) {
     if (typeof val === 'string' && val.length > 10 && val.indexOf('data:image/svg+xml') === 0)
         return val;
     return generateVesselSVG(name || 'Vessel', type || 'Container Ship', id || 'v0');
 }
-exports.resolveImgUrl = resolveImgUrl;
 function getVesselImageForId(id, name, type) {
     return generateVesselSVG(name || 'Vessel', type || 'Container Ship', id || 'v0');
 }
-exports.getVesselImageForId = getVesselImageForId;
 function pickRandomVesselImage(vesselType) {
     var randId = 'v_' + Math.floor(Math.random() * 100000);
     return generateVesselSVG('New Vessel', vesselType || 'Container Ship', randId);
 }
-exports.pickRandomVesselImage = pickRandomVesselImage;
 function getVesselImagePool() {
     return [
         generateVesselSVG('Ocean Star', 'Container Ship', 'v1'),
@@ -250,7 +252,6 @@ function getVesselImagePool() {
         generateVesselSVG('Golden Pearl', 'Container Ship', 'v6'),
     ];
 }
-exports.getVesselImagePool = getVesselImagePool;
 exports.VESSEL_IMAGE_POOL = getVesselImagePool();
 function loadVesselImagePool() {
     return __awaiter(this, void 0, void 0, function () {
@@ -259,4 +260,3 @@ function loadVesselImagePool() {
         });
     });
 }
-exports.loadVesselImagePool = loadVesselImagePool;

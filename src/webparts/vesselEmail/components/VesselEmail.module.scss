@@ -4,5 +4,34 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-family: 'Segoe UI Variable', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+
+  /* Force full viewport height — overrides SharePoint workbench canvas padding */
+  min-height: 100vh;
+  position: relative;
+
+  /* Reset any SharePoint-injected constraints on the host element */
+  :global(.spPageChrome) & {
+    min-height: 100vh;
+  }
+}
+
+/* ── Global full-bleed override ─────────────────────────────────────────────
+   SharePoint wraps web parts in a canvas zone with padding/max-width.
+   These selectors target the workbench and production page wrappers.       */
+:global(.CanvasZone),
+:global(.CanvasSection),
+:global(.CanvasControl),
+:global(.ms-SPCanvas),
+:global([data-automation-id="CanvasControl"]) {
+  padding: 0 !important;
+  margin: 0 !important;
+  max-width: none !important;
+  width: 100% !important;
+}
+
+:global(.workbenchPageContent),
+:global(.workbenchSurface) {
+  padding: 0 !important;
+  max-width: none !important;
 }

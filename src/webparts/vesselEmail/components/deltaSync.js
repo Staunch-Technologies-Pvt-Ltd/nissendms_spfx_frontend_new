@@ -39,12 +39,12 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 var __generator = (this && this.__generator) || function (thisArg, body) {
-    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
-    return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
     function verb(n) { return function (v) { return step([n, v]); }; }
     function step(op) {
         if (f) throw new TypeError("Generator is already executing.");
-        while (_) try {
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
             if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
             if (y = 0, t) op = [op[0] & 2, t.value];
             switch (op[0]) {
@@ -65,8 +65,12 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
-exports.__esModule = true;
-exports.createSyncScheduler = exports.removeNodeFromMap = exports.mergeNodeIntoMap = exports.pollDelta = exports.fetchFolderChildren = void 0;
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.fetchFolderChildren = fetchFolderChildren;
+exports.pollDelta = pollDelta;
+exports.mergeNodeIntoMap = mergeNodeIntoMap;
+exports.removeNodeFromMap = removeNodeFromMap;
+exports.createSyncScheduler = createSyncScheduler;
 // ── Delta link persistence (localStorage) ────────────────────────────────────
 var DELTA_LINK_KEY_PREFIX = 'vesselDMS_deltaLink_';
 function loadDeltaLink(driveId) {
@@ -89,9 +93,9 @@ function saveDeltaLink(driveId, link) {
  * Returns { items, nextDeltaLink }.
  */
 function drainPages(client, firstUrl) {
-    var _a;
     return __awaiter(this, void 0, void 0, function () {
         var items, url, deltaLink, relativeUrl, page;
+        var _a;
         return __generator(this, function (_b) {
             switch (_b.label) {
                 case 0:
@@ -124,9 +128,9 @@ function drainPages(client, firstUrl) {
  * Fetch children of a specific path to rebuild an unloaded branch.
  */
 function fetchFolderChildren(client, siteId, driveId, folderPath) {
-    var _a;
     return __awaiter(this, void 0, void 0, function () {
-        var encoded, url, result, _b;
+        var encoded, url, result, _a;
+        var _b;
         return __generator(this, function (_c) {
             switch (_c.label) {
                 case 0:
@@ -141,16 +145,15 @@ function fetchFolderChildren(client, siteId, driveId, folderPath) {
                     return [4 /*yield*/, client.api(url).get()];
                 case 2:
                     result = _c.sent();
-                    return [2 /*return*/, ((_a = result.value) !== null && _a !== void 0 ? _a : []).map(function (item) { return graphItemToNode(item); })];
+                    return [2 /*return*/, ((_b = result.value) !== null && _b !== void 0 ? _b : []).map(function (item) { return graphItemToNode(item); })];
                 case 3:
-                    _b = _c.sent();
+                    _a = _c.sent();
                     return [2 /*return*/, []];
                 case 4: return [2 /*return*/];
             }
         });
     });
 }
-exports.fetchFolderChildren = fetchFolderChildren;
 // ── Item → SpoFolderNode mapping ──────────────────────────────────────────────
 /**
  * Extract the server-relative path from a Graph item's parentReference.
@@ -174,9 +177,10 @@ function graphItemToNode(item) {
         id: item.id,
         name: item.name,
         parentId: (_b = (_a = item.parentReference) === null || _a === void 0 ? void 0 : _a.id) !== null && _b !== void 0 ? _b : null,
+        isFolder: !!item.folder,
         serverRelativePath: resolveServerPath(item),
         children: [],
-        deleted: !!item.deleted
+        deleted: !!item.deleted,
     };
 }
 // ── Main sync function ────────────────────────────────────────────────────────
@@ -192,16 +196,17 @@ function graphItemToNode(item) {
  * @param driveId  Document library drive ID
  * @returns DeltaSyncResult with added/updated/deleted items and the new deltaLink
  */
-function pollDelta(client, siteId, driveId) {
-    return __awaiter(this, void 0, void 0, function () {
-        var storedLink, startUrl, _a, items, deltaLink, added, updated, deleted, _i, items_1, item, node;
+function pollDelta(client_1, siteId_1, driveId_1) {
+    return __awaiter(this, arguments, void 0, function (client, siteId, driveId, forceBaseline) {
+        var storedLink, startUrl, _a, items, deltaLink, added, updated, deleted, _i, items_1, item, node, node;
+        if (forceBaseline === void 0) { forceBaseline = false; }
         return __generator(this, function (_b) {
             switch (_b.label) {
                 case 0:
-                    storedLink = loadDeltaLink(driveId);
+                    storedLink = forceBaseline ? null : loadDeltaLink(driveId);
                     startUrl = storedLink
                         ? storedLink
-                        : "/sites/".concat(siteId, "/drives/").concat(driveId, "/root/delta?$select=id,name,parentReference,folder,deleted");
+                        : "/sites/".concat(siteId, "/drives/").concat(driveId, "/root/delta?$select=id,name,parentReference,folder,file,deleted");
                     return [4 /*yield*/, drainPages(client, startUrl)];
                 case 1:
                     _a = _b.sent(), items = _a.items, deltaLink = _a.deltaLink;
@@ -212,17 +217,17 @@ function pollDelta(client, siteId, driveId) {
                     deleted = [];
                     for (_i = 0, items_1 = items; _i < items_1.length; _i++) {
                         item = items_1[_i];
-                        // Only care about folders (items without a 'folder' facet are files)
-                        if (!item.folder && !item.deleted)
-                            continue;
+                        // Track folders AND files — file changes from SPO-direct uploads must trigger a reload
                         if (item.deleted) {
                             deleted.push(item.id);
                         }
-                        else {
+                        else if (item.folder) {
                             node = graphItemToNode(item);
-                            // Distinguish add vs update: callers can compare against their existing tree
-                            // We emit both as separate arrays; the merger decides based on its own state.
-                            added.push(node); // caller deduplicates against existing tree
+                            added.push(node);
+                        }
+                        else if (item.file) {
+                            node = graphItemToNode(item);
+                            added.push(node);
                         }
                     }
                     return [2 /*return*/, { added: added, updated: updated, deleted: deleted, newDeltaLink: deltaLink }];
@@ -230,7 +235,6 @@ function pollDelta(client, siteId, driveId) {
         });
     });
 }
-exports.pollDelta = pollDelta;
 // ── Tree merge helpers (used by the React component) ─────────────────────────
 /**
  * Insert or update a node at the correct position in a flat id→node map.
@@ -247,6 +251,7 @@ function mergeNodeIntoMap(map, node) {
         existing.name = node.name;
         existing.serverRelativePath = node.serverRelativePath;
         existing.parentId = node.parentId;
+        existing.isFolder = node.isFolder;
     }
     else {
         map.set(node.id, __assign(__assign({}, node), { children: [] }));
@@ -265,7 +270,6 @@ function mergeNodeIntoMap(map, node) {
     }
     return { missingParentId: null };
 }
-exports.mergeNodeIntoMap = mergeNodeIntoMap;
 /**
  * Remove a deleted node (and all its descendants) from the map.
  */
@@ -285,9 +289,8 @@ function removeNodeFromMap(map, deletedId) {
             parent_2.children = parent_2.children.filter(function (c) { return c.id !== deletedId; });
         }
     }
-    map["delete"](deletedId);
+    map.delete(deletedId);
 }
-exports.removeNodeFromMap = removeNodeFromMap;
 /**
  * Create a scheduler that calls pollDelta on a fixed interval.
  *
@@ -302,15 +305,17 @@ function createSyncScheduler(client, siteId, driveId, onResult, intervalMs, onEr
     var _this = this;
     if (intervalMs === void 0) { intervalMs = 45000; }
     var timerId = null;
+    var hasBaseline = false;
     var run = function () { return __awaiter(_this, void 0, void 0, function () {
         var result, err_1;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
                     _a.trys.push([0, 2, , 3]);
-                    return [4 /*yield*/, pollDelta(client, siteId, driveId)];
+                    return [4 /*yield*/, pollDelta(client, siteId, driveId, !hasBaseline)];
                 case 1:
                     result = _a.sent();
+                    hasBaseline = true;
                     onResult(result);
                     return [2 /*return*/, result];
                 case 2:
@@ -325,7 +330,7 @@ function createSyncScheduler(client, siteId, driveId, onResult, intervalMs, onEr
         start: function () {
             if (timerId !== null)
                 return;
-            timerId = setInterval(function () { run()["catch"](function () { return undefined; }); }, intervalMs);
+            timerId = setInterval(function () { run().catch(function () { return undefined; }); }, intervalMs);
         },
         stop: function () {
             if (timerId !== null) {
@@ -333,7 +338,6 @@ function createSyncScheduler(client, siteId, driveId, onResult, intervalMs, onEr
                 timerId = null;
             }
         },
-        triggerNow: run
+        triggerNow: run,
     };
 }
-exports.createSyncScheduler = createSyncScheduler;

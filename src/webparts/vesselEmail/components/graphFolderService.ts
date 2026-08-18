@@ -22,6 +22,8 @@
 import { MSGraphClientV3 } from '@microsoft/sp-http';
 import {
   VESSEL_MANAGEMENT_ROOT,
+  SPECIFIC_VESSELS_ROOT,
+  COMMON_SHIPS_ROOT,
   MAIN_FOLDERS,
   FolderNode,
   MainFolder,
@@ -44,6 +46,8 @@ export interface VesselFolderCreationResult {
   success: boolean;
 }
 
+/** Called once for every folder attempted (created / existed / failed), in order. */
+export type FolderProgressCallback = (result: FolderResult) => void;
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /**
@@ -56,6 +60,20 @@ function encodePath(path: string): string {
     .map(seg => encodeURIComponent(seg))
     .join('/');
 }
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timed out after ${Math.round(ms / 1000)}s waiting for: ${label}`));
+    }, ms);
+    promise.then(
+      value => { clearTimeout(timer); resolve(value); },
+      err => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
+const GRAPH_CALL_TIMEOUT_MS = 25000;
 
 /**
  * Attempt to create a single folder under parentPath.
@@ -78,13 +96,15 @@ async function createFolder(
   console.log(`[VesselDMS] createFolder → POST ${url} name="${folderName}"`);
 
   try {
-    const response = await client
-      .api(url)
-      .post({
+  const response = await withTimeout(
+      client.api(url).post({
         name: folderName,
         folder: {},
         '@microsoft.graph.conflictBehavior': 'fail',
-      });
+      }),
+      GRAPH_CALL_TIMEOUT_MS,
+      `create "${folderName}"`,
+    );
     console.log(`[VesselDMS] createFolder ✓ created id=${response.id} "${folderName}"`);
     return { id: response.id as string, existed: false };
   } catch (err: any) {
@@ -100,9 +120,11 @@ async function createFolder(
       // Fetch the existing folder's ID so callers have it
       try {
         const fullPath = parentPath ? `${parentPath}/${folderName}` : folderName;
-        const existing = await client
-          .api(`/sites/${siteId}/drives/${driveId}/root:/${encodePath(fullPath)}`)
-          .get();
+       const existing = await withTimeout(
+          client.api(`/sites/${siteId}/drives/${driveId}/root:/${encodePath(fullPath)}`).get(),
+          GRAPH_CALL_TIMEOUT_MS,
+          `lookup existing "${folderName}"`,
+        );
         return { id: existing.id as string, existed: true };
       } catch {
         return { id: '', existed: true };
@@ -124,6 +146,7 @@ async function createTree(
   parentPath: string,
   nodes: FolderNode[],
   log: FolderResult[],
+  onProgress?: (result: FolderResult) => void,
 ): Promise<void> {
   for (const node of nodes) {
     const fullPath = `${parentPath}/${node.name}`;
@@ -135,17 +158,21 @@ async function createTree(
         parentPath,
         node.name,
       );
-      log.push({ path: fullPath, id, status: existed ? 'existed' : 'created' });
+      const entry: FolderResult = { path: fullPath, id, status: existed ? 'existed' : 'created' };
+      log.push(entry);
+      onProgress?.(entry);
 
       if (node.children && node.children.length > 0) {
-        await createTree(client, siteId, driveId, fullPath, node.children, log);
+        await createTree(client, siteId, driveId, fullPath, node.children, log, onProgress);
       }
     } catch (err: any) {
-      log.push({
+      const entry: FolderResult = {
         path: fullPath,
         status: 'failed',
         error: err?.message ?? String(err),
-      });
+      };
+      log.push(entry);
+      onProgress?.(entry);
       // Do NOT recurse into children if the parent failed — they would also fail.
     }
   }
@@ -154,137 +181,123 @@ async function createTree(
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Ensure the "Vessel Management" root and all three MainFolder roots exist.
+ * Ensure the base structure exists:
+ *   Documents/Vessels/
+ *   Documents/Vessels/Specific Vessels/
+ *   Documents/Vessels/Common for all ships/{MainFolder}/{commonTree}
+ *   Documents/Kaizen - Knowledge Bank/  (sibling of Vessels)
  * Safe to call on every app load — all operations are idempotent.
  */
 export async function ensureRootStructure(
   client: MSGraphClientV3,
   siteId: string,
   driveId: string,
+  onProgress?: FolderProgressCallback,
 ): Promise<FolderResult[]> {
   const log: FolderResult[] = [];
-  console.log(`[VesselDMS] ensureRootStructure siteId=${siteId} driveId=${driveId}`);
+  if (!siteId || !driveId) return log;
 
-  if (!siteId || !driveId) {
-    console.error('[VesselDMS] ensureRootStructure aborted — siteId or driveId is empty!');
-    return log;
-  }
+  const record = (result: FolderResult): void => { log.push(result); onProgress?.(result); };
 
-  // 1. Vessel Management root
-  try {
-    const { id, existed } = await createFolder(
-      client, siteId, driveId, '', VESSEL_MANAGEMENT_ROOT,
-    );
-    log.push({
-      path: VESSEL_MANAGEMENT_ROOT,
-      id,
-      status: existed ? 'existed' : 'created',
-    });
-  } catch (err: any) {
-    log.push({
-      path: VESSEL_MANAGEMENT_ROOT,
-      status: 'failed',
-      error: err?.message ?? String(err),
-    });
-    return log; // Can't continue without the root
-  }
+  // 1. Documents/Vessels
+  await createFolder(client, siteId, driveId, '', VESSEL_MANAGEMENT_ROOT)
+    .then(({ id, existed }) => record({ path: VESSEL_MANAGEMENT_ROOT, id, status: existed ? 'existed' : 'created' }))
+    .catch(err => record({ path: VESSEL_MANAGEMENT_ROOT, status: 'failed', error: err?.message }));
 
-  // 2. Each MainFolder + its common sub-tree
+  // 2. Documents/Vessels/Specific Vessels
+  const specificPath = `${VESSEL_MANAGEMENT_ROOT}/${SPECIFIC_VESSELS_ROOT}`;
+  await createFolder(client, siteId, driveId, VESSEL_MANAGEMENT_ROOT, SPECIFIC_VESSELS_ROOT)
+    .then(({ id, existed }) => record({ path: specificPath, id, status: existed ? 'existed' : 'created' }))
+    .catch(err => record({ path: specificPath, status: 'failed', error: err?.message }));
+
+  // 3. Documents/Vessels/Common for all ships
+  const commonPath = `${VESSEL_MANAGEMENT_ROOT}/${COMMON_SHIPS_ROOT}`;
+  await createFolder(client, siteId, driveId, VESSEL_MANAGEMENT_ROOT, COMMON_SHIPS_ROOT)
+    .then(({ id, existed }) => record({ path: commonPath, id, status: existed ? 'existed' : 'created' }))
+    .catch(err => record({ path: commonPath, status: 'failed', error: err?.message }));
+
+  // 4. Documents/Vessels/Common for all ships/{MainFolder}/{commonTree}
   for (const mf of MAIN_FOLDERS) {
-    const mfPath = `${VESSEL_MANAGEMENT_ROOT}/${mf.name}`;
+    const mfPath = `${commonPath}/${mf.name}`;
     try {
-      const { id, existed } = await createFolder(
-        client, siteId, driveId, VESSEL_MANAGEMENT_ROOT, mf.name,
-      );
-      log.push({ path: mfPath, id, status: existed ? 'existed' : 'created' });
+      const { id, existed } = await createFolder(client, siteId, driveId, commonPath, mf.name);
+      record({ path: mfPath, id, status: existed ? 'existed' : 'created' });
+      if (mf.commonTree.length > 0) {
+        await createTree(client, siteId, driveId, mfPath, mf.commonTree, log, onProgress);
+      }
     } catch (err: any) {
-      log.push({ path: mfPath, status: 'failed', error: err?.message ?? String(err) });
-      continue;
-    }
-
-    // Common sub-tree (created once, idempotent)
-    if (mf.commonTree.length > 0) {
-      await createTree(client, siteId, driveId, mfPath, mf.commonTree, log);
+      record({ path: mfPath, status: 'failed', error: err?.message });
     }
   }
+
+  // 5. Documents/Kaizen - Knowledge Bank (sibling of Vessels, at drive root)
+  const kaizenName = 'Kaizen - Knowledge Bank';
+  await createFolder(client, siteId, driveId, '', kaizenName)
+    .then(({ id, existed }) => record({ path: kaizenName, id, status: existed ? 'existed' : 'created' }))
+    .catch(err => record({ path: kaizenName, status: 'failed', error: err?.message }));
 
   return log;
 }
-
 /**
  * Create the full per-vessel folder tree for a new vessel.
- *
- * @param client      MSGraphClientV3 from SPFx context
- * @param siteId      SharePoint site ID
- * @param driveId     Document library drive ID
- * @param vesselName  Exact vessel name (used as the folder name)
- *
- * Returns a VesselFolderCreationResult with per-path success/failure entries.
- * Re-running for an existing vessel is safe — already-present folders are skipped.
+ * Structure: Documents/Vessels/Specific Vessels/{VesselName}/{MainFolder}/...
  */
 export async function createVesselFolders(
   client: MSGraphClientV3,
   siteId: string,
   driveId: string,
   vesselName: string,
+  onProgress?: FolderProgressCallback,
+  skipRootStructure?: boolean,
 ): Promise<VesselFolderCreationResult> {
   const log: FolderResult[] = [];
-  console.log(`[VesselDMS] createVesselFolders START vessel="${vesselName}" siteId=${siteId} driveId=${driveId}`);
+  console.log(`[VesselDMS] createVesselFolders START vessel="${vesselName}"`);
 
   if (!siteId || !driveId) {
-    console.error('[VesselDMS] createVesselFolders aborted — siteId or driveId is empty!');
     return { vesselName, siteId, driveId, results: log, success: false };
   }
 
-  // Ensure root + common folders exist first
-  const rootLog = await ensureRootStructure(client, siteId, driveId);
-  log.push(...rootLog);
+  // Ensure Vessels/, Vessels/Specific Vessels/, Vessels/Common for all ships/, Kaizen/
+  if (!skipRootStructure) {
+    const rootLog = await ensureRootStructure(client, siteId, driveId, onProgress);
+    log.push(...rootLog);
+  }
 
-  const rootFailed = rootLog.some(r => r.path === VESSEL_MANAGEMENT_ROOT && r.status === 'failed');
-  if (rootFailed) {
+  // Documents/Vessels/Specific Vessels/{VesselName}
+  const specificVesselsPath = `${VESSEL_MANAGEMENT_ROOT}/${SPECIFIC_VESSELS_ROOT}`;
+  const vesselFolderPath = `${specificVesselsPath}/${vesselName}`;
+  try {
+    const { id, existed } = await createFolder(client, siteId, driveId, specificVesselsPath, vesselName);
+    const result: FolderResult = { path: vesselFolderPath, id, status: existed ? 'existed' : 'created' };
+    log.push(result);
+    onProgress?.(result);
+  } catch (err: any) {
+    const result: FolderResult = { path: vesselFolderPath, status: 'failed', error: err?.message ?? String(err) };
+    log.push(result);
+    onProgress?.(result);
     return { vesselName, siteId, driveId, results: log, success: false };
   }
 
-  // Per-vessel tree under each MainFolder
+  // Documents/Vessels/Specific Vessels/{VesselName}/{MainFolder}/{perVesselTree}
   for (const mf of MAIN_FOLDERS) {
-    // Skip MainFolders that failed during root setup
-    const mfPath = `${VESSEL_MANAGEMENT_ROOT}/${mf.name}`;
-    const mfFailed = log.some(r => r.path === mfPath && r.status === 'failed');
-    if (mfFailed) continue;
-
-    if (mf.perVesselTree.length === 0) continue;
-
-    // Create {VesselName} folder under this MainFolder
-    const vesselFolderPath = `${mfPath}/${vesselName}`;
+    const mainFolderPath = `${vesselFolderPath}/${mf.name}`;
     try {
-      const { id, existed } = await createFolder(
-        client, siteId, driveId, mfPath, vesselName,
-      );
-      log.push({
-        path: vesselFolderPath,
-        id,
-        status: existed ? 'existed' : 'created',
-      });
+      const { id, existed } = await createFolder(client, siteId, driveId, vesselFolderPath, mf.name);
+      const result: FolderResult = { path: mainFolderPath, id, status: existed ? 'existed' : 'created' };
+      log.push(result);
+      onProgress?.(result);
+      await createTree(client, siteId, driveId, mainFolderPath, mf.perVesselTree, log, onProgress);
     } catch (err: any) {
-      log.push({
-        path: vesselFolderPath,
-        status: 'failed',
-        error: err?.message ?? String(err),
-      });
-      continue; // Can't create children without the vessel root
+      const result: FolderResult = { path: mainFolderPath, status: 'failed', error: err?.message ?? String(err) };
+      log.push(result);
+      onProgress?.(result);
     }
-
-    // Recursively create the per-vessel sub-tree
-    await createTree(
-      client, siteId, driveId, vesselFolderPath, mf.perVesselTree, log,
-    );
   }
 
   const success = log.every(r => r.status !== 'failed');
-  console.log(`[VesselDMS] createVesselFolders DONE vessel="${vesselName}" success=${success}`, log);
+  console.log(`[VesselDMS] createVesselFolders DONE vessel="${vesselName}" success=${success}`);
   return { vesselName, siteId, driveId, results: log, success };
 }
-
 /**
  * Retry only the paths that previously failed.
  * Pass the results array from a previous createVesselFolders call.

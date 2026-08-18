@@ -17,11 +17,14 @@ import type {
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
 
 function getSpoVesselFolderUrl(siteUrlProp?: string, vesselName?: string): string {
-  if (!siteUrlProp) return '#';
+  const fallbackSite = 'https://nissenkaiunsingapore.sharepoint.com';
+  const site = (siteUrlProp && siteUrlProp !== '#') ? siteUrlProp : fallbackSite;
   try {
-    const urlObj = new URL(siteUrlProp);
+    const urlObj = new URL(site);
     const basePath = urlObj.pathname.replace(/\/$/, '');
-    const folderPath = `${basePath}/Shared Documents/Vessel Management/Technical & Crewing${vesselName ? '/' + vesselName : ''}`;
+    const folderPath = vesselName
+      ? `${basePath}/Shared Documents/Vessels/Specific Vessels/${vesselName}`
+      : `${basePath}/Shared Documents/Vessels`;
     return `${urlObj.origin}${basePath}/Shared Documents/Forms/AllItems.aspx?id=${encodeURIComponent(folderPath)}`;
   } catch {
     return '#';
@@ -41,7 +44,7 @@ export function renderDismissConfirmDialog(host: VesselEmail): React.ReactElemen
       aria-modal="true"
       aria-label="Dismiss Confirmation"
       style={{
-        position: 'fixed', inset: 0, zIndex: 10000,
+        position: 'fixed', inset: 0, zIndex: 100010,
         background: 'rgba(15,23,42,0.6)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 16,
@@ -135,6 +138,7 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
 
   const { anomaly, provisioning, done, doneNormal, alreadyExisted, error } = dlg;
   const [elapsed, setElapsed] = React.useState(0);
+  const [autoClose, setAutoClose] = React.useState(8);
 
   React.useEffect(() => {
     if (!provisioning) {
@@ -145,6 +149,15 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
     return () => clearInterval(timer);
   }, [provisioning]);
 
+  React.useEffect(() => {
+    if (!done && !doneNormal) { setAutoClose(8); return; }
+    const timer = setInterval(() => setAutoClose(s => {
+      if (s <= 1) { clearInterval(timer); handleClose(); return 0; }
+      return s - 1;
+    }), 1000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done, doneNormal]);
   const formatTimer = (sec: number): string => {
     const m = Math.floor(sec / 60);
     const s = sec % 60;
@@ -170,9 +183,9 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
         image_url: pickRandomVesselImage('Bulk Carrier'),
       };
 
-      // 2. Add vessel directly to state so it appears in the vessel grid immediately
+      // 2. Add vessel directly to top of state grid so it appears at the top of the vessel list immediately
       host.setState(prev => ({
-        vessels: [...prev.vessels.filter(v => v.name.toLowerCase() !== newRecord.name.toLowerCase()), newRecord],
+        vessels: [newRecord, ...prev.vessels.filter(v => v.name.toLowerCase() !== newRecord.name.toLowerCase())],
       }));
 
       // 3. Provision SPO DMS folder structure
@@ -229,6 +242,9 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
             <div>• Folder listed in "Normal Folders" section</div>
             <div>• Record stored in database</div>
           </div>
+          <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
+            Auto-closing in {autoClose}s…
+          </div>
           <button
             onClick={handleClose}
             style={{
@@ -274,38 +290,66 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
             }} />
           </div>
 
-          {/* Step Progress Checklist */}
+    {/* Step Progress Checklist */}
           <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: '14px 16px', textAlign: 'left', fontSize: 12 }}>
             <div style={{ color: '#16a34a', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 14 }}>✓</span><span>Vessel record created in database</span>
+              <span style={{ fontSize: 14 }}>✓</span><span>Vessel record confirmed in database</span>
             </div>
             <div style={{ color: '#0284c7', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 14 }}>⏳</span><span>Creating SharePoint DMS folder tree (Technical & Crewing, Month End, Certificates)…</span>
+              <span style={{ fontSize: 14 }}>⏳</span><span>Creating SharePoint DMS folder tree (Technical &amp; Crewing, Month End, Certificates)…</span>
             </div>
             <div style={{ color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 14 }}>○</span><span>Linking category subfolders & permissions</span>
+              <span style={{ fontSize: 14 }}>○</span><span>Linking category subfolders &amp; permissions</span>
             </div>
           </div>
+
+          {/* Live folder-creation feed — one line per folder as Graph confirms it */}
+          {!!(host.state.folderCreationResults && host.state.folderCreationResults.length) && (
+            <div style={{
+              background: '#0f172a', borderRadius: 10, padding: '10px 12px', marginTop: 12,
+              textAlign: 'left', fontSize: 11, fontFamily: 'monospace', maxHeight: 140,
+              overflowY: 'auto', color: '#cbd5e1',
+            }}>
+              {host.state.folderCreationResults.map((r, i) => (
+                <div key={`${r.path}-${i}`} style={{ display: 'flex', gap: 6, padding: '2px 0' }}>
+                  <span>
+                    {r.status === 'failed' ? '✗' : r.status === 'existed' ? '↩' : '✓'}
+                  </span>
+                  <span style={{
+                    color: r.status === 'failed' ? '#f87171' : r.status === 'existed' ? '#94a3b8' : '#4ade80',
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>
+                    {r.path}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       );
     }
 
-    if (done) {
+     if (done) {
+      const failedCount = (host.state.folderCreationResults || []).filter(r => r.status === 'failed').length;
       return (
         <div style={{ textAlign: 'center', padding: '12px 0' }}>
-          <div style={{ fontSize: 52, marginBottom: 12 }}>🎉</div>
-          <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#059669' }}>
-            Vessel Successfully Provisioned & Classified!
+          <div style={{ fontSize: 52, marginBottom: 12 }}>{failedCount ? '⚠️' : '🎉'}</div>
+          <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: failedCount ? '#b45309' : '#059669' }}>
+            {failedCount ? 'Vessel Provisioned With Some Issues' : 'Vessel Successfully Provisioned & Classified!'}
           </h3>
           <p style={{ margin: '0 0 20px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
-            <strong>"{anomaly.name}"</strong> has been registered in the DMS database and its full SharePoint DMS folder tree has been created.
+            <strong>"{anomaly.name}"</strong> has been registered in the DMS database{failedCount ? ', but ' + failedCount + ' folder' + (failedCount === 1 ? '' : 's') + ' could not be created — see the log above.' : ' and its full SharePoint DMS folder tree has been created.'}
           </p>
 
-          <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, padding: '12px 16px', marginBottom: 24, fontSize: 12, color: '#065f46', textAlign: 'left' }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>✅ Provisioning Complete</div>
+          <div style={{ background: failedCount ? '#fffbeb' : '#ecfdf5', border: `1px solid ${failedCount ? '#fde68a' : '#a7f3d0'}`, borderRadius: 10, padding: '12px 16px', marginBottom: 24, fontSize: 12, color: failedCount ? '#92400e' : '#065f46', textAlign: 'left' }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>{failedCount ? '⚠️ Provisioning Finished' : '✅ Provisioning Complete'}</div>
             <div>• Registered vessel card added to main grid</div>
-            <div>• SharePoint DMS department subfolders created</div>
+            <div>• SharePoint DMS department subfolders created{failedCount ? ` (${failedCount} failed)` : ''}</div>
             <div>• Unrecognised warning dismissed</div>
+          </div>
+
+          <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
+            Auto-closing in {autoClose}s…
           </div>
 
           <button
@@ -416,25 +460,23 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
       aria-modal="true"
       aria-label="Classify SharePoint Item"
       style={{
-        position: 'fixed', inset: 0, zIndex: 9999,
+        position: 'fixed', inset: 0, zIndex: 100010,
         background: 'rgba(15,23,42,0.6)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 16,
       }}
-      onClick={e => { if (e.target === e.currentTarget && !provisioning) handleClose(); }}
+     onClick={e => { if (e.target === e.currentTarget) handleClose(); }}
     >
       <div style={{
-        background: '#fff', borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
-        padding: 32, width: '100%', maxWidth: 480, position: 'relative',
+        background: '#fff', borderRadius: 20, padding: '32px 36px',
+        width: 480, maxWidth: '92vw',
+        boxShadow: '0 24px 64px rgba(0,0,0,0.28)', position: 'relative',
       }}>
-        {/* Close button (disabled during provisioning) */}
-        {!provisioning && (
-          <button
-            onClick={handleClose}
-            style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
-            title="Close"
-          >✕</button>
-        )}
+        <button
+          onClick={handleClose}
+          style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
+          title="Close (provisioning continues in the background)"
+        >✕</button>
         {renderBody()}
       </div>
     </div>
@@ -679,16 +721,53 @@ function renderProvisionDialog(host: VesselEmail): React.ReactElement | null {
   if (!host.state.spoProvisionDialog) return null;
   return <ProvisionModalContent host={host} dlg={host.state.spoProvisionDialog} />;
 }
+/** Vertical auto-scrolling ticker: shows each folder the moment the backend reports it created. */
+function FolderCreationTicker({ feed }: { feed: any[] }): React.ReactElement | null {
+  const scrollRef = React.useRef<HTMLDivElement>(null);
 
+  React.useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [feed.length]);
+
+  if (!feed.length) return null;
+
+  return (
+    <div
+      ref={scrollRef}
+      style={{
+        marginTop: 12, background: '#0f172a', borderRadius: 12, padding: '10px 14px',
+        textAlign: 'left', fontSize: 11.5, fontFamily: 'monospace', maxHeight: 130,
+        overflowY: 'auto', scrollBehavior: 'smooth',
+      }}
+    >
+      {feed.map((entry, i) => (
+        <div
+          key={`${entry.path}-${i}`}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0',
+            color: entry.status === 'failed' ? '#f87171' : entry.status === 'existed' ? '#94a3b8' : '#4ade80',
+          }}
+        >
+          <span>{entry.status === 'failed' ? '✗' : entry.status === 'existed' ? '↩' : '✓'}</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {entry.path.split('/').slice(-1)[0]}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
 function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): React.ReactElement {
   const { vessel, provisioning, done, error } = dlg;
   const [elapsed, setElapsed] = React.useState(0);
+  const [autoClose, setAutoClose] = React.useState(10);
 
   const isProvisioned = (
     host.state.provisionedVesselIds?.has(vessel.id) ||
     (host.state.rows && host.state.rows.some(r => r.vesselName && r.vesselName.toLowerCase() === vessel.name.toLowerCase())) ||
-    (vessel as any).is_provisioned === true ||
-    (vessel as any).provisioned === true
+    vessel.is_provisioned === true
   );
 
   React.useEffect(() => {
@@ -697,6 +776,15 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
     return () => clearInterval(timer);
   }, [provisioning]);
 
+  React.useEffect(() => {
+    if (!done) { setAutoClose(10); return; }
+    const timer = setInterval(() => setAutoClose(s => {
+      if (s <= 1) { clearInterval(timer); handleClose(); return 0; }
+      return s - 1;
+    }), 1000);
+    return () => clearInterval(timer);
+  }, [done]);
+
   const formatTimer = (sec: number): string => {
     const m = Math.floor(sec / 60);
     const s = sec % 60;
@@ -704,10 +792,18 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
   };
 
   const handleProvision = async (): Promise<void> => {
-    host.setState({ spoProvisionDialog: { ...dlg, provisioning: true, error: null } });
+    host.setState({ spoProvisionDialog: { ...dlg, provisioning: true, done: false, error: null } });
     try {
-      await host._provisionVesselFolders(vessel.name, vessel.id);
-      host.setState({ spoProvisionDialog: { ...dlg, provisioning: false, done: true, error: null } });
+      const { success, results } = await host._provisionVesselFolders(vessel.name, vessel.id);
+      const failedCount = results.filter(r => r.status === 'failed').length;
+      host.setState({
+        spoProvisionDialog: {
+          ...dlg,
+          provisioning: false,
+          done: true,
+          error: success ? null : `${failedCount} folder${failedCount === 1 ? '' : 's'} could not be created — see details below.`,
+        },
+      });
     } catch (e: any) {
       host.setState({ spoProvisionDialog: { ...dlg, provisioning: false, done: false, error: e?.message || 'Failed to provision vessel folders.' } });
     }
@@ -756,41 +852,89 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
             <div style={{ color: '#0284c7', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 14 }}>⏳</span><span>Creating SharePoint DMS folder tree (Technical &amp; Crewing, Month End, Certificates)…</span>
             </div>
-            <div style={{ color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 8 }}>
+         <div style={{ color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 14 }}>○</span><span>Linking category subfolders &amp; permissions</span>
             </div>
           </div>
+
+                  {/* Live Vertical News Ticker */}
+          <FolderCreationTicker feed={host.state.folderCreationResults || []} />
         </div>
       );
     }
 
-    if (done) {
+   if (done) {
+      const spoUrl = getSpoVesselFolderUrl(host.props.siteUrl, vessel.name);
+      const failedFolders = (host.state.folderCreationResults || []).filter(r => r.status === 'failed');
+      const hasFailures = failedFolders.length > 0;
       return (
         <div style={{ textAlign: 'center', padding: '12px 0' }}>
-          <div style={{ fontSize: 52, marginBottom: 12 }}>🎉</div>
-          <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#059669' }}>
-            Vessel Folders Successfully Provisioned!
+          <div style={{ fontSize: 52, marginBottom: 12 }}>{hasFailures ? '⚠️' : '🎉'}</div>
+          <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: hasFailures ? '#b45309' : '#059669' }}>
+            {hasFailures ? 'Vessel Folders Provisioned (with some issues)' : 'Vessel Folders Successfully Provisioned!'}
           </h3>
           <p style={{ margin: '0 0 20px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
-            <strong>"{ vessel.name }"</strong> has been fully provisioned — all SharePoint DMS folder structures have been created.
+            {hasFailures ? (
+              <><strong>"{vessel.name}"</strong> has been provisioned, but {failedFolders.length} folder{failedFolders.length === 1 ? '' : 's'} could not be created.</>
+            ) : (
+              <><strong>"{vessel.name}"</strong> has been fully provisioned — all SharePoint DMS folder structures have been created.</>
+            )}
           </p>
-          <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, padding: '12px 16px', marginBottom: 24, fontSize: 12, color: '#065f46', textAlign: 'left' }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>✅ Provisioning Complete</div>
-            <div>• SharePoint DMS department subfolders created</div>
-            <div>• IMO: {vessel.imo || '—'}</div>
-            <div>• Vessel is ready for document uploads</div>
+          {hasFailures ? (
+            <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 12, color: '#92400e', textAlign: 'left' }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>⚠️ Folders that failed:</div>
+              <div style={{ maxHeight: 100, overflowY: 'auto' }}>
+                {failedFolders.map((r, i) => (
+                  <div key={`${r.path}-${i}`} title={r.error}>• {r.path.split('/').pop()}</div>
+                ))}
+              </div>
+              <div style={{ marginTop: 8, color: '#78716c' }}>Click "🔄 Re-Provision Folders" after closing this dialog to retry.</div>
+            </div>
+          ) : (
+            <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 12, color: '#065f46', textAlign: 'left' }}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>✅ Provisioning Complete</div>
+              <div>• SharePoint DMS department subfolders created</div>
+              <div>• IMO: {vessel.imo || '—'}</div>
+              <div>• Vessel is ready for document uploads</div>
+            </div>
+          )}
+          {/* Auto-close countdown */}
+          <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 14 }}>
+            Auto-closing in {autoClose}s…
           </div>
-          <button
-            onClick={handleClose}
-            style={{
-              background: 'linear-gradient(135deg, #10b981, #059669)',
-              color: '#fff', border: 'none', borderRadius: 10,
-              padding: '12px 32px', fontSize: 14, fontWeight: 700, cursor: 'pointer',
-              boxShadow: '0 4px 12px rgba(16,185,129,0.3)',
-            }}
-          >
-            Done / View Vessels
-          </button>
+          <div style={{ background: '#e2e8f0', borderRadius: 10, height: 4, overflow: 'hidden', marginBottom: 20 }}>
+            <div style={{
+              background: '#10b981', height: '100%', borderRadius: 10,
+              width: `${(autoClose / 10) * 100}%`, transition: 'width 1s linear',
+            }} />
+          </div>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button
+              onClick={handleClose}
+              style={{
+                background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1',
+                borderRadius: 10, padding: '10px 22px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              }}
+            >
+              Close
+            </button>
+            {spoUrl && spoUrl !== '#' && (
+              <a
+                href={spoUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  background: 'linear-gradient(135deg, #10b981, #059669)',
+                  color: '#fff', border: 'none', borderRadius: 10,
+                  padding: '10px 22px', fontSize: 13, fontWeight: 700,
+                  textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6,
+                  boxShadow: '0 4px 12px rgba(16,185,129,0.3)',
+                }}
+              >
+                📂 Open Folder in SharePoint ↗
+              </a>
+            )}
+          </div>
         </div>
       );
     }
@@ -909,31 +1053,271 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
       aria-modal="true"
       aria-label="Provision Vessel Folders"
       style={{
-        position: 'fixed', inset: 0, zIndex: 9999,
+        position: 'fixed', inset: 0, zIndex: 100010,
         background: 'rgba(15,23,42,0.6)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         backdropFilter: 'blur(4px)',
       }}
-      onClick={e => { if (e.target === e.currentTarget && !provisioning) handleClose(); }}
+      onClick={e => { if (e.target === e.currentTarget) handleClose(); }}
     >
       <div style={{
-        background: '#fff', borderRadius: 20, padding: '32px 36px',
-        width: 480, maxWidth: '92vw',
-        boxShadow: '0 24px 64px rgba(0,0,0,0.28)', position: 'relative',
+        background: '#fff', borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
+        padding: 32, width: '100%', maxWidth: 480, position: 'relative',
       }}>
-        {!provisioning && (
-          <button
-            onClick={handleClose}
-            style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
-            title="Close"
-          >✕</button>
-        )}
+        <button
+          onClick={handleClose}
+          style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
+          title="Close (provisioning continues in the background)"
+        >✕</button>
         {renderBody()}
       </div>
     </div>
   );
 }
 
+
+// ── File Alert Dialog ────────────────────────────────────────────────────────
+// Shown when a file is uploaded directly to SPO under the Vessels tree.
+export function renderFileAlertDialog(host: VesselEmail): React.ReactElement | null {
+  const dlg = host.state.spoFileAlertDialog;
+  if (!dlg) return null;
+  return <FileAlertDialogContent host={host} dlg={dlg} />;
+}
+
+function FileAlertDialogContent({ host, dlg }: { host: VesselEmail; dlg: import('../types/ui').SpoFileAlertDialog }): React.ReactElement {
+  const { fileName, spoPath, moving, moved, error } = dlg;
+
+  // ── Cascading selection state ──
+  const [selVessel, setSelVessel] = React.useState(dlg.vesselName || '');
+  const [selMainFolder, setSelMainFolder] = React.useState('');
+  const [selGroupKey, setSelGroupKey] = React.useState('');
+
+  const vessels = host.state.vessels;
+  const rows = host.state.rows;
+
+  // All unique main-folder (group) names for the selected vessel
+  const mainFolders = React.useMemo(() => {
+    if (!selVessel) return [];
+    const norm = selVessel.trim().toLowerCase();
+    return Array.from(new Set(
+      rows.filter(r => r.vesselName.trim().toLowerCase() === norm && r.canUpload)
+           .map(r => r.group)
+    )).sort();
+  }, [selVessel, rows]);
+
+  // Sub-folder options for the selected vessel + main folder
+  const subFolderOptions = React.useMemo(() => {
+    if (!selVessel || !selMainFolder) return [];
+    const norm = selVessel.trim().toLowerCase();
+    return Array.from(
+      new Map(
+        rows
+          .filter(r => r.vesselName.trim().toLowerCase() === norm && r.group === selMainFolder && r.canUpload)
+          .map(r => [r.groupKey, { label: r.subFolderPath, groupKey: r.groupKey, uploadFolderId: r.uploadFolderId, subFolderPath: r.subFolderPath }])
+      ).values()
+    );
+  }, [selVessel, selMainFolder, rows]);
+
+  // Reset downstream selections when parent changes
+  const onVesselChange = (v: string): void => { setSelVessel(v); setSelMainFolder(''); setSelGroupKey(''); };
+  const onMainFolderChange = (v: string): void => { setSelMainFolder(v); setSelGroupKey(''); };
+
+  const canMove = !!(selVessel && selMainFolder && selGroupKey && !moving);
+
+  const handleMove = async (): Promise<void> => {
+    if (!canMove) return;
+    const target = subFolderOptions.find(o => o.groupKey === selGroupKey);
+    if (!target) return;
+    host.setState({ spoFileAlertDialog: { ...dlg, moving: true, error: null } });
+    try {
+      const { graphClient, siteId, driveId } = host.props;
+      if (!graphClient || !siteId || !driveId) throw new Error('SharePoint context not available.');
+
+      // Resolve the live SPO folder ID for the target subfolder
+      const liveFolderId = host._getLiveSharePointFolderId(target.subFolderPath);
+      let targetId = liveFolderId || target.uploadFolderId;
+
+      // If targetId is a path (contains '/'), resolve it via Graph
+      if (!targetId || targetId.includes('/')) {
+        const parts = target.subFolderPath.split('>').map((p: string) => p.trim()).filter(Boolean);
+        const vName = parts[0] || selVessel;
+        const rest = parts.slice(1).join('/');
+        const candidatePaths = [
+          `Vessels/Specific Vessels/${vName}/${rest}`,
+          `Vessels/${vName}/${rest}`,
+        ].filter(Boolean);
+        for (const tryPath of candidatePaths) {
+          try {
+            const enc = tryPath.split('/').map((s: string) => encodeURIComponent(s)).join('/');
+            const item: any = await graphClient.api(`/sites/${siteId}/drives/${driveId}/root:/${enc}?$select=id,folder`).get();
+            if (item?.id && item?.folder) { targetId = item.id; break; }
+          } catch { /* try next */ }
+        }
+      }
+
+      if (!targetId || targetId.includes('/')) throw new Error('Could not resolve target folder in SharePoint.');
+
+      // Verify the source file still exists at its current location
+      try {
+        const srcItem: any = await graphClient.api(`/sites/${siteId}/drives/${driveId}/items/${dlg.fileId}?$select=id,name,parentReference`).get();
+        console.log('[VesselDMS] Move source file:', srcItem?.name, 'parentId:', srcItem?.parentReference?.id, '→ targetId:', targetId);
+      } catch (verifyErr: any) {
+        throw new Error(`Source file not found in SharePoint (${verifyErr?.code || verifyErr?.message}). It may have already been moved.`);
+      }
+
+      // Move the file via Graph PATCH
+      let moveResult: any;
+      try {
+        moveResult = await graphClient.api(`/sites/${siteId}/drives/${driveId}/items/${dlg.fileId}`)
+          .patch({ parentReference: { id: targetId } });
+      } catch (patchErr: any) {
+        const msg = patchErr?.message || patchErr?.code || String(patchErr);
+        throw new Error(`Graph move failed: ${msg}`);
+      }
+      if (!moveResult?.id) {
+        throw new Error('Graph did not confirm the file move (no item ID returned).');
+      }
+
+      // Optimistically add the file to the target folder in UI state
+      host.setState(prev => {
+        const newFile = { name: fileName, size: '—', date: 'Just now', pending: false, id: dlg.fileId };
+        const updated = { ...prev.uploadedFilesByFolder };
+        const keys = [targetId, target.groupKey, target.uploadFolderId, target.subFolderPath.trim().toLowerCase()].filter(Boolean) as string[];
+        keys.forEach(k => {
+          updated[k] = [...(updated[k] || []).filter((f: any) => f.name !== fileName), newFile];
+        });
+        return { spoFileAlertDialog: { ...dlg, moving: false, moved: true, error: null }, uploadedFilesByFolder: updated };
+      });
+
+      // Refresh the target folder from SPO using the confirmed live folder ID
+      // Pass isConfirmedGraphFolderId=true so _refreshFolderFiles uses ID lookup, not path lookup
+      void host._refreshFolderFiles(targetId, target.groupKey, true, true).catch(() => undefined);
+      void host._syncScheduler?.triggerNow().catch(() => undefined);
+    } catch (e: any) {
+      host.setState({ spoFileAlertDialog: { ...dlg, moving: false, error: e?.message || 'Move failed.' } });
+    }
+  };
+
+  const handleClose = (): void => { host.setState({ spoFileAlertDialog: null }); };
+
+  const selectStyle: React.CSSProperties = {
+    width: '100%', padding: '9px 12px', borderRadius: 8,
+    border: '1px solid #bfdbfe', fontSize: 12, background: '#fff',
+    outline: 'none', marginBottom: 10, boxSizing: 'border-box',
+  };
+
+  return (
+    <div
+      role="dialog" aria-modal="true" aria-label="File Uploaded Outside DMS Structure"
+      style={{ position: 'fixed', inset: 0, zIndex: 100010, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget && !moving) handleClose(); }}
+    >
+      <div style={{ background: '#fff', borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.28)', padding: 32, width: '100%', maxWidth: 520, position: 'relative' }}>
+        {!moving && (
+          <button onClick={handleClose} style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#94a3b8' }} title="Close">✕</button>
+        )}
+
+        {moved ? (
+          <div style={{ textAlign: 'center', padding: '12px 0' }}>
+            <div style={{ fontSize: 52, marginBottom: 12 }}>✅</div>
+            <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#059669' }}>File Moved Successfully!</h3>
+            <p style={{ margin: '0 0 8px', fontSize: 13, color: '#475569' }}>
+              <strong>"{fileName}"</strong> has been moved to the selected DMS folder.
+            </p>
+            {selGroupKey && (() => {
+              const t = subFolderOptions.find(o => o.groupKey === selGroupKey);
+              return t ? <p style={{ margin: '0 0 20px', fontSize: 12, color: '#64748b', fontFamily: 'monospace' }}>📂 {t.subFolderPath}</p> : null;
+            })()}
+            <button onClick={handleClose} style={{ background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 28px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Done</button>
+          </div>
+        ) : (
+          <>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>
+              <div style={{ width: 48, height: 48, borderRadius: 12, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, flexShrink: 0 }}>⚠️</div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: '#0f172a' }}>File Uploaded Outside DMS Structure</h3>
+                <p style={{ margin: '3px 0 0', fontSize: 12, color: '#64748b' }}>Detected in SharePoint but not inside a standard DMS folder.</p>
+              </div>
+            </div>
+
+            {/* File info */}
+            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 14px', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 18 }}>📄</span>
+                <span style={{ fontWeight: 700, fontSize: 13, color: '#0f172a', wordBreak: 'break-all' }}>{fileName}</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace', wordBreak: 'break-all' }}>📂 {spoPath}</div>
+            </div>
+
+            {error && (
+              <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 12, color: '#dc2626' }}>⚠️ {error}</div>
+            )}
+
+            <p style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600, color: '#0f172a' }}>What would you like to do?</p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {/* Keep as is */}
+              <button
+                onClick={handleClose}
+                style={{ background: '#f8fafc', color: '#334155', border: '2px solid #e2e8f0', borderRadius: 10, padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}
+              >
+                <span style={{ fontSize: 24 }}>📌</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a', marginBottom: 2 }}>Keep as is</div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>Leave the file where it is. The alert stays in the bell for reference.</div>
+                </div>
+              </button>
+
+              {/* Move to DMS subfolder — cascading selects */}
+              <div style={{ background: 'linear-gradient(135deg,#eff6ff,#dbeafe)', border: '2px solid #bfdbfe', borderRadius: 10, padding: '14px 16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                  <span style={{ fontSize: 24 }}>📁</span>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#1d4ed8' }}>Move to DMS Subfolder</div>
+                </div>
+
+                {/* Step 1: Vessel */}
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#1d4ed8', marginBottom: 4, textTransform: 'uppercase' }}>1. Vessel</label>
+                <select value={selVessel} onChange={e => onVesselChange(e.target.value)} style={selectStyle}>
+                  <option value="">— Select vessel —</option>
+                  {vessels.map(v => <option key={v.id} value={v.name}>{v.name}</option>)}
+                </select>
+
+                {/* Step 2: Main Folder / Category */}
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#1d4ed8', marginBottom: 4, textTransform: 'uppercase' }}>2. Main Folder</label>
+                <select value={selMainFolder} onChange={e => onMainFolderChange(e.target.value)} disabled={!selVessel || mainFolders.length === 0} style={{ ...selectStyle, opacity: !selVessel ? 0.5 : 1 }}>
+                  <option value="">— Select main folder —</option>
+                  {mainFolders.map(mf => <option key={mf} value={mf}>{mf}</option>)}
+                </select>
+
+                {/* Step 3: Sub-folder */}
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#1d4ed8', marginBottom: 4, textTransform: 'uppercase' }}>3. Sub-folder</label>
+                <select value={selGroupKey} onChange={e => setSelGroupKey(e.target.value)} disabled={!selMainFolder || subFolderOptions.length === 0} style={{ ...selectStyle, opacity: !selMainFolder ? 0.5 : 1 }}>
+                  <option value="">— Select sub-folder —</option>
+                  {subFolderOptions.map(o => <option key={o.groupKey} value={o.groupKey}>{o.label}</option>)}
+                </select>
+
+                <button
+                  onClick={() => void handleMove()}
+                  disabled={!canMove}
+                  style={{
+                    width: '100%',
+                    background: canMove ? 'linear-gradient(135deg,#3b82f6,#1d4ed8)' : '#93c5fd',
+                    color: '#fff', border: 'none', borderRadius: 8, padding: '10px',
+                    fontSize: 13, fontWeight: 700,
+                    cursor: canMove ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  {moving ? '⏳ Moving…' : '📁 Move File'}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ── Main Page Render ─────────────────────────────────────────────────────────
 
@@ -971,51 +1355,54 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
 
         {/* ── Header ── */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10 }}>
-              🚢 Vessels
+            <h2 style={{ margin: 0, fontSize: 28, fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 12 }}>
+              Vessels
               {vessels.length > 0 && (
-                <span style={{ background: '#e0f2fe', color: '#0284c7', borderRadius: 20, padding: '2px 10px', fontSize: 13, fontWeight: 700 }}>
+                <span style={{ background: 'linear-gradient(135deg,#0078d4,#005a9e)', color: '#fff', borderRadius: 20, padding: '3px 14px', fontSize: 14, fontWeight: 700 }}>
                   {vessels.length}
                 </span>
               )}
-              {/* Anomaly badge */}
               {(vesselLevelFolders.length + vesselLevelFiles.length) > 0 && (
-                <span style={{ background: '#fef3c7', color: '#92400e', borderRadius: 20, padding: '2px 10px', fontSize: 12, fontWeight: 700, border: '1px solid #f59e0b', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  ⚠️ {vesselLevelFolders.length + vesselLevelFiles.length} SPO item{vesselLevelFolders.length + vesselLevelFiles.length !== 1 ? 's' : ''} need review
+                <span
+                  onClick={() => host._toggleAlertBell()}
+                  style={{ background: '#fef3c7', color: '#92400e', borderRadius: 20, padding: '3px 12px', fontSize: 12, fontWeight: 700, border: '1px solid #f59e0b', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+                  title="SPO items detected outside DMS structure — click to view in Alerts"
+                >
+                  ⚠️ {vesselLevelFolders.length + vesselLevelFiles.length} SPO item{vesselLevelFolders.length + vesselLevelFiles.length !== 1 ? 's' : ''} — view in Alerts →
                 </span>
               )}
             </h2>
-            <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>
+            <p style={{ margin: '6px 0 0', fontSize: 14, color: '#64748b' }}>
               Manage fleet vessels, provision SharePoint folders, and view documents.
             </p>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button
               onClick={() => host._goToView('vessels').catch(() => undefined)}
               title="Reload vessel list from database"
-              style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 8, padding: '9px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              style={{ background: '#fff', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 18px', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 1px 3px rgba(16,24,40,.08)' }}
             >
               🔄 Refresh
             </button>
             <button
-              onClick={() => selectedVessel ? host._openDeleteVessel(selectedVessel) : alert('Please select a vessel first.')}
-              style={{ background: 'linear-gradient(135deg, #f43f5e, #e11d48)', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              onClick={() => host._openDeleteVessel()}
+              style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(220,38,38,.3)' }}
             >
               🗑 Delete
             </button>
             <button
               onClick={() => selectedVessel ? host._openEditVessel(selectedVessel) : alert('Please select a vessel first.')}
-              style={{ background: 'linear-gradient(135deg, #38bdf8, #0284c7)', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              style={{ background: 'linear-gradient(135deg, #38bdf8, #0284c7)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(2,132,199,.3)' }}
             >
               ✏️ Edit
             </button>
             <button
               onClick={host._openCreate}
-              style={{ background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+              style={{ background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 20px', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(16,185,129,.3)' }}
             >
-              ＋ New Vessel
+              + New Vessel
             </button>
           </div>
         </div>
@@ -1119,18 +1506,18 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                 onClick={host._openCreate}
                 style={{ background: '#10b981', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
               >
-                ＋ Create First Vessel
+                + Create First Vessel
               </button>
             )}
           </div>
         ) : (
           /* ── Vessel Cards Grid ── */
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 20 }}>
             {filtered.map(vessel => {
               const isSelected = selectedVessel?.id === vessel.id;
               const status = vessel.status || 'Active';
               const statusColor = status === 'Active' ? '#10b981' : status === 'In Maintenance' ? '#f59e0b' : '#ef4444';
-              const statusBg = status === 'Active' ? '#f0fdf4' : status === 'In Maintenance' ? '#fffbeb' : '#fef2f2';
+              const statusBg   = status === 'Active' ? '#ecfdf5' : status === 'In Maintenance' ? '#fffbeb' : '#fef2f2';
               const isProvisioning = folderProvisioningVesselId === vessel.id;
               const imgSrc = getVesselImageForId(vessel.id);
 
@@ -1140,77 +1527,67 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                   onClick={() => host.setState({ selectedVessel: isSelected ? null : vessel })}
                   style={{
                     background: '#fff',
-                    borderRadius: 14,
+                    borderRadius: 16,
                     border: isSelected ? '2px solid #0078d4' : '1px solid #e2e8f0',
-                    boxShadow: isSelected ? '0 0 0 3px rgba(0,120,212,0.15)' : '0 1px 4px rgba(0,0,0,0.06)',
+                    boxShadow: isSelected
+                      ? '0 0 0 4px rgba(0,120,212,0.15), 0 4px 16px rgba(0,0,0,0.10)'
+                      : '0 1px 3px rgba(16,24,40,.08)',
                     overflow: 'hidden',
                     cursor: 'pointer',
                     transition: 'all 0.18s ease',
                     display: 'flex',
                     flexDirection: 'column',
                   }}
-                  onMouseEnter={e => { if (!isSelected) e.currentTarget.style.boxShadow = '0 4px 16px rgba(0,0,0,0.10)'; }}
-                  onMouseLeave={e => { if (!isSelected) e.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,0.06)'; }}
+                  onMouseEnter={e => { if (!isSelected) { e.currentTarget.style.boxShadow = '0 4px 12px rgba(16,24,40,.12)'; e.currentTarget.style.transform = 'translateY(-1px)'; } }}
+                  onMouseLeave={e => { if (!isSelected) { e.currentTarget.style.boxShadow = '0 1px 3px rgba(16,24,40,.08)'; e.currentTarget.style.transform = 'translateY(0)'; } }}
                 >
                   {/* Card image header */}
-                  <div style={{ position: 'relative', height: 120, overflow: 'hidden', background: '#1e3a5f' }}>
+                  <div style={{ position: 'relative', height: 140, overflow: 'hidden', background: '#1e3a5f' }}>
                     <img
                       src={resolveImgUrl(imgSrc)}
                       alt={vessel.name}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.85 }}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.9 }}
                     />
                     <div style={{
                       position: 'absolute', inset: 0,
-                      background: 'linear-gradient(to bottom, transparent 30%, rgba(15,23,42,0.75) 100%)',
+                      background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(15,23,42,0.8) 100%)',
                     }} />
                     {/* Status badge */}
                     <span style={{
-                      position: 'absolute', top: 10, right: 10,
+                      position: 'absolute', top: 12, right: 12,
                       background: statusBg, color: statusColor,
-                      borderRadius: 20, padding: '2px 10px', fontSize: 11, fontWeight: 700,
+                      borderRadius: 20, padding: '3px 12px', fontSize: 12, fontWeight: 700,
                       border: `1px solid ${statusColor}40`,
                     }}>
                       {status}
                     </span>
-                    {/* Selection indicator */}
+                    {/* Selection check */}
                     {isSelected && (
                       <span style={{
-                        position: 'absolute', top: 10, left: 10,
+                        position: 'absolute', top: 12, left: 12,
                         background: '#0078d4', color: '#fff',
-                        borderRadius: '50%', width: 22, height: 22,
+                        borderRadius: '50%', width: 26, height: 26,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 13, fontWeight: 700, boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
-                      }}>
-                        ✓
-                      </span>
+                        fontSize: 14, fontWeight: 700, boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                      }}>✓</span>
                     )}
-                    {/* Vessel name over image */}
-                    <div style={{ position: 'absolute', bottom: 10, left: 14, right: 14 }}>
-                      <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: '#fff', textShadow: '0 1px 3px rgba(0,0,0,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        🚢 {vessel.name}
+                    {/* Vessel name */}
+                    <div style={{ position: 'absolute', bottom: 12, left: 14, right: 14 }}>
+                      <p style={{ margin: 0, fontSize: 17, fontWeight: 700, color: '#fff', textShadow: '0 1px 4px rgba(0,0,0,0.6)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {vessel.name}
                       </p>
                     </div>
                   </div>
 
                   {/* Card body */}
-                  <div style={{ padding: '14px 16px', flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 12px' }}>
-                      <div>
-                        <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>IMO</span>
-                        <p style={{ margin: 0, fontSize: 13, color: '#1e293b', fontWeight: 600 }}>{vessel.imo || '—'}</p>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>Type</span>
-                        <p style={{ margin: 0, fontSize: 13, color: '#1e293b', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{vessel.vessel_type || '—'}</p>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>Shipyard</span>
-                        <p style={{ margin: 0, fontSize: 12, color: '#475569', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{vessel.shipyard || '—'}</p>
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>Hull No.</span>
-                        <p style={{ margin: 0, fontSize: 12, color: '#475569' }}>{vessel.hull_number || '—'}</p>
-                      </div>
+                  <div style={{ padding: '16px 18px', flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px' }}>
+                      {[['IMO', vessel.imo || '—'], ['Type', vessel.vessel_type || '—'], ['Shipyard', vessel.shipyard || '—'], ['Hull No.', vessel.hull_number || '—']].map(([label, val]) => (
+                        <div key={label}>
+                          <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</span>
+                          <p style={{ margin: '2px 0 0', fontSize: 13, color: '#1e293b', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{val}</p>
+                        </div>
+                      ))}
                     </div>
 
                     {/* Action buttons */}
@@ -1221,11 +1598,10 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                           host.setState({ vesselFilter: vessel.name, docMainFolder: null, folderPathStack: [] });
                           void host._goToView('list');
                         }}
-                        title="View documents for this vessel"
                         style={{
-                          flex: 1, background: '#eff6ff', color: '#1d4ed8',
-                          border: '1px solid #bfdbfe', borderRadius: 7, padding: '7px 10px',
-                          fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                          flex: 1, background: 'linear-gradient(135deg,#eff6ff,#dbeafe)', color: '#1d4ed8',
+                          border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 10px',
+                          fontSize: 12, fontWeight: 700, cursor: 'pointer',
                           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
                         }}
                       >
@@ -1235,34 +1611,28 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                         const provisioned = (
                           host.state.provisionedVesselIds?.has(vessel.id) ||
                           (host.state.rows && host.state.rows.some(r => r.vesselName && r.vesselName.toLowerCase() === vessel.name.toLowerCase())) ||
-                          (vessel as any).is_provisioned === true ||
-                          (vessel as any).provisioned === true
+                          vessel.is_provisioned === true
                         );
                         return (
                           <button
-                            disabled={!!folderProvisioningVesselId}
+                            disabled={!!folderProvisioningVesselId && folderProvisioningVesselId !== vessel.id}
                             onClick={e => {
                               e.stopPropagation();
-                              host.setState({ spoProvisionDialog: { vessel, provisioning: false, done: false, error: null } });
+                              host.setState({ spoProvisionDialog: { vessel, provisioning: isProvisioning, done: false, error: null } });
                             }}
-                            title={provisioned ? "SharePoint DMS folders are already provisioned" : "Create SharePoint folder structure for this vessel"}
                             style={{
                               flex: 1,
-                              border: provisioned ? '1px solid #bbf7d0' : '1px solid #cbd5e1',
-                              borderRadius: 7, padding: '7px 10px',
-                              fontSize: 11, fontWeight: 700, cursor: folderProvisioningVesselId ? 'not-allowed' : 'pointer',
-                              background: isProvisioning ? '#f0f9ff' : provisioned ? '#f0fdf4' : '#f8fafc',
+                              border: provisioned ? '1px solid #bbf7d0' : '1px solid #e2e8f0',
+                              borderRadius: 8, padding: '8px 10px',
+                              fontSize: 12, fontWeight: 700,
+                              cursor: (folderProvisioningVesselId && folderProvisioningVesselId !== vessel.id) ? 'not-allowed' : 'pointer',                              background: isProvisioning ? '#f0f9ff' : provisioned ? 'linear-gradient(135deg,#f0fdf4,#dcfce7)' : '#f8fafc',
                               color: isProvisioning ? '#0284c7' : provisioned ? '#15803d' : '#334155',
                               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
                             }}
                           >
                             {isProvisioning ? (
                               <><span style={{ display: 'inline-block', width: 11, height: 11, border: '2px solid #0284c7', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} /> Creating…</>
-                            ) : provisioned ? (
-                              '✓ Already Provisioned'
-                            ) : (
-                              '📁 Provision'
-                            )}
+                            ) : provisioned ? '✓ Provisioned' : '📁 Provision'}
                           </button>
                         );
                       })()}
@@ -1273,9 +1643,9 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                         onClick={e => e.stopPropagation()}
                         title="Open in SharePoint"
                         style={{
-                          width: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          border: '1px solid #cbd5e1', borderRadius: 7, background: '#f8fafc',
-                          color: '#0078d4', fontSize: 13, textDecoration: 'none',
+                          width: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          border: '1px solid #e2e8f0', borderRadius: 8, background: '#f8fafc',
+                          color: '#0078d4', fontSize: 14, textDecoration: 'none',
                         }}
                       >
                         ↗
@@ -1288,25 +1658,6 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
           </div>
         )}
 
-        {/* ── Section divider ── */}
-        {(vesselLevelFolders.length > 0 || vesselLevelFiles.length > 0) && (
-          <div style={{ marginTop: 36, marginBottom: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ flex: 1, height: 1, background: 'linear-gradient(to right, #f59e0b, transparent)' }} />
-              <span style={{ fontSize: 12, fontWeight: 700, color: '#92400e', background: '#fef3c7', padding: '4px 14px', borderRadius: 20, border: '1px solid #f59e0b', whiteSpace: 'nowrap' }}>
-                ⚠️ SharePoint Items Requiring Attention
-              </span>
-              <div style={{ flex: 1, height: 1, background: 'linear-gradient(to left, #f59e0b, transparent)' }} />
-            </div>
-          </div>
-        )}
-
-        {/* ── Unrecognised Folders Section ── */}
-        {vesselLevelFolders.length > 0 && renderUnrecognisedFolders(host, vesselLevelFolders)}
-
-        {/* ── Vessel-Level Uploaded Files Section ── */}
-        {vesselLevelFiles.length > 0 && renderVesselLevelFiles(host, vesselLevelFiles)}
-
         {/* ── Normal Folders Section ── */}
         {renderNormalFoldersSection(host)}
 
@@ -1317,6 +1668,9 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
 
         {/* ── Classify Dialog ── */}
         {renderClassifyDialog(host)}
+
+        {/* ── Dismiss Confirm Dialog ── */}
+        {renderDismissConfirmDialog(host)}
 
         {/* ── Provision Dialog ── */}
         {renderProvisionDialog(host)}
