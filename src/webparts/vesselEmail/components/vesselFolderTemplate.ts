@@ -232,9 +232,4 @@ export const MAIN_FOLDERS: MainFolder[] = [
     perVesselTree: INSURANCE_PER_VESSEL,
     commonTree: INSURANCE_COMMON,
   },
-  {
-    name: 'Kaizen - Knowledge Bank',
-    perVesselTree: KAIZEN_KNOWLEDGE_BANK_PER_VESSEL,
-    commonTree: KAIZEN_KNOWLEDGE_BANK_COMMON,
-  },
 ];

@@ -21,7 +21,7 @@ export function renderVesselForm(host: VesselEmail, mode: 'create' | 'edit'): Re
 }
 
 function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' | 'edit' }): React.ReactElement {
-  const { form, modalBusy, modalMsg, modalError, formFieldErrors } = host.state;  const isCreate = mode === 'create';
+  const { form, modalBusy, modalMsg, modalError, formFieldErrors, vessels } = host.state;  const isCreate = mode === 'create';
   const [elapsed, setElapsed] = React.useState(0);
 
   React.useEffect(() => {
@@ -40,7 +40,20 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
   };
 
   const set = (k: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-    host.setState({ form: { ...form, [k]: e.target.value }, modalError: null });
+    host.setState({ form: { ...form, [k]: e.target.value }, modalError: null, formFieldErrors: { ...formFieldErrors, [k]: '' } });
+
+  const setName = (e: React.ChangeEvent<HTMLInputElement>): void => {
+    const value = e.target.value;
+    const normalized = value.replace(/[ _'\"]+/g, '').toLowerCase();
+    const duplicate = isCreate && normalized.length > 0 && vessels.some(v =>
+      v.name.replace(/[ _'\"]+/g, '').toLowerCase() === normalized
+    );
+    host.setState({
+      form: { ...form, name: value },
+      modalError: null,
+      formFieldErrors: { ...formFieldErrors, name: duplicate ? 'Vessel name already exists.' : '' },
+    });
+  };
 
   const isSuccess = modalMsg && modalMsg.startsWith('🎉');
 
@@ -165,8 +178,13 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
                   Vessel name <span style={{ color: '#ef4444' }}>*</span>
                 </label>
                 <input
-                  style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 14, outline: 'none', boxSizing: 'border-box', color: '#0f172a' }}
-                  value={form.name} onChange={set('name')} placeholder="e.g. MV Pacific Trader" />
+                  style={{ width: '100%', padding: '10px 14px', borderRadius: 8, border: `1px solid ${formFieldErrors?.name ? '#ef4444' : '#cbd5e1'}`, fontSize: 14, outline: 'none', boxSizing: 'border-box', color: '#0f172a' }}
+                  value={form.name} onChange={setName} placeholder="e.g. MV Pacific Trader" />
+                {formFieldErrors?.name && (
+                  <div style={{ marginTop: 6, fontSize: 12, color: '#dc2626', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span>⚠️</span><span>{formFieldErrors.name}</span>
+                  </div>
+                )}
               </div>
 
               <div>

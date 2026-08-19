@@ -52,7 +52,7 @@ function renderVesselForm(host, mode) {
 }
 function VesselFormContent(_a) {
     var host = _a.host, mode = _a.mode;
-    var _b = host.state, form = _b.form, modalBusy = _b.modalBusy, modalMsg = _b.modalMsg, modalError = _b.modalError;
+    var _b = host.state, form = _b.form, modalBusy = _b.modalBusy, modalMsg = _b.modalMsg, modalError = _b.modalError, formFieldErrors = _b.formFieldErrors, vessels = _b.vessels;
     var isCreate = mode === 'create';
     var _c = React.useState(0), elapsed = _c[0], setElapsed = _c[1];
     React.useEffect(function () {
@@ -70,8 +70,14 @@ function VesselFormContent(_a) {
     };
     var set = function (k) { return function (e) {
         var _a;
-        return host.setState({ form: __assign(__assign({}, form), (_a = {}, _a[k] = e.target.value, _a)), modalError: null });
+        return host.setState({ form: __assign(__assign({}, form), (_a = {}, _a[k] = e.target.value, _a)), modalError: null, formFieldErrors: __assign(__assign({}, formFieldErrors), (_b = {}, _b[k] = '', _b)) });
     }; };
+    var setName = function (e) {
+        var value = e.target.value;
+        var normalized = value.replace(/[ _'\"]+/g, '').toLowerCase();
+        var duplicate = isCreate && normalized.length > 0 && vessels.some(function (v) { return v.name.replace(/[ _'\"]+/g, '').toLowerCase() === normalized; });
+        host.setState({ form: __assign(__assign({}, form), { name: value }), modalError: null, formFieldErrors: __assign(__assign({}, formFieldErrors), { name: duplicate ? 'Vessel name already exists.' : '' }) });
+    };
     var isSuccess = modalMsg && modalMsg.startsWith('🎉');
     var handleClose = function () {
         host.setState({ modal: 'none', modalMsg: null, modalError: null });
@@ -156,7 +162,9 @@ function VesselFormContent(_a) {
                         React.createElement("label", { style: { display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 } },
                             "Vessel name ",
                             React.createElement("span", { style: { color: '#ef4444' } }, "*")),
-                        React.createElement("input", { style: { width: '100%', padding: '10px 14px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 14, outline: 'none', boxSizing: 'border-box', color: '#0f172a' }, value: form.name, onChange: set('name'), placeholder: "e.g. MV Pacific Trader" })),
+                        React.createElement("input", { style: { width: '100%', padding: '10px 14px', borderRadius: 8, border: "1px solid ".concat((formFieldErrors === null || formFieldErrors === void 0 ? void 0 : formFieldErrors.name) ? '#ef4444' : '#cbd5e1'), fontSize: 14, outline: 'none', boxSizing: 'border-box', color: '#0f172a' }, value: form.name, onChange: setName, placeholder: "e.g. MV Pacific Trader" }),
+                        (formFieldErrors === null || formFieldErrors === void 0 ? void 0 : formFieldErrors.name) && (React.createElement("div", { style: { marginTop: 6, fontSize: 12, color: '#dc2626', display: 'flex', alignItems: 'center', gap: 4 } },
+                            React.createElement("span", null, "⚠️"), React.createElement("span", null, formFieldErrors.name)))),
                     React.createElement("div", null,
                         React.createElement("label", { style: { display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 } },
                             "IMO number ",

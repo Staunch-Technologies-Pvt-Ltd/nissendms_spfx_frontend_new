@@ -2748,8 +2748,17 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   };
 
   public _submitCreate = async (): Promise<void> => {
-    const { form } = this.state;
-    if (!form.name.trim()) { this.setState({ modalError: 'Vessel name is required.' }); return; }
+    const { form, vessels } = this.state;
+    const normalizedName = (value: string): string =>
+      value.replace(/[ _'\"]+/g, '').toLowerCase();
+    if (!form.name.trim()) {
+      this.setState({ modalError: null, formFieldErrors: { ...this.state.formFieldErrors, name: 'Vessel name is required.' } });
+      return;
+    }
+    if (vessels.some(v => normalizedName(v.name) === normalizedName(form.name))) {
+      this.setState({ modalError: null, formFieldErrors: { ...this.state.formFieldErrors, name: 'Vessel name already exists.' } });
+      return;
+    }
     if (!form.imo.trim()) { this.setState({ modalError: 'IMO number is required.' }); return; }
     if (!/^\d{7}$/.test(form.imo.trim())) { this.setState({ modalError: 'IMO number must be exactly 7 digits.' }); return; }
     this.setState({ modalBusy: true, modalError: null, modalMsg: null });
@@ -2776,7 +2785,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         // Duplicate IMO (and similar validation) errors go under the IMO
         // field itself; anything else is a generic modal error. Either way,
         // STOP here — do not fall through to the fake "offline" success path.
-        if (/imo/i.test(serverMsg)) {
+        if (/vessel name|already exists/i.test(serverMsg)) {
+          this.setState({ modalBusy: false, modalError: null, formFieldErrors: { ...this.state.formFieldErrors, name: serverMsg } });
+        } else if (/imo/i.test(serverMsg)) {
           this.setState({ modalBusy: false, modalError: null, formFieldErrors: { ...this.state.formFieldErrors, imo: serverMsg } });
         } else {
           this.setState({ modalBusy: false, modalError: serverMsg });

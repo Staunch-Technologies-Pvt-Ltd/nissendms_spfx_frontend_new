@@ -469,14 +469,20 @@ var VesselEmail = /** @class */ (function (_super) {
                 _this.setState({ modal: 'none', modalMsg: null, modalError: null });
         };
         _this._submitCreate = function () { return __awaiter(_this, void 0, void 0, function () {
-            var form, newVesselRecord, res, data, e_1;
+            var form, vessels, normalizedName, newVesselRecord, res, data, serverMsg, e_1;
             var _a, _b;
             return __generator(this, function (_c) {
                 switch (_c.label) {
                     case 0:
                         form = this.state.form;
+                        vessels = this.state.vessels;
+                        normalizedName = function (value) { return value.replace(/[ _'\"]+/g, '').toLowerCase(); };
                         if (!form.name.trim()) {
-                            this.setState({ modalError: 'Vessel name is required.' });
+                            this.setState({ modalError: null, formFieldErrors: __assign(__assign({}, this.state.formFieldErrors), { name: 'Vessel name is required.' }) });
+                            return [2 /*return*/];
+                        }
+                        if (vessels.some(function (v) { return normalizedName(v.name) === normalizedName(form.name); })) {
+                            this.setState({ modalError: null, formFieldErrors: __assign(__assign({}, this.state.formFieldErrors), { name: 'Vessel name already exists.' }) });
                             return [2 /*return*/];
                         }
                         if (!form.imo.trim()) {
@@ -510,8 +516,19 @@ var VesselEmail = /** @class */ (function (_super) {
                         return [4 /*yield*/, res.json()];
                     case 3:
                         data = _c.sent();
-                        if (!res.ok && res.status !== 202)
-                            throw new Error((_a = data === null || data === void 0 ? void 0 : data.message) !== null && _a !== void 0 ? _a : "Error ".concat(res.status));
+                        if (!res.ok && res.status !== 202) {
+                            serverMsg = (data === null || data === void 0 ? void 0 : data.detail) || (data === null || data === void 0 ? void 0 : data.message) || "Error ".concat(res.status);
+                            if (/vessel name|already exists/i.test(serverMsg)) {
+                                this.setState({ modalBusy: false, modalError: null, formFieldErrors: __assign(__assign({}, this.state.formFieldErrors), { name: serverMsg }) });
+                            }
+                            else if (/imo/i.test(serverMsg)) {
+                                this.setState({ modalBusy: false, modalError: null, formFieldErrors: __assign(__assign({}, this.state.formFieldErrors), { imo: serverMsg }) });
+                            }
+                            else {
+                                this.setState({ modalBusy: false, modalError: serverMsg });
+                            }
+                            return [2 /*return*/];
+                        }
                         if (data.id || ((_b = data.result) === null || _b === void 0 ? void 0 : _b.id)) {
                             newVesselRecord.id = data.id || data.result.id;
                         }
