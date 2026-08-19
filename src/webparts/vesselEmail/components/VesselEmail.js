@@ -682,9 +682,6 @@ var VesselEmail = /** @class */ (function (_super) {
                         _b = _c.sent();
                         return [3 /*break*/, 11];
                     case 11:
-                        if (!failures.length && !pendingNames.length) {
-                            setTimeout(function () { return _this.setState({ modal: 'none', selectedVessel: null, deleteVesselIds: new Set() }); }, 1600);
-                        }
                         return [2 /*return*/];
                 }
             });

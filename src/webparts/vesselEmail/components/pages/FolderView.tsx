@@ -1,6 +1,7 @@
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import { renderClassifyDialog } from './VesselsPage';
+import { MAIN_FOLDERS, folderNamesByMainFolder, subfolderNamesByFolder } from '../vesselFolderTemplate';
 
 export type MainFolderKey =
   | 'Technical & Crewing'
@@ -15,26 +16,8 @@ export const VESSEL_MAIN_FOLDERS: Array<{ key: MainFolderKey; emoji: string; col
   { key: 'Insurance',                emoji: '🛡️', color: '#d97706', bg: '#fef3c7' },
 ];
 
-export const DEFAULT_VESSEL_MAINS: Record<string, string[]> = {
-  'Technical & Crewing':     ['Month End Reports', 'Service Agreements', 'Registration', 'Drawings and Manuals', 'PO & Invoice', 'Incidents', 'Crewing', 'To be Classified'],
-  'Commercial & Chartering': ['Agreements', 'Invoices & Payments', 'Claims & Disputes', 'To be Classified'],
-  'Insurance':               ['P&I', 'H&M', 'War Risk', 'Flag & MPA', 'USA Related'],
-  'Kaizen - Knowledge Bank': ['Templates', 'Procedures and Work Instructions', 'Lessons Learned', 'Circulars and Guidance'],
-  'Knowledge Bank':          ['Templates', 'Procedures and Work Instructions', 'Lessons Learned', 'Circulars and Guidance'],
-};
-
-export const SUBFOLDERS_MAP: Record<string, string[]> = {
-  'Month End Reports':       ['Main Engine', 'Aux Engine', 'Cooling Water', 'Inspection Reports', 'Defect Reports', 'Guarantee Claims', 'To be Classified'],
-  'Service Agreements':      ['Technical Management', 'Crew Management', 'Vendor & Service Provider', 'To be Classified'],
-  'Registration':            ['Flag & MPA', 'Ship Builder', 'Radio & Telecom', 'Crewing & SMOU', 'Novation', 'To be Classified'],
-  'Drawings and Manuals':    ['Drawing', 'Manual', 'To be Classified'],
-  'PO & Invoice':            ['Purchase Order', 'Vendor Invoice'],  
-  'Agreements':              ['Charter party', 'Pool Agreement', 'Commission Agreement', 'To be Classified'],
-  'Invoices & Payments':     ['Invoice', 'Payments', 'To be Classified'],
-  'Claims & Disputes':       ['Disputes', 'Claims', 'To be Classified'],
-  'Circulars and Guidance':  ['Equipment Maker', 'Class', 'Flag / Port State', 'SIRE/OCIMF/RightShip', 'Shipyard'],
-  'Common for all ships':    ['Vendor & Service Agreements', 'Vendor Management'],
-};
+export const DEFAULT_VESSEL_MAINS = folderNamesByMainFolder();
+export const SUBFOLDERS_MAP = subfolderNamesByFolder();
 
 // ── File table used in both subfolder and leaf views ──────────────────────────
 function FileTable({ files, onDelete, selectedIds, onToggleSelect }: {
@@ -287,13 +270,16 @@ export function renderFolderView(
   if (atVesselMainFolderSelect) {
     return (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
-        {VESSEL_MAIN_FOLDERS.map(mf => (
-          <FolderCard key={mf.key} name={mf.key} sub="Main folder" emoji={mf.emoji} bg={mf.bg}
+        {MAIN_FOLDERS.map(mf => {
+          const visual = VESSEL_MAIN_FOLDERS.find(item => item.key === mf.name);
+          return (
+          <FolderCard key={mf.name} name={mf.name} sub="Main folder" emoji={visual?.emoji || '📁'} bg={visual?.bg || '#e0f2fe'}
             onClick={() => {
-              host._pushFolderNav(folderPathStack, mf.key);
+              host._pushFolderNav(folderPathStack, mf.name as MainFolderKey);
               host.setState({ vesselFilter: currentVesselNameFromStack || 'all' });
             }} />
-        ))}
+          );
+        })}
       </div>
     );
   }

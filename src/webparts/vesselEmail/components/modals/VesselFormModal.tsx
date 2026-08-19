@@ -45,7 +45,8 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
   const setName = (e: React.ChangeEvent<HTMLInputElement>): void => {
     const value = e.target.value;
     const normalized = value.replace(/[ _'\"]+/g, '').toLowerCase();
-    const duplicate = isCreate && normalized.length > 0 && vessels.some(v =>
+    const duplicate = normalized.length > 0 && vessels.some(v =>
+      v.id !== host.state.selectedVessel?.id &&
       v.name.replace(/[ _'\"]+/g, '').toLowerCase() === normalized
     );
     host.setState({
@@ -56,10 +57,11 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
   };
 
   const isSuccess = modalMsg && modalMsg.startsWith('🎉');
+  const isEditSuccess = !isCreate && !!modalMsg && (modalMsg.startsWith('✅') || modalMsg.startsWith('⏳'));
 
    const handleClose = () => {
     host.setState({ modal: 'none', modalMsg: null, modalError: null, formFieldErrors: {} });
-    if (isSuccess) {
+    if (isSuccess || isEditSuccess) {
       host._loadData();
     }
   };
@@ -80,7 +82,17 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
         )}
 
         {/* ── STATE 1: PROVISIONING IN PROGRESS (Timer & Progress Bar) ── */}
-        {modalBusy ? (
+        {modalBusy && !isCreate ? (
+          <div style={{ textAlign: 'center', padding: '28px 0' }}>
+            <div style={{ fontSize: 44, marginBottom: 12 }}>⏳</div>
+            <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#0284c7' }}>
+              Updating Vessel
+            </h3>
+            <p style={{ margin: 0, fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+              Saving the updated vessel details. SharePoint folders will not be provisioned.
+            </p>
+          </div>
+        ) : modalBusy ? (
           <div style={{ textAlign: 'center', padding: '12px 0' }}>
             <div style={{ fontSize: 44, marginBottom: 12 }}>⏳</div>
             <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#0284c7' }}>
@@ -152,6 +164,27 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
               Done / View Vessels
             </button>
           </div>
+        ) : isEditSuccess ? (
+          <div style={{ textAlign: 'center', padding: '28px 0' }}>
+            <div style={{ fontSize: 52, marginBottom: 12 }}>✅</div>
+            <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#059669' }}>
+              Vessel Updated Successfully
+            </h3>
+            <p style={{ margin: '0 0 20px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+              The vessel details were saved without changing its SharePoint folders.
+            </p>
+            <button
+              onClick={handleClose}
+              style={{
+                background: 'linear-gradient(135deg, #10b981, #059669)',
+                color: '#fff', border: 'none', borderRadius: 10,
+                padding: '12px 32px', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+                boxShadow: '0 4px 12px rgba(16,185,129,0.3)',
+              }}
+            >
+              Done
+            </button>
+          </div>
         ) : (
           /* ── STATE 3: FORM ENTRY ── */
           <>
@@ -200,10 +233,13 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
                   value={form.imo}
                   onChange={e => {
                     const val = e.target.value.replace(/\D/g, '').slice(0, 7);
+                    const duplicate = val.length > 0 && vessels.some(v =>
+                      v.id !== host.state.selectedVessel?.id && (v.imo || '').trim() === val
+                    );
                     host.setState({
                       form: { ...form, imo: val },
                       modalError: null,
-                      formFieldErrors: { ...formFieldErrors, imo: '' },
+                      formFieldErrors: { ...formFieldErrors, imo: duplicate ? 'A vessel with that IMO number already exists.' : '' },
                     });
                   }}
                   placeholder="7 digits, e.g. 9074729"

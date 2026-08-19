@@ -1321,6 +1321,51 @@ function FileAlertDialogContent({ host, dlg }: { host: VesselEmail; dlg: import(
 
 // ── Main Page Render ─────────────────────────────────────────────────────────
 
+function renderVesselActionPicker(host: VesselEmail): React.ReactElement {
+  const action = host.state.vesselActionPicker;
+  const isEdit = action === 'edit';
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={isEdit ? 'Select vessel to edit' : 'Select vessel to delete'}
+      style={{ position: 'fixed', inset: 0, zIndex: 100010, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) host.setState({ vesselActionPicker: null }); }}
+    >
+      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 560, maxHeight: '82vh', overflow: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.28)' }}>
+        <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 18, color: '#0f172a' }}>{isEdit ? 'Select Vessel to Edit' : 'Select Vessel to Delete'}</h3>
+            <p style={{ margin: '5px 0 0', fontSize: 12, color: '#64748b' }}>
+              {isEdit ? 'Choose a vessel to update its details.' : 'Choose a vessel to move it and its folder contents to the Recycle Bin.'}
+            </p>
+          </div>
+          <button onClick={() => host.setState({ vesselActionPicker: null })} style={{ border: 'none', background: 'none', color: '#64748b', fontSize: 20, cursor: 'pointer' }} title="Close">✕</button>
+        </div>
+        <div style={{ padding: 16, maxHeight: 'calc(82vh - 100px)', overflowY: 'auto' }}>
+          {host.state.vessels.length === 0 ? (
+            <div style={{ padding: 20, textAlign: 'center', color: '#64748b', fontSize: 13 }}>No vessels are available.</div>
+          ) : host.state.vessels.map(vessel => (
+            <button
+              key={vessel.id}
+              onClick={() => isEdit ? host._openEditVessel(vessel) : host._openDeleteVessel(vessel)}
+              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', marginBottom: 8, border: '1px solid #e2e8f0', borderRadius: 10, background: '#fff', textAlign: 'left', cursor: 'pointer' }}
+            >
+              <span style={{ width: 36, height: 36, borderRadius: 8, background: isEdit ? '#e0f2fe' : '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>{isEdit ? '✏️' : '🗑️'}</span>
+              <span style={{ minWidth: 0, flex: 1 }}>
+                <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
+                <span style={{ display: 'block', marginTop: 3, fontSize: 11, color: '#64748b' }}>{vessel.vessel_type || 'Vessel'}{vessel.imo ? ` | IMO ${vessel.imo}` : ''}</span>
+              </span>
+              <span style={{ color: isEdit ? '#0284c7' : '#dc2626', fontSize: 12, fontWeight: 700 }}>{isEdit ? 'Edit →' : 'Delete →'}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function renderVesselsPage(host: VesselEmail): React.ReactElement {
     const {
       vessels, vesselsSearch, vesselStatusFilter, vesselTypeFilter,
@@ -1387,16 +1432,16 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
               🔄 Refresh
             </button>
             <button
-              onClick={() => host._openDeleteVessel()}
-              style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(220,38,38,.3)' }}
-            >
-              🗑 Delete
-            </button>
-            <button
-              onClick={() => selectedVessel ? host._openEditVessel(selectedVessel) : alert('Please select a vessel first.')}
+              onClick={() => host._openVesselActionPicker('edit')}
               style={{ background: 'linear-gradient(135deg, #38bdf8, #0284c7)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(2,132,199,.3)' }}
             >
               ✏️ Edit
+            </button>
+            <button
+              onClick={() => host._openVesselActionPicker('delete')}
+              style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(220,38,38,.3)' }}
+            >
+              🗑 Delete
             </button>
             <button
               onClick={host._openCreate}
@@ -1512,7 +1557,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
           </div>
         ) : (
           /* ── Vessel Cards Grid ── */
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 20 }}>
             {filtered.map(vessel => {
               const isSelected = selectedVessel?.id === vessel.id;
               const status = vessel.status || 'Active';
@@ -1651,6 +1696,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                         ↗
                       </a>
                     </div>
+
                   </div>
                 </div>
               );
@@ -1678,6 +1724,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
         {/* Modals */}
         {modal === 'create' && host._renderVesselForm('create')}
         {modal === 'edit' && host._renderVesselForm('edit')}
+        {host.state.vesselActionPicker && renderVesselActionPicker(host)}
         {modal === 'delete' && host._renderDeleteModal()}
       </div>
     );

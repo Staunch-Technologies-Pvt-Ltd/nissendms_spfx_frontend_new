@@ -193,6 +193,22 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                       )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {([
+                        ['dms', 'DMS folders'],
+                        ['crud', 'SPFx activity'],
+                        ['email', 'Email alerts'],
+                      ] as const).map(([category, label]) => (
+                        <button
+                          key={category}
+                          onClick={() => host._setAlertCategory(category)}
+                          style={{
+                            padding: '4px 9px', borderRadius: 16, border: 'none',
+                            background: host.state.alertCategory === category ? '#0f766e' : '#f1f5f9',
+                            color: host.state.alertCategory === category ? '#fff' : '#475569',
+                            fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+                          }}
+                        >{label}</button>
+                      ))}
                       {(['all', 'unread'] as const).map(f => (
                         <button
                           key={f}
@@ -216,13 +232,21 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                           }}
                         >Mark all read</button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => host._openAlertsPage()}
+                        title="Open full alerts page"
+                        style={{ padding: '4px 9px', borderRadius: 16, border: 'none', background: '#e0f2fe', color: '#0369a1', fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                      >⛶ Maximize</button>
                     </div>
                   </div>
 
                   <div style={{ maxHeight: 420, overflowY: 'auto' }}>
                     {(() => {
                       const filtered = host.state.alertsList.filter(
-                        a => host.state.alertFilter === 'all' || !a.read
+                        a => (a.alert_category || (
+                          a.alert_type === 'crud_operation' ? 'crud' : a.alert_type === 'email_alert' ? 'email' : 'dms'
+                        )) === host.state.alertCategory && (host.state.alertFilter === 'all' || !a.read)
                       );
                       if (filtered.length === 0) {
                         return (
@@ -277,7 +301,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                             return (
                               <div
                                 key={alert.id}
-                                onClick={() => !alert.read && host._markAlertRead(alert.id)}
+                                onClick={() => host._openAlertsPage(alert.id)}
                                 style={{
                                   padding: '12px 18px', borderBottom: '1px solid #f1f5f9',
                                   background: alert.read ? 'transparent' : '#f8faff',

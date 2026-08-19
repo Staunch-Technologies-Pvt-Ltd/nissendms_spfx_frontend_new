@@ -98,7 +98,10 @@ export interface AlertItem {
     | 'vessel_deleted'         // vessel moved to recycle bin
     | 'vessel_unrecognised'   // folder at vessel level not in DMS
     | 'file_outside_structure' // file uploaded outside DMS folder tree
-    | 'subfolder_anomaly';     // unexpected subfolder inside a vessel's category
+    | 'subfolder_anomaly'      // unexpected subfolder inside a vessel's category
+    | 'crud_operation'
+    | 'email_alert';
+  alert_category?: 'dms' | 'crud' | 'email';
   read: boolean;
   created_at: string | null;
   // Anomaly-specific fields (populated for anomaly alert types)

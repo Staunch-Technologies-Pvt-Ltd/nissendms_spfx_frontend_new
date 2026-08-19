@@ -31,6 +31,9 @@ export interface SpoFolderNode {
   /** Full server-relative path, e.g. "/sites/MySite/Shared Documents/Vessel Management/..." */
   serverRelativePath: string;
   children: SpoFolderNode[];
+  size?: number;
+  createdDateTime?: string;
+  lastModifiedDateTime?: string;
   deleted?: boolean;
 }
 
@@ -114,7 +117,7 @@ export async function fetchFolderChildren(
     .join('/');
 
   try {
-    const url = `/sites/${siteId}/drives/${driveId}/root:/${encoded}:/children?$select=id,name,parentReference,folder`;
+    const url = `/sites/${siteId}/drives/${driveId}/root:/${encoded}:/children?$select=id,name,parentReference,folder,size,createdDateTime,lastModifiedDateTime`;
     const result: any = await client.api(url).get();
     return (result.value ?? []).filter((item: any) => !!item.folder).map((item: any) => graphItemToNode(item));
   } catch {
@@ -148,6 +151,9 @@ function graphItemToNode(item: any): SpoFolderNode {
     isFolder: !!item.folder,
     serverRelativePath: resolveServerPath(item),
     children: [],
+    size: typeof item.size === 'number' ? item.size : undefined,
+    createdDateTime: item.createdDateTime,
+    lastModifiedDateTime: item.lastModifiedDateTime,
     deleted: !!item.deleted,
   };
 }
@@ -180,7 +186,7 @@ export async function pollDelta(
   // Use stored deltaLink for incremental sync, or start a fresh delta scan
   const startUrl = storedLink
     ? storedLink
-    : `/sites/${siteId}/drives/${driveId}/root/delta?$select=id,name,parentReference,folder,file,deleted`;
+    : `/sites/${siteId}/drives/${driveId}/root/delta?$select=id,name,parentReference,folder,file,size,createdDateTime,lastModifiedDateTime,deleted`;
 
   const { items, deltaLink } = await drainPages(client, startUrl);
 

@@ -14,4 +14,5 @@ export type AppView =
   | 'bento_email'
   | 'email_notify'
   | 'recycle'
-  | 'archive';
+  | 'archive'
+  | 'alerts';

@@ -96,7 +96,7 @@ export function renderListView(
                             <span
                               onClick={() => {
                                 if (file.id && !file.id.startsWith('file_')) {
-                                  window.open(`${host._base()}/api/files/${file.id}/content`, '_blank');
+                                  void host._openDocumentFile(file.id, file.name);
                                 } else {
                                   alert(`File "${file.name}" is pending — it will be available after approval.`);
                                 }
@@ -116,6 +116,12 @@ export function renderListView(
                   <td style={{ padding: '10px 12px', textAlign: 'right' }}>
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                       <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                      <span
+                        title={hasFiles ? 'Attachment Available' : 'Attachment Required'}
+                        style={{ color: hasFiles ? '#15803d' : '#64748b', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}
+                      >
+                        {hasFiles ? '✅ Attached' : '⚪ Not Attached'}
+                      </span>
                       {/* Row-level upload */}
                       <label style={{
                         background: isUploading ? '#f1f5f9' : '#fff', border: '1px solid #cbd5e1', borderRadius: 6,

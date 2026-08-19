@@ -10,7 +10,8 @@ export interface FlatRow {
   fileName: string | null;
   fileId: string | null;
   filePending?: boolean;   // true = uploaded & awaiting approval; hides clickable link until approved
-  fileUploadedAt?: number; // epoch ms — set when this file was uploaded via the app, used to sort recent uploads to the top
+  fileUploadedAt?: number; // epoch ms from the file's createdDateTime, used for upload date/time display
+  fileSize?: string;
   canUpload: boolean;
   groupKey: string;
   uploadFolderId: string;
@@ -29,7 +30,7 @@ export interface GroupedRow {
   uploadFolderId: string;
   monthDriven: boolean;
   canUpload: boolean;
-  files: Array<{ id: string; name: string; uploadedAt?: number }>;
+  files: Array<{ id: string; name: string; size?: string; uploadedAt?: number }>;
 }
 
 export interface VesselRecord {

@@ -16,11 +16,15 @@ import type {
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
 import { renderClassifyDialog } from './VesselsPage';
+import {
+  folderNamesByMainFolder, subfolderNamesByFolder,
+  getCommonShipsFlatRows, getKaizenFlatRows,
+} from '../vesselFolderTemplate';
 
 export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
     const {
-      textFilter, vesselFilter, catFilter, docViewMode, showAllVesselsInFolderView,
+      textFilter, vesselFilter, catFilter, attachmentFilter, docViewMode, showAllVesselsInFolderView,
       vessels, rows, docListPage, docListSort, docGroupFilter,
       documentVesselCount, documentVesselsLoadingMore,
       docUploadRowKey, docUploadBusy, docUploadMsg, documentsList,
@@ -61,7 +65,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     const stackLevel = folderPathStack.length;
     const atVesselsRoot = stackLevel === 1 && folderPathStack[0]?.id === 'vessels_root';
     const atSpecificVessels = stackLevel === 2 && folderPathStack[1]?.id === 'specific_vessels';
-    const atCommonShips = stackLevel === 2 && folderPathStack[1]?.id === 'common';
+    const atCommonShips = stackLevel === 1 && folderPathStack[0]?.id === 'common';
     // Vessel node is always at index 2 when path is [vessels_root, specific_vessels, vessel]
     // For other paths (e.g. kaizen), fall back to searching by exclusion
     const KNOWN_NAV_IDS = new Set(['vessels_root', 'specific_vessels', 'common', 'kaizen_root']);
@@ -87,37 +91,14 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     const currentFolderNode = folderPathStack.length > 0 ? folderPathStack[folderPathStack.length - 1] : null;
     const currentFolderName = currentFolderNode ? currentFolderNode.name : null;
 
-    const DEFAULT_VESSEL_MAINS: Record<string, string[]> = {
-      'Technical & Crewing': ['Month End Reports', 'Service Agreements', 'Registration', 'Drawings and Manuals', 'PO & Invoice', 'Incidents', 'Crewing', 'To be Classified'],
-      'Commercial & Chartering': ['Agreements', 'Invoices & Payments', 'Claims & Disputes', 'To be Classified'],
-      'Insurance': ['P&I', 'H&M', 'War Risk', 'Flag & MPA', 'USA Related'],
-      'Kaizen - Knowledge Bank': ['Templates', 'Procedures and Work Instructions', 'Lessons Learned', 'Circulars and Guidance'],
-      'Knowledge Bank': ['Templates', 'Procedures and Work Instructions', 'Lessons Learned', 'Circulars and Guidance'],
-    };
-
-    const SUBFOLDERS_MAP: Record<string, string[]> = {
-      'Month End Reports': ['Main Engine', 'Aux Engine', 'Cooling Water', 'Inspection Reports', 'Defect Reports', 'Guarantee Claims', 'To be Classified'],
-      'Service Agreements': ['Technical Management', 'Crew Management', 'Vendor & Service Provider', 'To be Classified'],
-      'Registration': ['Flag & MPA', 'Ship Builder', 'Radio & Telecom', 'Crewing & SMOU', 'Novation', 'To be Classified'],
-      'Drawings and Manuals': ['Drawing', 'Manual', 'To be Classified'],
-      'PO & Invoice': ['Purchase Order', 'Vendor Invoice'],
-      'Agreements': ['Charter party', 'Pool Agreement', 'Commission Agreement', 'To be Classified'],
-      'Invoices & Payments': ['Invoice', 'Payments', 'To be Classified'],
-      'Claims & Disputes': ['Disputes', 'Claims', 'To be Classified'],
-      'Circulars and Guidance': ['Equipment Maker', 'Class', 'Flag / Port State', 'SIRE/OCIMF/RightShip', 'Shipyard'],
-     'Vendor & Service Agreements': ['Vendor & Service Provider Agreement', 'To be Classified'],
-    };
-
-    const COMMON_DEFAULT_MAINS: Record<string, string[]> = {
-      'Technical & Crewing': ['Vendor & Service Agreements', 'Vendor Management', 'To be Classified'],
-      'Commercial & Chartering': ['Agreements', 'To be Classified'],
-      'Insurance': ['Agreements', 'Miscellaneous'],
-    };
+    const DEFAULT_VESSEL_MAINS = folderNamesByMainFolder();
+    const SUBFOLDERS_MAP = subfolderNamesByFolder();
+    const COMMON_DEFAULT_MAINS = folderNamesByMainFolder(true);
 
     // Resolve real SPO folder ID for the current folder node from rows
     const resolvedCurrentFolderId: string | null = (() => {
       if (!currentFolderNode) return null;
-      if (!/^(sf_|common|vessels_root|specific_vessels|kaizen_root)/.test(currentFolderNode.id)) return currentFolderNode.id;
+      if (!/^(sf_|category_|common|vessels_root|specific_vessels|kaizen_root)/.test(currentFolderNode.id)) return currentFolderNode.id;
       // Try to find a matching row by vessel + folder name chain
       const vesselName = currentVesselNameFromStack || (folderPathStack.length > 0 ? folderPathStack[0].name : null);
       if (!vesselName) return null;
@@ -190,7 +171,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       : null;
 
     // Trigger live SPO file refresh when we have a real folder ID
-    if (resolvedCurrentFolderId && !/^(sf_|common)/.test(resolvedCurrentFolderId) && !/^\d+$/.test(resolvedCurrentFolderId)) {
+    if (resolvedCurrentFolderId && !/^(sf_|category_|common)/.test(resolvedCurrentFolderId) && !/^\d+$/.test(resolvedCurrentFolderId)) {
       const alreadyLoaded = host._filesLoadedForFolders.has(resolvedCurrentFolderId);
       const inFlight = host._refreshFolderFilesInFlight.has(resolvedCurrentFolderId);
       if (!alreadyLoaded && !inFlight) {
@@ -213,7 +194,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     if (currentFolderLiveId && currentFolderLiveId !== resolvedCurrentFolderId) addFiles(uploadedFilesByFolder[currentFolderLiveId]);
     if (currentFolderMatchRow?.groupKey) addFiles(uploadedFilesByFolder[currentFolderMatchRow.groupKey]);
     if (currentFolderMatchRow?.uploadFolderId && currentFolderMatchRow.uploadFolderId !== resolvedCurrentFolderId) addFiles(uploadedFilesByFolder[currentFolderMatchRow.uploadFolderId]);
-    if (currentFolderNode && !/^(sf_|common)/.test(currentFolderNode.id) && currentFolderNode.id !== resolvedCurrentFolderId) addFiles(uploadedFilesByFolder[currentFolderNode.id]);
+    if (currentFolderNode && !/^(sf_|category_|common)/.test(currentFolderNode.id) && currentFolderNode.id !== resolvedCurrentFolderId) addFiles(uploadedFilesByFolder[currentFolderNode.id]);
     // Also check by display folder name (used as key by the top-level upload handler)
     if (currentFolderName) addFiles(uploadedFilesByFolder[currentFolderName]);
     // Also check by the full breadcrumb path (lowercase) — stored by the top-level upload handler as normSub
@@ -251,7 +232,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // Also include files from backend rows matching this folder
     if (currentFolderNode) {
       const matchIds = new Set<string>();
-      if (!/^(sf_|common)/.test(currentFolderNode.id)) matchIds.add(currentFolderNode.id);
+      if (!/^(sf_|category_|common)/.test(currentFolderNode.id)) matchIds.add(currentFolderNode.id);
       if (resolvedCurrentFolderId) matchIds.add(resolvedCurrentFolderId);
       rows.filter(r => matchIds.has(r.uploadFolderId) && r.fileName && !r.filePending)
         .forEach(r => {
@@ -279,47 +260,93 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     const allCurrentFolderFiles = [...allCurrentFolderFilesRaw].sort(
       (a, b) => fileTimestamp(b) - fileTimestamp(a) || a.name.localeCompare(b.name)
     );
-    // ── Build source rows from API only — no mock fallback ──
-    const allRows: FlatRow[] = rows || [];
+    const visibleCurrentFolderFiles = attachmentFilter === 'not_attached' ? [] : allCurrentFolderFiles;
+    // ── Build source rows with 3 segregated options ──
+    const docScopeType = host.state.docScopeType || 'vessels';
+    const commonTemplateRows = getCommonShipsFlatRows();
+    const kaizenTemplateRows = getKaizenFlatRows();
 
-    // Subfolders lookup map for Folder View levels
-    // (subfolder resolution already computed above via SUBFOLDERS_MAP / DEFAULT_VESSEL_MAINS)
+    // 1. Sanitize specific vessel rows from API: remove any Kaizen rows from individual vessels
+    const sanitizedVesselRows = (rows || []).filter(r => {
+      const isKaizen = (r.group || '').toLowerCase().includes('kaizen') || (r.subFolderPath || '').toLowerCase().includes('kaizen');
+      const isCommon = r.vesselName === 'Common for all vessels' || (r.subFolderPath || '').toLowerCase().includes('common for all ships');
+      return !isKaizen && !isCommon;
+    });
 
+    // 2. Collect dynamic uploaded files/rows for Common and Kaizen
+    const dynamicCommonRows = (rows || []).filter(r =>
+      r.vesselName === 'Common for all vessels' || (r.subFolderPath || '').toLowerCase().includes('common for all ships')
+    );
+    const dynamicKaizenRows = (rows || []).filter(r =>
+      ((r.group || '').toLowerCase().includes('kaizen') || (r.subFolderPath || '').toLowerCase().includes('kaizen'))
+    ).map(r => ({
+      ...r,
+      vesselName: 'Kaizen - Knowledge Bank',
+      group: 'Kaizen - Knowledge Bank',
+      subFolderPath: r.subFolderPath.replace(/^[^>]+>\s*kaizen\s*-\s*knowledge\s*bank/i, 'Kaizen - Knowledge Bank'),
+    }));
+
+    const mergedCommonRows = [...commonTemplateRows];
+    dynamicCommonRows.forEach(dr => {
+      const normSub = (dr.subFolderPath || '').toLowerCase();
+      const idx = mergedCommonRows.findIndex(cr => (cr.subFolderPath || '').toLowerCase() === normSub);
+      if (idx !== -1) {
+        if (dr.fileName) mergedCommonRows[idx] = { ...mergedCommonRows[idx], ...dr };
+      } else {
+        mergedCommonRows.push(dr);
+      }
+    });
+
+    const mergedKaizenRows = [...kaizenTemplateRows];
+    dynamicKaizenRows.forEach(dk => {
+      const normSub = (dk.subFolderPath || '').toLowerCase();
+      const idx = mergedKaizenRows.findIndex(kr => (kr.subFolderPath || '').toLowerCase() === normSub);
+      if (idx !== -1) {
+        if (dk.fileName) mergedKaizenRows[idx] = { ...mergedKaizenRows[idx], ...dk };
+      } else {
+        mergedKaizenRows.push(dk);
+      }
+    });
+
+    const allRows: FlatRow[] = [
+      ...sanitizedVesselRows,
+      ...mergedCommonRows,
+      ...mergedKaizenRows,
+    ];
+
+    // Filter by active scope (1st option: Specific Vessels, 2nd option: Common for all vessels, 3rd option: Kaizen - Knowledge Bank)
+    const scopeRows = allRows.filter(r => {
+      if (docScopeType === 'vessels') {
+        return r.vesselName !== 'Common for all vessels' && r.vesselName !== 'Kaizen - Knowledge Bank';
+      } else if (docScopeType === 'common') {
+        return r.vesselName === 'Common for all vessels';
+      } else if (docScopeType === 'kaizen') {
+        return r.vesselName === 'Kaizen - Knowledge Bank';
+      }
+      return true;
+    });
 
     // Filtered list rows for List view
-    const activeVesselName = vesselFilter !== 'all' ? vesselFilter : null;
-    const allGroups = Array.from(new Set(allRows.map(r => r.group))).sort();
+    const activeVesselName = (docScopeType === 'vessels' && vesselFilter !== 'all') ? vesselFilter : null;
+    const allGroups = Array.from(new Set(scopeRows.map(r => r.group))).sort();
     const allCategories = Array.from(
-      new Set(allRows.filter(r => docGroupFilter === 'all' || r.group === docGroupFilter).map(r => r.category))
+      new Set(scopeRows.filter(r => docGroupFilter === 'all' || r.group === docGroupFilter).map(r => r.category))
     ).sort();
 
     // ── mainFolderGroupMap: which groups belong to which main folder (for list view filtering) ──
-    // These must match the actual template group names returned by the backend API.
-    const mainFolderGroupMap: Record<string, string[]> = {
-      'Technical & Crewing': [
-        'Month End Reports', 'Service Agreements', 'Registration',
-        'Drawings and Manuals', 'PO & Invoice', 'Incidents', 'Crewing', 'To be Classified',
-      ],
-      'Commercial & Chartering': [
-        'Agreements', 'Invoices & Payments', 'Claims & Disputes', 'To be Classified',
-      ],
-      'Insurance': ['P&I', 'H&M', 'War Risk', 'Flag - MPA', 'USA Related', 'Flag and MPA'],
-      'Kaizen - Knowledge Bank': [
-        'Templates', 'Procedures and Work Instructions', 'Lessons Learned', 'Circulars and Guidance',
-      ],
-      'Knowledge Bank': [
-        'Templates', 'Procedures and Work Instructions', 'Lessons Learned', 'Circulars and Guidance',
-      ],
-    };
+    const mainFolderGroupMap = folderNamesByMainFolder(docScopeType === 'common');
 
     // Vessels are returned newest first. Start with four and extend in pages
     // of eight when the user chooses "More vessels".
     const visibleVesselNames = new Set(vessels.slice(0, documentVesselCount).map(v => v.name));
 
-    let filtered = allRows.filter(r => {
-      // Keep the list aligned with the vessels currently loaded for Documents.
-      if (!activeVesselName) {
-        if (!visibleVesselNames.has(r.vesselName)) return false;
+    let filtered = scopeRows.filter(r => {
+      if (docScopeType === 'vessels') {
+        if (!activeVesselName) {
+          if (!visibleVesselNames.has(r.vesselName)) return false;
+        } else if (r.vesselName !== activeVesselName) {
+          return false;
+        }
       }
       // Filter by active main folder
       if (docMainFolder) {
@@ -331,7 +358,6 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           (r.subFolderPath || '').toLowerCase().includes(docMainFolder.toLowerCase().split(' ')[0].toLowerCase());
         if (!mainMatch) return false;
       }
-      if (activeVesselName && r.vesselName !== activeVesselName) return false;
       if (docGroupFilter !== 'all' && r.group !== docGroupFilter) return false;
       if (catFilter !== 'all' && r.category !== catFilter && r.group !== catFilter) return false;
       if (textFilter) {
@@ -354,10 +380,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       const memFiles = (liveNode?.children || []).filter(c => !c.isFolder).map(c => ({
         id: c.id,
         name: c.name,
-        size: '—',
-        date: (c as any).lastModifiedDateTime ? new Date((c as any).lastModifiedDateTime).toLocaleString() : 'Today',
+        size: typeof c.size === 'number' ? `${(c.size / 1024).toFixed(1)} KB` : '—',
+        date: (c as any).createdDateTime ? new Date((c as any).createdDateTime).toLocaleString() : ((c as any).lastModifiedDateTime ? new Date((c as any).lastModifiedDateTime).toLocaleString() : 'Today'),
         pending: false,
-        uploadedAt: (c as any).lastModifiedDateTime ? Date.parse((c as any).lastModifiedDateTime) : undefined,
+        uploadedAt: (c as any).createdDateTime ? Date.parse((c as any).createdDateTime) : ((c as any).lastModifiedDateTime ? Date.parse((c as any).lastModifiedDateTime) : undefined),
       }));
 
       const liveUploads = liveId ? (uploadedFilesByFolder[liveId] || []) : [];
@@ -377,14 +403,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
            const existing = groupedMap.get(dedupeKey);
       if (!existing) {
-        const files: Array<{ id: string; name: string; uploadedAt?: number }> = [];
+        const files: Array<{ id: string; name: string; size?: string; uploadedAt?: number }> = [];
+        const addOrUpdateFile = (file: { id: string; name: string; size?: string; uploadedAt?: number }): void => {
+          const current = files.find(item => item.name.toLowerCase() === file.name.toLowerCase());
+          if (!current) {
+            files.push(file);
+          } else {
+            if ((!current.size || current.size === '—') && file.size && file.size !== '—') current.size = file.size;
+            if (!current.uploadedAt && file.uploadedAt) current.uploadedAt = file.uploadedAt;
+            if (current.id === current.name && file.id) current.id = file.id;
+          }
+        };
         if (r.fileName) {
-          files.push({ id: r.fileId || r.fileName, name: r.fileName, uploadedAt: r.fileUploadedAt });
+          addOrUpdateFile({ id: r.fileId || r.fileName, name: r.fileName, size: r.fileSize, uploadedAt: r.fileUploadedAt });
         }
         for (const f of folderUploads) {
-          if (f?.name && !files.some(ex => ex.name.toLowerCase() === f.name.toLowerCase())) {
-            files.push({ id: (f as any).id || f.name, name: f.name, uploadedAt: (f as any).uploadedAt });
-          }
+          if (f?.name) addOrUpdateFile({ id: (f as any).id || f.name, name: f.name, size: (f as any).size, uploadedAt: (f as any).uploadedAt });
         }
         groupedMap.set(dedupeKey, {
           srNo: r.srNo,
@@ -400,12 +434,23 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           files,
         });
       } else {
-        if (r.fileName && !existing.files.some(f => f.name.toLowerCase() === r.fileName!.toLowerCase())) {
-          existing.files.push({ id: r.fileId || r.fileName, name: r.fileName, uploadedAt: r.fileUploadedAt });
+        if (r.fileName) {
+          const current = existing.files.find(f => f.name.toLowerCase() === r.fileName!.toLowerCase());
+          if (!current) {
+            existing.files.push({ id: r.fileId || r.fileName, name: r.fileName, size: r.fileSize, uploadedAt: r.fileUploadedAt });
+          } else {
+            if ((!current.size || current.size === '—') && r.fileSize) current.size = r.fileSize;
+            if (!current.uploadedAt && r.fileUploadedAt) current.uploadedAt = r.fileUploadedAt;
+            if (current.id === current.name && r.fileId) current.id = r.fileId;
+          }
         }
         for (const f of folderUploads) {
-          if (f?.name && !existing.files.some(ex => ex.name.toLowerCase() === f.name.toLowerCase())) {
-            existing.files.push({ id: (f as any).id || f.name, name: f.name, uploadedAt: (f as any).uploadedAt });
+          const current = f?.name ? existing.files.find(ex => ex.name.toLowerCase() === f.name.toLowerCase()) : undefined;
+          if (current) {
+            if ((!current.size || current.size === '—') && (f as any).size && (f as any).size !== '—') current.size = (f as any).size;
+            if (!current.uploadedAt && (f as any).uploadedAt) current.uploadedAt = (f as any).uploadedAt;
+          } else if (f?.name) {
+            existing.files.push({ id: (f as any).id || f.name, name: f.name, size: (f as any).size, uploadedAt: (f as any).uploadedAt });
           }
         }
         if (r.uploadFolderId && !r.uploadFolderId.includes('/') && (!existing.uploadFolderId || existing.uploadFolderId.includes('/'))) {
@@ -415,6 +460,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     }
 
     let groupedList = Array.from(groupedMap.values());
+    if (attachmentFilter !== 'all') {
+      groupedList = groupedList.filter(row => attachmentFilter === 'attached' ? row.files.length > 0 : row.files.length === 0);
+    }
     if (docListSort === 'name_az') {
       groupedList.sort((a, b) => a.category.localeCompare(b.category));
     } else {
@@ -526,7 +574,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               {docViewMode === 'list'
                 ? `${filtered.length} rows · flattened list view`
                 : stackLevel === 0 && !docMainFolder
-                  ? '2 top-level folders'
+                  ? '3 top-level folders'
                   : atVesselsRoot
                     ? '2 folders · Specific Vessels & Common'
                     : atSpecificVessels
@@ -535,6 +583,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         ? '3 main folders'
                         : `${subfolderNames.length} folders · ${allCurrentFolderFiles.length} files`}
             </p>
+            {docViewMode === 'folder' && currentFolderNode && (
+              <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: allCurrentFolderFiles.length > 0 ? '#15803d' : '#64748b' }}>
+                {allCurrentFolderFiles.length > 0 ? '✅ Attached' : '⚪ Not Attached'}
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -600,12 +653,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             )}
 
             {/* Global Delete Button - Folder View */}
-            {docViewMode === 'folder' && allCurrentFolderFiles.length > 0 && (
+            {docViewMode === 'folder' && visibleCurrentFolderFiles.length > 0 && (
               <button
                 disabled={folderViewSelectedFiles.size === 0}
                 onClick={() => {
                   if (folderViewSelectedFiles.size === 0) return;
-                  const filesToDelete = allCurrentFolderFiles
+                  const filesToDelete = visibleCurrentFolderFiles
                     .filter(file => folderViewSelectedFiles.has((file as any).id || file.name))
                     .map(file => ({
                       id: (file as any).id || file.name,
@@ -801,95 +854,144 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           </div>
         </div>
 
-        {/* Filter Toolbar */}
-        <div style={{ background: '#fff', borderRadius: 10, padding: '10px 12px', border: '1px solid #e2e8f0', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          <div style={{ position: 'relative', flex: '1 1 180px', minWidth: 160 }}>
-            <span style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 12 }}>🔍</span>
-            <input
-              type="text"
-              placeholder="Filter by vessel, group, category, path..."
-              value={textFilter}
-              onChange={e => host.setState({ textFilter: e.target.value, docListPage: 0 })}
-              style={{ width: '100%', padding: '6px 10px 6px 28px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, outline: 'none', boxSizing: 'border-box' }}
-            />
-          </div>
-          <select
-            value={vesselFilter}
-            onChange={e => host.setState({ vesselFilter: e.target.value, docListPage: 0 })}
-            style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 140 }}
-          >
-            <option value="all">All vessels</option>
-            {vessels.map(v => (
-              <option key={v.id || v.name} value={v.name}>{v.name}</option>
-            ))}
-          </select>
-          <select
-            value={docGroupFilter}
-            onChange={e => host.setState({ docGroupFilter: e.target.value, catFilter: 'all', docListPage: 0 })}
-            style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 140 }}
-          >
-            <option value="all">All groups</option>
-            {allGroups.map(g => (
-              <option key={g} value={g}>{g}</option>
-            ))}
-          </select>
-          <select
-            value={catFilter}
-            onChange={e => host.setState({ catFilter: e.target.value, docListPage: 0 })}
-            style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 140 }}
-          >
-            <option value="all">All categories</option>
-            {allCategories.map(c => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-          <select
-            value={docListSort}
-            onChange={e => host.setState({ docListSort: e.target.value as any, docListPage: 0 })}
-            style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none' }}
-          >
-            <option value="default">Default order</option>
-            <option value="name_az">Name A–Z</option>
-            <option value="newest">Newest</option>
-          </select>
-          {/* Toggle for 4 Recent Vessels vs All Vessels */}
-          {false && vessels.length > 4 && (
-            <button
-              onClick={() => host.setState({ showAllVesselsInFolderView: !showAllVesselsInFolderView })}
-              style={{
-                padding: '6px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12,
-                background: showAllVesselsInFolderView ? '#0f172a' : '#f1f5f9',
-                color: showAllVesselsInFolderView ? '#fff' : '#334155',
-                fontWeight: 600, cursor: 'pointer', outline: 'none', display: 'inline-flex', alignItems: 'center', gap: 4
-              }}
-            >
-              {showAllVesselsInFolderView ? 'Showing All Vessels ⌃' : `Show All Vessels (${vessels.length}) ⌄`}
-            </button>
+        {/* ── Filter Toolbar ── */}
+        <div style={{ background: '#fff', borderRadius: 10, padding: '10px 12px', border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {/* 3 Scope Options: 1st Option = Specific Vessels, 2nd Option = Common for all vessels, 3rd Option = Kaizen - Knowledge Bank */}
+          {docViewMode === 'list' && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingBottom: 6, borderBottom: '1px solid #f1f5f9' }}>
+              <div style={{ display: 'inline-flex', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 8, padding: 3, gap: 4 }}>
+                <button
+                  onClick={() => host.setState({ docScopeType: 'vessels', vesselFilter: 'all', docGroupFilter: 'all', catFilter: 'all', docListPage: 0 })}
+                  style={{
+                    padding: '6px 14px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                    background: docScopeType === 'vessels' ? '#0284c7' : 'transparent',
+                    color: docScopeType === 'vessels' ? '#fff' : '#475569',
+                    display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease',
+                  }}
+                >
+                  <span>🚢</span> 1. Specific Vessels
+                </button>
+                <button
+                  onClick={() => host.setState({ docScopeType: 'common', vesselFilter: 'all', docGroupFilter: 'all', catFilter: 'all', docListPage: 0 })}
+                  style={{
+                    padding: '6px 14px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                    background: docScopeType === 'common' ? '#0284c7' : 'transparent',
+                    color: docScopeType === 'common' ? '#fff' : '#475569',
+                    display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease',
+                  }}
+                >
+                  <span>📁</span> 2. Common for all vessels
+                </button>
+                <button
+                  onClick={() => host.setState({ docScopeType: 'kaizen', vesselFilter: 'all', docGroupFilter: 'all', catFilter: 'all', docListPage: 0 })}
+                  style={{
+                    padding: '6px 14px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                    background: docScopeType === 'kaizen' ? '#0284c7' : 'transparent',
+                    color: docScopeType === 'kaizen' ? '#fff' : '#475569',
+                    display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease',
+                  }}
+                >
+                  <span>📚</span> 3. Kaizen - Knowledge Bank
+                </button>
+              </div>
+
+              <span style={{ fontSize: 12, color: '#64748b' }}>
+                {docScopeType === 'vessels' && `Showing documents for ${vesselFilter !== 'all' ? vesselFilter : 'individual vessels'}`}
+                {docScopeType === 'common' && 'Showing documents shared across all vessels (Common for all ships)'}
+                {docScopeType === 'kaizen' && 'Showing global Kaizen - Knowledge Bank documents'}
+              </span>
+            </div>
           )}
-          {documentVesselCount < vessels.length && (
-            <button
-              onClick={() => void host._loadMoreDocumentVessels()}
-              disabled={documentVesselsLoadingMore}
-              style={{
-                padding: '6px 12px', borderRadius: 8, border: '1px solid #0284c7', fontSize: 12,
-                background: documentVesselsLoadingMore ? '#e2e8f0' : '#0284c7', color: documentVesselsLoadingMore ? '#64748b' : '#fff',
-                fontWeight: 600, cursor: documentVesselsLoadingMore ? 'wait' : 'pointer', outline: 'none',
-              }}
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            <div style={{ position: 'relative', flex: '1 1 180px', minWidth: 160 }}>
+              <span style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 12 }}>🔍</span>
+              <input
+                type="text"
+                placeholder="Filter by vessel, group, category, path..."
+                value={textFilter}
+                onChange={e => host.setState({ textFilter: e.target.value, docListPage: 0 })}
+                style={{ width: '100%', padding: '6px 10px 6px 28px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, outline: 'none', boxSizing: 'border-box' }}
+              />
+            </div>
+            {docScopeType === 'vessels' && (
+              <select
+                value={vesselFilter}
+                onChange={e => host.setState({ vesselFilter: e.target.value, docListPage: 0 })}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 140 }}
+              >
+                <option value="all">All vessels</option>
+                {vessels.map(v => (
+                  <option key={v.id || v.name} value={v.name}>{v.name}</option>
+                ))}
+              </select>
+            )}
+            {docScopeType !== 'kaizen' && (
+              <select
+                value={docGroupFilter}
+                onChange={e => host.setState({ docGroupFilter: e.target.value, catFilter: 'all', docListPage: 0 })}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 160 }}
+              >
+                <option value="all">All groups</option>
+                {allGroups.map(g => (
+                  <option key={g} value={g}>{g}</option>
+                ))}
+              </select>
+            )}
+            <select
+              value={catFilter}
+              onChange={e => host.setState({ catFilter: e.target.value, docListPage: 0 })}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 160 }}
             >
-              {documentVesselsLoadingMore ? 'Loading vessels...' : `More vessels (+${Math.min(8, vessels.length - documentVesselCount)})`}
-            </button>
-          )}
-          <div style={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: 8, overflow: 'hidden', marginLeft: 'auto' }}>
-            <button
-              onClick={() => host.setState({ docViewMode: 'folder' })}
-              style={{ padding: '5px 10px', background: docViewMode === 'folder' ? '#e2e8f0' : '#fff', border: 'none', cursor: 'pointer', fontSize: 13 }}
-              title="Folder view"
-            >::</button>
-            <button
-              onClick={() => host.setState({ docViewMode: 'list', docMainFolder: null, folderPathStack: [] })}
-              style={{ padding: '5px 10px', background: docViewMode === 'list' ? '#e2e8f0' : '#fff', border: 'none', borderLeft: '1px solid #cbd5e1', cursor: 'pointer', fontSize: 13 }}
-              title="List view"
-            >☰</button>
+              <option value="all">All categories</option>
+              {allCategories.map(c => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+            <select
+              value={attachmentFilter}
+              onChange={e => host.setState({ attachmentFilter: e.target.value as any, docListPage: 0 })}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 180 }}
+            >
+              <option value="all">All attachment status</option>
+              <option value="attached">Attachment Available</option>
+              <option value="not_attached">Attachment Required</option>
+            </select>
+            <select
+              value={docListSort}
+              onChange={e => host.setState({ docListSort: e.target.value as any, docListPage: 0 })}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none' }}
+            >
+              <option value="default">Default order</option>
+              <option value="name_az">Name A–Z</option>
+              <option value="newest">Newest</option>
+            </select>
+
+            {docScopeType === 'vessels' && documentVesselCount < vessels.length && (
+              <button
+                onClick={() => void host._loadMoreDocumentVessels()}
+                disabled={documentVesselsLoadingMore}
+                style={{
+                  padding: '6px 12px', borderRadius: 8, border: '1px solid #0284c7', fontSize: 12,
+                  background: documentVesselsLoadingMore ? '#e2e8f0' : '#0284c7', color: documentVesselsLoadingMore ? '#64748b' : '#fff',
+                  fontWeight: 600, cursor: documentVesselsLoadingMore ? 'wait' : 'pointer', outline: 'none',
+                }}
+              >
+                {documentVesselsLoadingMore ? 'Loading vessels...' : `More vessels (+${Math.min(8, vessels.length - documentVesselCount)})`}
+              </button>
+            )}
+            <div style={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: 8, overflow: 'hidden', marginLeft: 'auto' }}>
+              <button
+                onClick={() => host.setState({ docViewMode: 'folder' })}
+                style={{ padding: '5px 10px', background: docViewMode === 'folder' ? '#e2e8f0' : '#fff', border: 'none', cursor: 'pointer', fontSize: 13 }}
+                title="Folder view"
+              >::</button>
+              <button
+                onClick={() => host.setState({ docViewMode: 'list', docMainFolder: null, folderPathStack: [] })}
+                style={{ padding: '5px 10px', background: docViewMode === 'list' ? '#e2e8f0' : '#fff', border: 'none', borderLeft: '1px solid #cbd5e1', cursor: 'pointer', fontSize: 13 }}
+                title="List view"
+              >☰</button>
+            </div>
           </div>
         </div>
 
@@ -910,6 +1012,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
                   {[
                     { id: 'vessels_root', name: 'Vessels', emoji: '🚢', bg: '#e0f2fe', sub: `${vessels.length} vessels` },
+                    { id: 'common', name: 'Common for all vessels', emoji: '📁', bg: '#fef3c7', sub: 'Shared documents' },
                     { id: 'kaizen_root', name: 'Kaizen - Knowledge Bank', emoji: '📚', bg: '#ede9fe', sub: 'Knowledge base' },
                   ].map(item => (
                     <div
@@ -918,8 +1021,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         if (item.id === 'kaizen_root') {
                           host._pushFolderNav([{ id: 'kaizen_root', name: 'Kaizen - Knowledge Bank' }], 'Kaizen - Knowledge Bank');
                           host.setState({ vesselFilter: 'all' });
+                        } else if (item.id === 'common') {
+                          host._pushFolderNav([{ id: 'common', name: 'Common for all vessels' }], null);
+                          host.setState({ docScopeType: 'common', vesselFilter: 'all' });
                         } else {
                           host._pushFolderNav([{ id: 'vessels_root', name: 'Vessels' }], null);
+                          host.setState({ docScopeType: 'vessels', vesselFilter: 'all' });
                         }
                       }}
                       style={{
@@ -1013,11 +1120,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
             ) : atVesselsRoot ? (
 
-              /* Level 1: Inside Vessels - Specific Vessels + Common for all ships */
+              /* Level 1: Inside Vessels - Specific Vessels */
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
                 {[
                   { id: 'specific_vessels', name: 'Specific Vessels', emoji: '🚢', bg: '#e0f2fe', sub: `${vessels.length} vessels` },
-                  { id: 'common', name: 'Common for all ships', emoji: '📁', bg: '#fef3c7', sub: 'Shared documents' },
                 ].map(item => (
                   <div
                     key={item.id}
@@ -1139,7 +1245,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         if (!/^sf_/.test(realFolderId)) {
                           const subGroupKey = matchingSubRow?.groupKey || realFolderId;
                           void host._refreshFolderFiles(realFolderId, subGroupKey, true).catch(() => undefined);
-                        } else if (currentFolderNode && !/^(sf_|common)/.test(currentFolderNode.id)) {
+                        } else if (currentFolderNode && !/^(sf_|category_|common)/.test(currentFolderNode.id)) {
                           const parentGroupKey = currentFolderMatchRow?.groupKey || currentFolderNode.id;
                           host._refreshFolderFiles(currentFolderNode.id, parentGroupKey).catch(() => undefined);
                         }
@@ -1178,7 +1284,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         </tr>
                       </thead>
                       <tbody>
-                        {allCurrentFolderFiles.map((file, idx) => {
+                        {visibleCurrentFolderFiles.map((file, idx) => {
                           const fileId = (file as any).id || file.name;
                           const isSelected = folderViewSelectedFiles.has(fileId);
                           return (
@@ -1199,14 +1305,42 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                               </td>
                               <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10 }}>
                                 <span style={{ fontSize: 18 }}>{(file as any).pending ? '⏳' : '📄'}</span>
-                                {file.name}
+                                <span
+                                  onClick={() => {
+                                    if ((file as any).pending) {
+                                      alert(`File "${file.name}" is pending — it will be available after approval.`);
+                                      return;
+                                    }
+                                    const currentPath = currentVesselNameFromStack && docMainFolder && currentFolderNode
+                                      ? `${currentVesselNameFromStack} > ${docMainFolder} > ${currentFolderNode.name}`
+                                      : (currentFolderNode?.name || '');
+                                    void host._openDocumentFile(fileId, file.name, currentPath);
+                                  }}
+                                  style={{ cursor: 'pointer', color: '#0284c7', textDecoration: 'underline' }}
+                                  title={`Click to view/download ${file.name}`}
+                                >
+                                  {file.name}
+                                </span>
                                 {(file as any).pending && <span style={{ fontSize: 11, color: '#d97706', fontWeight: 600, background: '#fef3c7', borderRadius: 4, padding: '1px 6px' }}>Pending Approval</span>}
                               </td>
                               <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.size}</td>
                               <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.date}</td>
                               <td style={{ padding: '12px 16px', textAlign: 'right' }}>
                                 <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                                  <button style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#0078d4' }}>
+                                  <button
+                                    onClick={() => {
+                                      if ((file as any).pending) {
+                                        alert(`File "${file.name}" is pending — it will be available after approval.`);
+                                        return;
+                                      }
+                                      const currentPath = currentVesselNameFromStack && docMainFolder && currentFolderNode
+                                        ? `${currentVesselNameFromStack} > ${docMainFolder} > ${currentFolderNode.name}`
+                                        : (currentFolderNode?.name || '');
+                                      void host._openDocumentFile(fileId, file.name, currentPath);
+                                    }}
+                                    style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#0078d4' }}
+                                    title={`View or download ${file.name}`}
+                                  >
                                     View / Download
                                   </button>
                                   <button
@@ -1226,7 +1360,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   </div>
                 )}
               </div>
-            ) : allCurrentFolderFiles.length > 0 ? (
+            ) : visibleCurrentFolderFiles.length > 0 ? (
               /* Folder File Items List */
               <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -1240,7 +1374,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     </tr>
                   </thead>
                   <tbody>
-                    {allCurrentFolderFiles.map((file, idx) => {
+                    {visibleCurrentFolderFiles.map((file, idx) => {
                       const fileId = (file as any).id || file.name;
                       const isSelected = folderViewSelectedFiles.has(fileId);
                       return (
@@ -1261,14 +1395,42 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           </td>
                           <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10 }}>
                             <span style={{ fontSize: 18 }}>{(file as any).pending ? '⏳' : '📄'}</span>
-                            {file.name}
+                            <span
+                              onClick={() => {
+                                if ((file as any).pending) {
+                                  alert(`File "${file.name}" is pending — it will be available after approval.`);
+                                  return;
+                                }
+                                const currentPath = currentVesselNameFromStack && docMainFolder && currentFolderNode
+                                  ? `${currentVesselNameFromStack} > ${docMainFolder} > ${currentFolderNode.name}`
+                                  : (currentFolderNode?.name || '');
+                                void host._openDocumentFile(fileId, file.name, currentPath);
+                              }}
+                              style={{ cursor: 'pointer', color: '#0284c7', textDecoration: 'underline' }}
+                              title={`Click to view/download ${file.name}`}
+                            >
+                              {file.name}
+                            </span>
                             {(file as any).pending && <span style={{ fontSize: 11, color: '#d97706', fontWeight: 600, background: '#fef3c7', borderRadius: 4, padding: '1px 6px' }}>Pending Approval</span>}
                           </td>
                           <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.size}</td>
                           <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.date}</td>
                           <td style={{ padding: '12px 16px', textAlign: 'right' }}>
                             <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                              <button style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#0078d4' }}>
+                              <button
+                                onClick={() => {
+                                  if ((file as any).pending) {
+                                    alert(`File "${file.name}" is pending — it will be available after approval.`);
+                                    return;
+                                  }
+                                  const currentPath = currentVesselNameFromStack && docMainFolder && currentFolderNode
+                                    ? `${currentVesselNameFromStack} > ${docMainFolder} > ${currentFolderNode.name}`
+                                    : (currentFolderNode?.name || '');
+                                  void host._openDocumentFile(fileId, file.name, currentPath);
+                                }}
+                                style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#0078d4' }}
+                                title={`View or download ${file.name}`}
+                              >
                                 View / Download
                               </button>
                               <button
@@ -1360,7 +1522,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {/* Table wrapper */}
             <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0', overflowX: 'auto', width: '100%' }}>
-              <table style={{ width: '100%', minWidth: 850, borderCollapse: 'collapse', fontSize: 12 }}>
+              <table style={{ width: '100%', minWidth: 950, borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0', color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
                     <th style={{ padding: '10px 10px', width: 44, textAlign: 'center' }}>SR.</th>
@@ -1370,13 +1532,15 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     <th style={{ padding: '10px 12px' }}>SUB-CATEGORY</th>
                     <th style={{ padding: '10px 12px' }}>FOLDER PATH</th>
                     <th style={{ padding: '10px 12px' }}>FILE NAME</th>
+                    <th style={{ padding: '10px 12px' }}>SIZE</th>
+                    <th style={{ padding: '10px 12px' }}>DATE &amp; TIME UPLOADED</th>
                     <th style={{ padding: '10px 12px', textAlign: 'right' }}>ATTACHMENT</th>
                   </tr>
                 </thead>
                 <tbody>
                   {pageGroupedRows.length === 0 ? (
                     <tr>
-                      <td colSpan={8} style={{ padding: '36px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
+                      <td colSpan={10} style={{ padding: '36px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
                         No documents found. {textFilter || vesselFilter !== 'all' || docGroupFilter !== 'all' || catFilter !== 'all' ? 'Try clearing the filters.' : ''}
                       </td>
                     </tr>
@@ -1393,9 +1557,25 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         onMouseLeave={e => (e.currentTarget.style.background = '')}
                       >
                         <td style={{ padding: '10px 10px', color: '#94a3b8', fontSize: 11, fontFamily: 'monospace', textAlign: 'center' }}>{globalIdx}</td>
-                        <td style={{ padding: '10px 12px', fontWeight: 700, color: '#0f172a' }}>{r.vesselName}</td>
+                        <td style={{ padding: '10px 12px', fontWeight: 700, color: '#0f172a' }}>
+                          {r.vesselName === 'Common for all vessels' ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#fef3c7', color: '#92400e', borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 700 }}>
+                              <span>📁</span> Common for all vessels
+                            </span>
+                          ) : r.vesselName === 'Kaizen - Knowledge Bank' ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#ede9fe', color: '#6b21a8', borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 700 }}>
+                              <span>📚</span> Kaizen - Knowledge Bank
+                            </span>
+                          ) : (
+                            r.vesselName
+                          )}
+                        </td>
                         <td style={{ padding: '10px 12px' }}>
-                          <span style={{ display: 'inline-block', borderRadius: 8, padding: '3px 8px', fontSize: 11, fontWeight: 600, background: '#eff6ff', color: '#2563eb' }}>
+                          <span style={{
+                            display: 'inline-block', borderRadius: 8, padding: '3px 8px', fontSize: 11, fontWeight: 600,
+                            background: r.group === 'Kaizen - Knowledge Bank' ? '#ede9fe' : (r.group === 'Insurance' ? '#fef3c7' : (r.group === 'Commercial & Chartering' ? '#dcfce7' : '#eff6ff')),
+                            color: r.group === 'Kaizen - Knowledge Bank' ? '#6b21a8' : (r.group === 'Insurance' ? '#b45309' : (r.group === 'Commercial & Chartering' ? '#15803d' : '#2563eb')),
+                          }}>
                             {r.group}
                           </span>
                         </td>
@@ -1425,7 +1605,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   <span
                                     onClick={() => {
                                       if (file.id && !file.id.startsWith('file_')) {
-                                        window.open(`${host._base()}/api/files/${file.id}/content`, '_blank');
+                                        void host._openDocumentFile(file.id, file.name);
                                       } else {
                                         alert(`File "${file.name}" is pending — it will be available after approval.`);
                                       }
@@ -1441,6 +1621,24 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           ) : (
                             <span style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: 11 }}>—</span>
                           )}
+                        </td>
+                        <td style={{ padding: '10px 12px', color: '#64748b', fontSize: 11, whiteSpace: 'nowrap' }}>
+                          {hasFiles ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              {r.files.map(file => <span key={file.id}>{file.size || '—'}</span>)}
+                            </div>
+                          ) : '—'}
+                        </td>
+                        <td style={{ padding: '10px 12px', color: '#64748b', fontSize: 11, whiteSpace: 'nowrap' }}>
+                          {hasFiles ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              {r.files.map(file => (
+                                <span key={file.id} title={file.uploadedAt ? new Date(file.uploadedAt).toISOString() : undefined}>
+                                  {file.uploadedAt ? new Date(file.uploadedAt).toLocaleString() : '—'}
+                                </span>
+                              ))}
+                            </div>
+                          ) : '—'}
                         </td>
                         <td style={{ padding: '10px 12px', textAlign: 'right' }}>
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
@@ -1487,6 +1685,16 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
                                     const newUpload = { name: file.name, size: `${(file.size / 1024).toFixed(1)} KB`, date: 'Just now', pending: statusPending, id: fileId, uploadedAt: Date.now() };
                                     const liveFolderId = folderId || r.uploadFolderId;
+                                    const vesselRecord = host.state.vessels.find(v => v.name === r.vesselName);
+                                    const folderTargetStack = [
+                                      { id: 'vessels_root', name: 'Vessels' },
+                                      { id: 'specific_vessels', name: 'Specific Vessels' },
+                                      { id: vesselRecord?.id || r.vesselName, name: r.vesselName },
+                                      { id: `category_${r.category}`, name: r.category },
+                                      ...(r.subCategory && r.subCategory !== r.category
+                                        ? [{ id: liveFolderId, name: r.subCategory }]
+                                        : []),
+                                    ];
 
                                     host.setState(prev => {
                                       // Use functional setState to avoid stale closure on rows/uploadedFilesByFolder
@@ -1544,6 +1752,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         docUploadMsg: msg,
                                         uploadedFilesByFolder: updatedByFolder,
                                         rows: updatedRows,
+                                        folderPathStack: folderTargetStack,
+                                        docMainFolder: r.group as 'Technical & Crewing' | 'Commercial & Chartering' | 'Insurance' | 'Kaizen - Knowledge Bank' | 'Knowledge Bank',
                                         docListPage: 0,
                                       };
                                     }, () => {
