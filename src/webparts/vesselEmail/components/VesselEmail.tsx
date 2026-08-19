@@ -1411,10 +1411,10 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           catFilter: 'all',
           docListPage: 0,
         }, () => {
-          // Refresh files directly using SPO folder IDs from the delta-synced spoFolderMap.
-          // This is fast and avoids a full Graph tree walk (hundreds of API calls).
-          // The delta sync (running in background) keeps spoFolderMap up to date.
-          this._refreshFilesFromBackendRows();
+          // The flat tree contains folder structure only. Walk the active
+          // SharePoint tree so parent folders with child folders (for example
+          // Invoices & Payments > Invoice) are traversed to their file leaves.
+          this._refreshDocumentVesselFiles(initialVesselNames);
         });
         return;
       }
@@ -1486,6 +1486,12 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         // Reset the run-once guard so the new vessel's rows are always refreshed.
         this._lastRefreshedRowsKey = '';
         this._refreshFilesFromBackendRows();
+        // DB rows describe the folder structure, but existing files live in
+        // SharePoint. Walk the active drive so a refresh never depends on
+        // stale cached folder IDs.
+        void this._mergeLiveSharePointFiles([vesselName]).catch(err =>
+          console.warn('[VesselDMS] live vessel file refresh warning:', err)
+        );
       });
     } catch (err) {
       console.warn('[VesselDMS] _loadVesselRowsFromApi warning:', err);
@@ -1627,6 +1633,25 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               } catch { /* 404 = folder not in active drive, skip */ }
             }
 
+            // Initial page loads can run before delta sync populates
+            // spoFolderMap. Resolve the current folder by its stable path so
+            // existing SharePoint files are still shown after a refresh.
+            if (fileItems.length === 0) {
+              const sharePointFolderPath = this._sharePointFolderPath(item.subFolderPath, '');
+              const candidatePath = `${this.VESSEL_ROOT}/Specific Vessels/${sharePointFolderPath}`;
+              if (candidatePath) {
+                try {
+                  const encodedPath = candidatePath.split('/').map(part => encodeURIComponent(part)).join('/');
+                  const url = `/sites/${siteId}/drives/${driveId}/root:/${encodedPath}:/children?$select=id,name,size,lastModifiedDateTime,file&$top=200`;
+                  const result: any = await graphClient!.api(url).get();
+                  const hits: any[] = (result?.value ?? []).filter((itm: any) => !!itm.file);
+                  if (hits.length > 0) {
+                    fileItems = hits;
+                  }
+                } catch { /* folder may not exist in the active drive */ }
+              }
+            }
+
             if (fileItems.length === 0) return;
 
             batchResults.push({
@@ -1714,8 +1739,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     });
     if (liveFolderRows.length === 0) return;
 
-    const keyFor = (row: Pick<FlatRow, 'vesselName' | 'group' | 'category' | 'subCategory'>): string =>
-      [row.vesselName, row.group, row.category, row.subCategory || row.category]
+    const keyFor = (row: Pick<FlatRow, 'vesselName' | 'group' | 'category' | 'subCategory' | 'subFolderPath'>): string =>
+      [row.vesselName, row.group, row.category, row.subCategory || row.category, row.subFolderPath]
         .map(value => cleanName(value || '').trim().toLowerCase())
         .join('||');
 
@@ -1813,7 +1838,14 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
       mergedFolderRows.forEach(row => {
         if (row.fileName) {
-          const newF = { name: row.fileName, size: '—', date: 'Today', pending: false, id: row.fileId || row.fileName };
+          const newF = {
+            name: row.fileName,
+            size: '—',
+            date: row.fileUploadedAt ? new Date(row.fileUploadedAt).toLocaleString() : 'Today',
+            pending: false,
+            id: row.fileId || row.fileName,
+            uploadedAt: row.fileUploadedAt,
+          };
           if (row.groupKey) {
             const list = updatedByFolder[row.groupKey] || [];
             if (!list.some((f: any) => f.name === row.fileName)) {
@@ -2130,7 +2162,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   public async _getGraphChildren(
     folderPath: string,
     signal: AbortSignal,
-  ): Promise<Array<{ id: string; name: string; isFolder: boolean; monthDriven: boolean; upload: boolean }>> {
+  ): Promise<Array<{ id: string; name: string; isFolder: boolean; monthDriven: boolean; upload: boolean; lastModifiedDateTime?: string }>> {
     const { graphClient, siteId, driveId } = this.props;
     if (!graphClient || !siteId || !driveId) return [];
 
@@ -2140,7 +2172,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       // Graph root children uses /root/children, not /root:/:/children.
       const itemPath = cleanP ? `root:/${encodedPath}:/children` : 'root/children';
       const url = `/sites/${siteId}/drives/${driveId}/${itemPath}` +
-        `?$select=id,name,folder,file&$top=200`;
+        `?$select=id,name,folder,file,lastModifiedDateTime&$top=200`;
       const result: any = await graphClient.api(url).get();
       if (signal.aborted) return [];
       return (result.value ?? []).map((item: any) => ({
@@ -2149,6 +2181,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         isFolder: !!item.folder,
         monthDriven: false,
         upload: !!item.folder,
+        lastModifiedDateTime: item.lastModifiedDateTime,
       }));
     };
 
@@ -2195,7 +2228,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   ): Promise<void> {
     if (signal.aborted) return;
 
-    let kids: Array<{ id: string; name: string; isFolder: boolean; monthDriven: boolean; upload: boolean }>;
+    let kids: Array<{ id: string; name: string; isFolder: boolean; monthDriven: boolean; upload: boolean; lastModifiedDateTime?: string }>;
     try {
       kids = await this._getGraphChildren(folderPath, signal);
     } catch {
@@ -2246,6 +2279,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           vesselName, group, category, subCategory, subFolderPath: subPath,
           fileName: f.name, fileId: f.id, canUpload, groupKey,
           uploadFolderId: folderPath,
+          fileUploadedAt: f.lastModifiedDateTime ? Date.parse(f.lastModifiedDateTime) : undefined,
           monthDriven: false,
         }));
         onRows(leafRows);
@@ -3179,9 +3213,11 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         if (resolved?.folder_id) {
           resolvedId = resolved.folder_id;
         } else {
+          this._refreshFolderFilesInFlight.delete(uploadFolderId);
           return;
         }
       } catch {
+        this._refreshFolderFilesInFlight.delete(uploadFolderId);
         return;
       }
     }
@@ -3282,6 +3318,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       // Passing them to /api/folders/{id}/children causes Graph 404s and a polling loop.
       if (/^\d+$/.test(resolvedId)) {
         console.warn(`[VesselDMS] _refreshFolderFiles: skipping REST fallback for numeric DB ID "${resolvedId}" — not a valid drive item ID`);
+        this._refreshFolderFilesInFlight.delete(uploadFolderId);
         return;
       }
       try {
@@ -3290,15 +3327,14 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         console.log(`[VesselDMS] _refreshFolderFiles: fetched ${fileItems.length} files via REST API for "${resolvedId}"`);
       } catch (err) {
         console.warn(`[VesselDMS] failed to load children for folder "${resolvedId}"`, err);
+        this._refreshFolderFilesInFlight.delete(uploadFolderId);
         return;
       }
     }
 
-    // Only mark loaded when Graph actually returned files — if empty, allow retry
-    // so the folder view can pick up files once Graph consistency catches up.
-    if (fileItems.length > 0) {
-      this._filesLoadedForFolders.add(uploadFolderId);
-    }
+    // Keep empty responses retryable because SharePoint can briefly return an
+    // empty children collection immediately after an upload.
+    if (fileItems.length > 0) this._filesLoadedForFolders.add(uploadFolderId);
     this._refreshFolderFilesInFlight.delete(uploadFolderId);
 
     const parsedUploads = fileItems.map((f: any) => ({
@@ -3307,6 +3343,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       date: f.lastModifiedDateTime ? new Date(f.lastModifiedDateTime).toLocaleString([], { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : (f.modified || 'Today'),
       pending: false,
       id: f.id,
+  uploadedAt: f.lastModifiedDateTime ? Date.parse(f.lastModifiedDateTime) : undefined,
     }));
 
     this.setState(prev => {
@@ -3340,7 +3377,16 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         ...(isUploadFolderIdGraph ? (prev.uploadedFilesByFolder[uploadFolderId] || []) : []),
         ...(isResolvedIdGraph ? (prev.uploadedFilesByFolder[resolvedId] || []) : []),
       ];
-      const mergedUploads: Array<{ name: string; size: string; date: string; pending: boolean; id: string }> = [...parsedUploads];
+      const cachedByName = new Map<string, any>();
+      allCachedUploads.forEach((file: any) => {
+        if (file?.name && !cachedByName.has(file.name.toLowerCase())) {
+          cachedByName.set(file.name.toLowerCase(), file);
+        }
+      });
+      const mergedUploads: Array<{ name: string; size: string; date: string; pending: boolean; id: string; uploadedAt?: number }> = parsedUploads.map(file => ({
+        ...file,
+        uploadedAt: cachedByName.get(file.name.toLowerCase())?.uploadedAt,
+      }));
       for (const ex of allCachedUploads) {
         if (!mergedUploads.some(u => u.name === ex.name)) {
           mergedUploads.push({
@@ -3349,6 +3395,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             date: ex.date || 'Today',
             pending: Boolean(ex.pending),
             id: (ex as any).id || ex.name,
+            uploadedAt: (ex as any).uploadedAt,
           });
         }
       }

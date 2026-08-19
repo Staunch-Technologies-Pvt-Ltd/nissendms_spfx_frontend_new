@@ -164,6 +164,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       }
     }
 
+    type DisplayFile = { name: string; size: string; date: string; pending?: boolean; id?: string; uploadedAt?: number };
+    const allCurrentFolderFilesRaw: DisplayFile[] = [];
 
     // Collect all keys under which files for the current folder may be stored
     const currentFolderLiveId = resolvedCurrentFolderId
@@ -197,9 +199,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       }
     }
 
-    const allCurrentFolderFilesRaw: Array<{ name: string; size: string; date: string; pending?: boolean; id?: string }> = [];
     const seenFileNames = new Set<string>();
-    const addFiles = (list: Array<{ name: string; size: string; date: string; pending?: boolean; id?: string }> | undefined): void => {
+    const addFiles = (list: DisplayFile[] | undefined): void => {
       (list || []).forEach(f => {
         if (f?.name && !seenFileNames.has(f.name.toLowerCase())) {
           seenFileNames.add(f.name.toLowerCase());
@@ -256,7 +257,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         .forEach(r => {
           if (!seenFileNames.has(r.fileName!.toLowerCase())) {
             seenFileNames.add(r.fileName!.toLowerCase());
-            allCurrentFolderFilesRaw.push({ name: r.fileName!, size: '—', date: '—' });
+            allCurrentFolderFilesRaw.push({ name: r.fileName!, size: '—', date: '—', uploadedAt: r.fileUploadedAt });
           }
         });
     }
@@ -266,12 +267,17 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         .forEach(r => {
           if (!seenFileNames.has(r.fileName!.toLowerCase())) {
             seenFileNames.add(r.fileName!.toLowerCase());
-            allCurrentFolderFilesRaw.push({ name: r.fileName!, size: '—', date: '—', id: r.fileId || undefined });
+            allCurrentFolderFilesRaw.push({ name: r.fileName!, size: '—', date: '—', id: r.fileId || undefined, uploadedAt: r.fileUploadedAt });
           }
         });
     }
+    const fileTimestamp = (file: DisplayFile): number => {
+      if (typeof file.uploadedAt === 'number' && Number.isFinite(file.uploadedAt)) return file.uploadedAt;
+      const parsed = Date.parse(file.date);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
     const allCurrentFolderFiles = [...allCurrentFolderFilesRaw].sort(
-      (a, b) => ((b as any).uploadedAt || 0) - ((a as any).uploadedAt || 0)
+      (a, b) => fileTimestamp(b) - fileTimestamp(a) || a.name.localeCompare(b.name)
     );
     // ── Build source rows from API only — no mock fallback ──
     const allRows: FlatRow[] = rows || [];
@@ -345,7 +351,14 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       const normSub = (r.subFolderPath || '').trim().toLowerCase();
       const liveId = host._getLiveSharePointFolderId(r.subFolderPath);
       const liveNode = liveId ? host.state.spoFolderMap.get(liveId) : null;
-      const memFiles = (liveNode?.children || []).filter(c => !c.isFolder).map(c => ({ id: c.id, name: c.name, size: '—', date: 'Today', pending: false }));
+      const memFiles = (liveNode?.children || []).filter(c => !c.isFolder).map(c => ({
+        id: c.id,
+        name: c.name,
+        size: '—',
+        date: (c as any).lastModifiedDateTime ? new Date((c as any).lastModifiedDateTime).toLocaleString() : 'Today',
+        pending: false,
+        uploadedAt: (c as any).lastModifiedDateTime ? Date.parse((c as any).lastModifiedDateTime) : undefined,
+      }));
 
       const liveUploads = liveId ? (uploadedFilesByFolder[liveId] || []) : [];
       const subFolderUploads = normSub ? (uploadedFilesByFolder[normSub] || []) : [];
@@ -749,7 +762,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         updatedKeys: Object.keys(updatedByFolder),
                       });
 
-                      return { uploadedFilesByFolder: updatedByFolder, docUploadMsg: msg };
+                      return { uploadedFilesByFolder: updatedByFolder, docUploadMsg: msg, docListPage: 0 };
                     }, () => {
                       // Refresh the actual folder contents so the newly uploaded file and
                       // every file already in this SharePoint folder appear together.
@@ -1505,13 +1518,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                       if (existingRowIdx !== -1) {
                                         updatedRows = baseRows.map((row: FlatRow, i: number) =>
                                           i === existingRowIdx
-                                            ? { ...row, fileName: file.name, fileId: fileId || `file_${Date.now()}`, filePending: statusPending }
+                                            ? { ...row, fileName: file.name, fileId: fileId || `file_${Date.now()}`, filePending: statusPending, fileUploadedAt: newUpload.uploadedAt }
                                             : row
                                         );
                                       } else {
                                         // All rows for this groupKey already have files — append a new row
                                         const refRow = baseRows.find((row: FlatRow) => row.groupKey === r.groupKey) || r;
-                                        const newRow = { ...refRow, fileName: file.name, fileId: fileId || `file_${Date.now()}`, filePending: statusPending };
+                                        const newRow = { ...refRow, fileName: file.name, fileId: fileId || `file_${Date.now()}`, filePending: statusPending, fileUploadedAt: newUpload.uploadedAt };
                                         updatedRows = [...baseRows, newRow];
                                       }
 
@@ -1531,6 +1544,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         docUploadMsg: msg,
                                         uploadedFilesByFolder: updatedByFolder,
                                         rows: updatedRows,
+                                        docListPage: 0,
                                       };
                                     }, () => {
                                       // Call _refreshFolderFiles in setState callback to ensure state is updated first

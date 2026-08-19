@@ -1649,7 +1649,7 @@ var VesselEmail = /** @class */ (function (_super) {
                         if (liveFolderRows.length === 0)
                             return [2 /*return*/];
                         keyFor = function (row) {
-                            return [row.vesselName, row.group, row.category, row.subCategory || row.category]
+                            return [row.vesselName, row.group, row.category, row.subCategory || row.category, row.subFolderPath]
                                 .map(function (value) { return (0, constants_1.cleanName)(value || '').trim().toLowerCase(); })
                                 .join('||');
                         };
@@ -2713,7 +2713,6 @@ var VesselEmail = /** @class */ (function (_super) {
                             return [2 /*return*/];
                         if (!force && this._filesLoadedForFolders.has(uploadFolderId))
                             return [2 /*return*/];
-                        this._filesLoadedForFolders.add(uploadFolderId);
                         resolvedId = uploadFolderId;
                         if (!uploadFolderId.includes('/')) return [3 /*break*/, 4];
                         _e.label = 1;
@@ -2750,7 +2749,10 @@ var VesselEmail = /** @class */ (function (_super) {
                         _e.label = 5;
                     case 5:
                         _e.trys.push([5, 7, , 8]);
-                        encodedPath = sharePointFolderPath.split('/').map(function (s) { return encodeURIComponent(s); }).join('/');
+                        // The stored breadcrumb starts at the vessel name; the
+                        // live Documents hierarchy also requires both parent
+                        // containers before that segment.
+                        encodedPath = ("Vessels/Specific Vessels/" + sharePointFolderPath).split('/').map(function (s) { return encodeURIComponent(s); }).join('/');
                         pathUrl = "/sites/".concat(siteId, "/drives/").concat(driveId, "/root:/").concat(encodedPath, ":/children?$select=id,name,size,lastModifiedDateTime,file,folder&$top=200");
                         return [4 /*yield*/, graphClient.api(pathUrl).get()];
                     case 6:
@@ -2800,20 +2802,27 @@ var VesselEmail = /** @class */ (function (_super) {
                         console.warn("[VesselDMS] failed to load children for folder \"".concat(resolvedId, "\""), err_8);
                         return [2 /*return*/];
                     case 16:
-                        // mark loaded only now that we actually have data
-                        this._filesLoadedForFolders.add(uploadFolderId);
+                        // Keep empty responses retryable during SPO consistency windows.
+                        if (fileItems.length > 0)
+                            this._filesLoadedForFolders.add(uploadFolderId);
                         parsedUploads = fileItems.map(function (f) { return ({
                             name: f.name || f.displayName,
                             size: f.size ? "".concat((f.size / 1024).toFixed(1), " KB") : '—',
                             date: f.lastModifiedDateTime ? new Date(f.lastModifiedDateTime).toLocaleDateString() : (f.modified || 'Today'),
                             pending: false,
                             id: f.id,
+                            uploadedAt: f.lastModifiedDateTime ? Date.parse(f.lastModifiedDateTime) : undefined,
                         }); });
                         this.setState(function (prev) {
                             var _a;
                             // Merge fetched parsedUploads with any existing local uploads so we don't wipe out freshly uploaded files
                             var existingFolderUploads = __spreadArray(__spreadArray([], (prev.uploadedFilesByFolder[uploadFolderId] || []), true), (prev.uploadedFilesByFolder[resolvedId] || []), true);
-                            var mergedUploads = __spreadArray([], parsedUploads, true);
+                            var cachedByName = new Map();
+                            existingFolderUploads.forEach(function (file) {
+                                if ((file === null || file === void 0 ? void 0 : file.name) && !cachedByName.has(file.name.toLowerCase()))
+                                    cachedByName.set(file.name.toLowerCase(), file);
+                            });
+                            var mergedUploads = parsedUploads.map(function (file) { return (__assign(__assign({}, file), { uploadedAt: ((_a = cachedByName.get(file.name.toLowerCase())) === null || _a === void 0 ? void 0 : _a.uploadedAt) })); });
                             var _loop_2 = function (ex) {
                                 if (!mergedUploads.some(function (u) { return u.name === ex.name; })) {
                                     mergedUploads.push({
@@ -2822,6 +2831,7 @@ var VesselEmail = /** @class */ (function (_super) {
                                         date: ex.date || 'Today',
                                         pending: Boolean(ex.pending),
                                         id: ex.id || ex.name,
+                                        uploadedAt: ex.uploadedAt,
                                     });
                                 }
                             };
