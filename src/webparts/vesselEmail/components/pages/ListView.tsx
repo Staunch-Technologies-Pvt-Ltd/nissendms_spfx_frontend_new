@@ -2,6 +2,8 @@ import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import type { FlatRow, GroupedRow } from '../types/rows';
 import type { ApprovalItem } from '../types/ui';
+import { isMobileWidth, isTabletWidth } from '../responsive';
+import { resolveDetectedVesselForFile } from '../constants';
 
 const PAGE_ROWS = 10;
 
@@ -10,7 +12,10 @@ export function renderListView(
   filtered: FlatRow[],
   groupedList: GroupedRow[],
 ): React.ReactElement {
-  const { docListPage, docListSort, docUploadRowKey, docUploadBusy, textFilter, vesselFilter, docGroupFilter, catFilter, listViewSelectedFiles } = host.state;
+  const { docListPage, docListSort, docUploadRowKey, docUploadBusy, textFilter, vesselFilter, docGroupFilter, catFilter, listViewSelectedFiles, documentFilesLoading, vesselLoadingName, documentVesselsLoadingMore } = host.state;
+  const viewportWidth = host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200);
+  const isMobile = isMobileWidth(viewportWidth);
+  const isTablet = isTabletWidth(viewportWidth);
 
    let sorted = [...groupedList];
   if (docListSort === 'name_az') {
@@ -32,12 +37,100 @@ export function renderListView(
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0', overflowX: 'auto', width: '100%' }}>
-        <table style={{ width: '100%', minWidth: 850, borderCollapse: 'collapse', fontSize: 12 }}>
+        {isMobile ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
+            {pageRows.map((r, idx) => {
+              const globalIdx = safePage * PAGE_ROWS + idx + 1;
+              const isUploading = docUploadRowKey === r.groupKey && docUploadBusy;
+              const hasFiles = r.files.length > 0;
+              const rowSelectedCount = r.files.filter(f => listViewSelectedFiles.has(f.id)).length;
+              return (
+                <div key={`${r.groupKey}-${idx}`} style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12 }}>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>#{globalIdx}</div>
+                  <div style={{ marginTop: 4, fontSize: 12, color: '#334155' }}><strong>{r.group}</strong> • {r.category} • {r.subCategory || r.category}</div>
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#64748b', wordBreak: 'break-word' }}>{r.subFolderPath}</div>
+                  <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {hasFiles ? r.files.map(file => (
+                      <label key={file.name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={listViewSelectedFiles.has(file.id)}
+                          onChange={() => {
+                            host.setState(prev => {
+                              const next = new Set(prev.listViewSelectedFiles);
+                              if (next.has(file.id)) next.delete(file.id); else next.add(file.id);
+                              return { listViewSelectedFiles: next };
+                            });
+                          }}
+                          style={{ width: 16, height: 16, accentColor: '#ef4444' }}
+                        />
+                        <span
+                          onClick={() => {
+                            if ((file as any).uploading) {
+                              alert(`File "${file.name}" is still uploading. Please wait a moment.`);
+                            } else if (file.id && !file.id.startsWith('file_')) {
+                              void host._openDocumentFile(file.id, file.name);
+                            } else {
+                              alert(`File "${file.name}" is pending — it will be available after approval.`);
+                            }
+                          }}
+                          style={{ fontSize: 12, color: '#0369a1', textDecoration: 'underline', cursor: 'pointer' }}
+                        >
+                          {file.name}{(file as any).uploading ? ' ⏳' : ''}
+                        </span>
+                      </label>
+                    )) : <span style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: 11 }}>No files</span>}
+                  </div>
+                  <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <label style={{ minHeight: 44, background: isUploading ? '#f1f5f9' : '#fff', border: '1px solid #cbd5e1', borderRadius: 8, padding: '10px', fontSize: 12, fontWeight: 700, textAlign: 'center', cursor: isUploading ? 'not-allowed' : 'pointer' }}>
+                      <input type="file" multiple style={{ display: 'none' }} disabled={isUploading} onChange={e => {
+                        const filesList = Array.from(e.target.files || []);
+                        if (filesList.length === 0) return;
+                        e.target.value = '';
+                        const bulkFiles = filesList.map(f => ({ file: f, relativePath: f.name }));
+                        host._openBulkUpload(bulkFiles, r.uploadFolderId, r.subFolderPath, r.vesselName);
+                      }} />
+                      Upload
+                    </label>
+                    <button
+                      type="button"
+                      disabled={rowSelectedCount === 0}
+                      onClick={() => {
+                        if (rowSelectedCount === 0) return;
+                        const filesToDelete = r.files
+                          .filter(f => listViewSelectedFiles.has(f.id))
+                          .map(f => ({ id: f.id, name: f.name, folderId: r.uploadFolderId, folderPath: r.subFolderPath }));
+                        host.setState({ listViewSelectedFiles: new Set() });
+                        host._openFileDeleteDialog(filesToDelete);
+                      }}
+                      style={{ minHeight: 44, border: '1px solid #fca5a5', background: rowSelectedCount > 0 ? '#fff5f5' : '#f8fafc', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: rowSelectedCount > 0 ? 'pointer' : 'not-allowed', color: rowSelectedCount > 0 ? '#ef4444' : '#cbd5e1' }}
+                    >
+                      Delete {rowSelectedCount > 0 ? `(${rowSelectedCount})` : ''}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void host._openSharePointFolder(r)}
+                    style={{ marginTop: 8, minHeight: 44, width: '100%', border: '1px solid #bfdbfe', background: '#eff6ff', borderRadius: 8, color: '#1d4ed8', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
+                  >
+                    Open Folder in SharePoint
+                  </button>
+                </div>
+              );
+            })}
+            {pageRows.length === 0 && (
+              <div style={{ padding: '24px 12px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
+                No documents found.
+              </div>
+            )}
+          </div>
+        ) : (
+        <table style={{ width: '100%', minWidth: isTablet ? 980 : 850, borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0', color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
               <th style={{ padding: '10px 10px', width: 44, textAlign: 'center' }}>SR.</th>
-              <th style={{ padding: '10px 12px' }}>VESSEL NAME</th>
-              <th style={{ padding: '10px 12px' }}>GROUP</th>
+              <th style={{ padding: '10px 12px' }}>MAIN FOLDER</th>
+              <th style={{ padding: '10px 12px' }}>DOCUMENT SECTION</th>
               <th style={{ padding: '10px 12px' }}>CATEGORY</th>
               <th style={{ padding: '10px 12px' }}>SUB-CATEGORY</th>
               <th style={{ padding: '10px 12px' }}>FOLDER PATH</th>
@@ -48,16 +141,39 @@ export function renderListView(
           <tbody>
             {pageRows.length === 0 ? (
               <tr>
-                <td colSpan={8} style={{ padding: '36px 16px', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
-                  No documents found.{' '}
-                  {textFilter || vesselFilter !== 'all' || docGroupFilter !== 'all' || catFilter !== 'all'
-                    ? 'Try clearing the filters.' : ''}
+                <td colSpan={9} style={{ padding: '48px 16px', textAlign: 'center' }}>
+                  {(host.state.loading || Boolean(vesselLoadingName) || (documentFilesLoading && filtered.length === 0) || documentVesselsLoadingMore) ? (
+                    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+                      <div style={{
+                        width: 32, height: 32, border: '3px solid #e0f2fe',
+                        borderTop: '3px solid #0284c7', borderRadius: '50%',
+                        animation: 'spin 0.8s linear infinite',
+                      }} />
+                      <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a' }}>
+                        {vesselLoadingName
+                          ? `Loading documents and attachments for ${vesselLoadingName}...`
+                          : (documentVesselsLoadingMore ? 'Loading more vessels...' : 'Loading vessel documents from SharePoint...')}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#64748b', maxWidth: 360 }}>
+                        Please wait while folder structures and live files are loaded.
+                      </div>
+                    </div>
+                  ) : (
+                    <span style={{ color: '#94a3b8', fontSize: 13 }}>
+                      No documents found.{' '}
+                      {textFilter || vesselFilter !== 'all' || docGroupFilter !== 'all' || catFilter !== 'all'
+                        ? 'Try clearing the filters.' : ''}
+                    </span>
+                  )}
                 </td>
               </tr>
             ) : pageRows.map((r, idx) => {
               const globalIdx  = safePage * PAGE_ROWS + idx + 1;
               const isUploading = docUploadRowKey === r.groupKey && docUploadBusy;
               const hasFiles    = r.files.length > 0;
+              const pathParts = (r.subFolderPath || '').split('>').map(s => s.trim()).filter(Boolean);
+              const documentSectionLabel = pathParts.length >= 3 ? pathParts[2] : 'Drawings and Manuals';
+              const categoryLabel = r.category || (pathParts.length >= 5 ? pathParts[4] : (pathParts[3] || 'To be Classified'));
 
               return (
                 <tr key={`${r.groupKey}-${idx}`}
@@ -66,20 +182,20 @@ export function renderListView(
                   onMouseLeave={e => (e.currentTarget.style.background = '')}
                 >
                   <td style={{ padding: '10px 10px', color: '#94a3b8', fontSize: 11, fontFamily: 'monospace', textAlign: 'center' }}>{globalIdx}</td>
-                  <td style={{ padding: '10px 12px', fontWeight: 700, color: '#0f172a' }}>{r.vesselName}</td>
                   <td style={{ padding: '10px 12px' }}>
                     <span style={{ display: 'inline-block', borderRadius: 8, padding: '3px 8px', fontSize: 11, fontWeight: 600, background: '#eff6ff', color: '#2563eb' }}>
                       {r.group}
                     </span>
                   </td>
-                  <td style={{ padding: '10px 12px', fontWeight: 600, color: '#334155' }}>{r.category}</td>
+                  <td style={{ padding: '10px 12px', fontWeight: 600, color: '#334155' }}>{documentSectionLabel}</td>
+                  <td style={{ padding: '10px 12px', fontWeight: 700, color: '#1e293b' }}>{categoryLabel}</td>
                   <td style={{ padding: '10px 12px', fontWeight: 600, color: '#1e293b' }}>{r.subCategory || r.category}</td>
                   <td style={{ padding: '10px 12px', color: '#64748b', fontSize: 11 }} title={r.subFolderPath}>{r.subFolderPath}</td>
                   <td style={{ padding: '10px 12px' }}>
                     {hasFiles ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         {r.files.map(file => (
-                          <div key={file.name} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <div key={file.name} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                             <input
                               type="checkbox"
                               checked={listViewSelectedFiles.has(file.id)}
@@ -92,20 +208,102 @@ export function renderListView(
                               }}
                               style={{ width: 14, height: 14, accentColor: '#ef4444', cursor: 'pointer', flexShrink: 0 }}
                             />
-                            <span style={{ fontSize: 14 }}>📄</span>
+                            <span style={{ fontSize: 14 }}>{(file as any).uploading ? '⏳' : '📄'}</span>
                             <span
                               onClick={() => {
-                                if (file.id && !file.id.startsWith('file_')) {
+                                if ((file as any).uploading) {
+                                  alert(`File "${file.name}" is still uploading. Please wait a moment.`);
+                                } else if (file.id && !file.id.startsWith('file_')) {
                                   void host._openDocumentFile(file.id, file.name);
                                 } else {
                                   alert(`File "${file.name}" is pending — it will be available after approval.`);
                                 }
                               }}
-                              style={{ color: '#0284c7', textDecoration: 'underline', fontWeight: 600, cursor: 'pointer' }}
-                              title={file.id && /^\d+$/.test(file.id) ? `${file.name} (pending approval)` : `Click to open ${file.name}`}
+                              style={{ color: '#0284c7', textDecoration: 'underline', fontWeight: 600, cursor: 'pointer', flexGrow: 1 }}
+                              title={(file as any).uploading
+                                ? `${file.name} (uploading)`
+                                : (file.id && /^\d+$/.test(file.id) ? `${file.name} (pending approval)` : `Click to open ${file.name}`)}
                             >
-                              {file.name}{file.id && /^\d+$/.test(file.id) ? ' ⏳' : ''}
+                              {file.name}{(file as any).uploading ? ' ⏳' : (file.id && /^\d+$/.test(file.id) ? ' ⏳' : '')}
                             </span>
+                            {(() => {
+                              const detectedVessel = resolveDetectedVesselForFile(file, host, r.vesselName);
+                              const isUnidentified = (host?.state?.ocrUnidentifiedFiles || []).some(
+                                n => (n || '').trim().toLowerCase() === file.name.trim().toLowerCase()
+                              );
+
+                              if (detectedVessel && !isUnidentified) {
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      host._openVesselSuggestions([new File([], file.name)], detectedVessel);
+                                    }}
+                                    title={`View OCR Vessel Suggestion: ${detectedVessel}`}
+                                    style={{
+                                      background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)',
+                                      borderRadius: 6, padding: '1px 6px', fontSize: 10, color: '#0284c7',
+                                      cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 3,
+                                      whiteSpace: 'nowrap', flexShrink: 0,
+                                    }}
+                                  >
+                                    <span>✨</span> {detectedVessel}
+                                  </button>
+                                );
+                              } else {
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      host._openVesselSuggestions([new File([], file.name)], r.vesselName || '');
+                                    }}
+                                    title="Vessel name not detected by OCR — click to assign vessel"
+                                    style={{
+                                      background: '#fff7ed', border: '1px solid #fed7aa',
+                                      borderRadius: 6, padding: '1px 6px', fontSize: 10, color: '#c2410c',
+                                      cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 3,
+                                      whiteSpace: 'nowrap', flexShrink: 0,
+                                    }}
+                                  >
+                                    <span>⚠️</span> Vessel: Not detected
+                                  </button>
+                                );
+                              }
+                            })()}
+                            {/* OCR Re-classify button for existing files */}
+                            {!((file as any).uploading) && file.id && !file.id.startsWith('file_') && !/^\d+$/.test(file.id) && (
+                              <button
+                                type="button"
+                                title={`Run OCR & Re-classify "${file.name}" into correct folder`}
+                                onClick={() => {
+                                  host._goToView('templates');
+                                  // Store pending OCR item in state so TemplatesPage picks it up
+                                  setTimeout(() => {
+                                    host.setState({ ocrPendingItemId: file.id, ocrPendingFilename: file.name });
+                                  }, 100);
+                                }}
+                                style={{
+                                  background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 6,
+                                  padding: '2px 7px', fontSize: 10, fontWeight: 700, cursor: 'pointer',
+                                  color: '#15803d', display: 'inline-flex', alignItems: 'center', gap: 3,
+                                  whiteSpace: 'nowrap', flexShrink: 0,
+                                }}
+                              >
+                                🔍 OCR
+                              </button>
+                            )}
+                            {!((file as any).uploading) && file.id && !file.id.startsWith('file_') && !/^\d+$/.test(file.id) && (
+                              <button
+                                type="button"
+                                title={`Archive "${file.name}"`}
+                                onClick={() => void host._archiveDocumentFile(file.id, file.name, r.subFolderPath, r.group, r.vesselName)}
+                                style={{ border: '1px solid #c4b5fd', background: '#f5f3ff', borderRadius: 6, padding: '2px 7px', fontSize: 10, fontWeight: 700, cursor: 'pointer', color: '#6d28d9', whiteSpace: 'nowrap' }}
+                              >
+                                📦 Archive
+                              </button>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -132,82 +330,15 @@ export function renderListView(
                       }}>
                         <input
                           type="file"
+                          multiple
                           style={{ display: 'none' }}
                           disabled={isUploading}
-                          onChange={async e => {
-                            const file = e.target.files?.[0];
-                            if (!file) return;
-                            host.setState({ docUploadRowKey: r.groupKey, docUploadBusy: true, docUploadMsg: null });
-                            try {
-                              const { fileId, statusPending, folderId, isGraphUpload } = await host._uploadFileToFolder(
-                                r.uploadFolderId, r.subFolderPath, r.vesselName, file, r.monthDriven
-                              );
-                              const msg = statusPending
-                                ? `"${file.name}" submitted for approval.`
-                                : `"${file.name}" uploaded successfully!`;
-
-                              if (statusPending) {
-                                const newApproval: ApprovalItem = {
-                                  id: fileId || `a_${Date.now()}`,
-                                  documentName: file.name,
-                                  vessel: r.vesselName,
-                                  requestedBy: host.props.userDisplayName || host.props.userEmail || 'You',
-                                  requestedOn: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-                                  status: 'Pending',
-                                };
-                                host.setState(prev => ({ approvalsList: [newApproval, ...prev.approvalsList] }));
-                              }
-
-                              const newUpload = { name: file.name, size: `${(file.size / 1024).toFixed(1)} KB`, date: 'Just now', pending: statusPending, id: fileId, uploadedAt: Date.now() };
-                              const liveFolderId = folderId || r.uploadFolderId;
-
-                              host.setState(prev => {
-                                const uploadedFilesByFolder = prev.uploadedFilesByFolder;
-                                const baseRows = (prev.rows || []) as FlatRow[];
-                                const normSub   = (r.subFolderPath || '').trim().toLowerCase();
-                                const dedupeKey = (r.subFolderPath || r.groupKey).trim().toLowerCase();
-
-                                const updatedByFolder: Record<string, any[]> = {
-                                  ...uploadedFilesByFolder,
-                                  [r.groupKey]: [...(uploadedFilesByFolder[r.groupKey] || []).filter((f: any) => f.name !== file.name), newUpload],
-                                };
-                                // Write to liveFolderId only if it's a real Graph drive item ID (isGraphUpload = true)
-                                // Do NOT write to r.uploadFolderId — it may be a backend DB ID shared across rows
-                                if (isGraphUpload === true && liveFolderId) {
-                                  updatedByFolder[liveFolderId] = [...(uploadedFilesByFolder[liveFolderId] || []).filter((f: any) => f.name !== file.name), newUpload];
-                                }
-                                if (normSub) {
-                                  updatedByFolder[normSub] = [...(uploadedFilesByFolder[normSub] || []).filter((f: any) => f.name !== file.name), newUpload];
-                                }
-                                if (dedupeKey && dedupeKey !== normSub) {
-                                  updatedByFolder[dedupeKey] = [...(uploadedFilesByFolder[dedupeKey] || []).filter((f: any) => f.name !== file.name), newUpload];
-                                }
-
-                                const existingRowIdx = baseRows.findIndex((row: FlatRow) => row.groupKey === r.groupKey && !row.fileName);
-                                let updatedRows: FlatRow[];
-                                if (existingRowIdx !== -1) {
-                                  updatedRows = baseRows.map((row: FlatRow, i: number) =>
-                                    i === existingRowIdx
-                                      ? { ...row, fileName: file.name, fileId: fileId || `file_${Date.now()}`, filePending: statusPending }
-                                      : row
-                                  );
-                                } else {
-                                  const refRow = baseRows.find((row: FlatRow) => row.groupKey === r.groupKey) || r;
-                                  updatedRows = [...baseRows, { ...refRow, fileName: file.name, fileId: fileId || `file_${Date.now()}`, filePending: statusPending }];
-                                }
-                                return { docUploadBusy: false, docUploadRowKey: null, docUploadMsg: msg, uploadedFilesByFolder: updatedByFolder, rows: updatedRows };
-                              }, () => {
-                                const refreshFolderId = folderId || r.uploadFolderId;
-                                // Use isGraphUpload flag instead of Boolean(folderId): folderId may be a
-                                // backend DB ID (not a real Graph drive item ID) when the REST fallback was used.
-                                const isRealGraphId = isGraphUpload === true;
-                                if (refreshFolderId && !/^f\d+$/.test(refreshFolderId)) {
-                                  void host._refreshFolderFiles(refreshFolderId, r.groupKey, true, isRealGraphId).catch(() => undefined);
-                                }
-                              });
-                            } catch (err: any) {
-                              host.setState({ docUploadBusy: false, docUploadRowKey: null, docUploadMsg: `Upload failed: ${err?.message || 'Error'}` });
-                            }
+                          onChange={e => {
+                            const filesList = Array.from(e.target.files || []);
+                            if (filesList.length === 0) return;
+                            e.target.value = '';
+                            const bulkFiles = filesList.map(f => ({ file: f, relativePath: f.name }));
+                            host._openBulkUpload(bulkFiles, r.uploadFolderId, r.subFolderPath, r.vesselName);
                           }}
                         />
                         {isUploading ? '⏳...' : '↑ Upload'}
@@ -256,6 +387,7 @@ export function renderListView(
             })}
           </tbody>
         </table>
+        )}
 
         {/* Pagination footer */}
         <div style={{ padding: '10px 14px', color: '#64748b', fontSize: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc', borderTop: '1px solid #e2e8f0' }}>

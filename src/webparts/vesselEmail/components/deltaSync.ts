@@ -50,6 +50,12 @@ export interface DeltaSyncResult {
 
 const DELTA_LINK_KEY_PREFIX = 'vesselDMS_deltaLink_';
 
+export function clearDeltaLink(driveId: string): void {
+  try {
+    localStorage.removeItem(`${DELTA_LINK_KEY_PREFIX}${driveId}`);
+  } catch { /* storage unavailable — non-fatal */ }
+}
+
 function loadDeltaLink(driveId: string): string | null {
   try {
     return localStorage.getItem(`${DELTA_LINK_KEY_PREFIX}${driveId}`);
@@ -62,6 +68,36 @@ function saveDeltaLink(driveId: string, link: string): void {
   try {
     localStorage.setItem(`${DELTA_LINK_KEY_PREFIX}${driveId}`, link);
   } catch { /* storage unavailable — non-fatal */ }
+}
+
+// Global timestamp until which delta queries must wait due to HTTP 429 throttling
+let globalThrottledUntil = 0;
+
+export function getDeltaSyncThrottledSeconds(): number {
+  const remaining = Math.ceil((globalThrottledUntil - Date.now()) / 1000);
+  return remaining > 0 ? remaining : 0;
+}
+
+function extractRetryAfterSeconds(err: any): number {
+  if (!err) return 0;
+  const sec =
+    err.retryAfterSeconds ??
+    err.body?.error?.retryAfterSeconds ??
+    err.body?.error?.innerError?.retryAfterSeconds ??
+    err.response?.headers?.get?.('retry-after') ??
+    err.headers?.['retry-after'];
+  if (typeof sec === 'number' && sec > 0) return sec;
+  if (typeof sec === 'string') {
+    const parsed = parseInt(sec, 10);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  const is429 =
+    err.statusCode === 429 ||
+    err.status === 429 ||
+    err.code === 'activityLimitReached' ||
+    err.body?.error?.code === 'activityLimitReached' ||
+    (typeof err.message === 'string' && (err.message.includes('throttled') || err.message.includes('activityLimitReached')));
+  return is429 ? 180 : 0;
 }
 
 // ── Graph helpers ─────────────────────────────────────────────────────────────
@@ -188,30 +224,42 @@ export async function pollDelta(
     ? storedLink
     : `/sites/${siteId}/drives/${driveId}/root/delta?$select=id,name,parentReference,folder,file,size,createdDateTime,lastModifiedDateTime,deleted`;
 
-  const { items, deltaLink } = await drainPages(client, startUrl);
+  try {
+    const { items, deltaLink } = await drainPages(client, startUrl);
 
-  if (deltaLink) saveDeltaLink(driveId, deltaLink);
+    if (deltaLink) saveDeltaLink(driveId, deltaLink);
 
-  const added: SpoFolderNode[] = [];
-  const updated: SpoFolderNode[] = [];
-  const deleted: string[] = [];
+    const added: SpoFolderNode[] = [];
+    const updated: SpoFolderNode[] = [];
+    const deleted: string[] = [];
 
-  for (const item of items) {
-    // Track folders AND files — file changes from SPO-direct uploads must trigger a reload
-    if (item.deleted) {
-      deleted.push(item.id);
-    } else if (item.folder) {
-      const node = graphItemToNode(item);
-      added.push(node);
-    } else if (item.file) {
-      // File added/modified in SPO directly — emit as a synthetic node so the
-      // caller's debounced _loadData fires and the list view refreshes.
-      const node = graphItemToNode(item);
-      added.push(node);
+    for (const item of items) {
+      // Track folders AND files — file changes from SPO-direct uploads must trigger a reload
+      if (item.deleted) {
+        deleted.push(item.id);
+      } else if (item.folder) {
+        const node = graphItemToNode(item);
+        added.push(node);
+      } else if (item.file) {
+        // File added/modified in SPO directly — emit as a synthetic node so the
+        // caller's debounced _loadData fires and the list view refreshes.
+        const node = graphItemToNode(item);
+        added.push(node);
+      }
     }
-  }
 
-  return { added, updated, deleted, newDeltaLink: deltaLink };
+    return { added, updated, deleted, newDeltaLink: deltaLink };
+  } catch (err: any) {
+    // If Graph returns resyncRequired (e.g. token expired), reset to baseline
+    const errCode = err?.code || err?.body?.error?.code || '';
+    const errMsg = typeof err?.message === 'string' ? err.message : '';
+    if ((errCode === 'resyncRequired' || errMsg.includes('resyncRequired')) && storedLink) {
+      console.warn('[VesselDMS] Graph delta token expired/resyncRequired. Clearing deltaLink and rebuilding baseline.');
+      clearDeltaLink(driveId);
+      return pollDelta(client, siteId, driveId, true);
+    }
+    throw err;
+  }
 }
 
 // ── Tree merge helpers (used by the React component) ─────────────────────────
@@ -290,12 +338,13 @@ export interface SyncScheduler {
 }
 
 /**
- * Create a scheduler that calls pollDelta on a fixed interval.
+ * Create a scheduler that calls pollDelta on an adaptive interval, with built-in
+ * HTTP 429 throttling backoff and page visibility awareness.
  *
  * @param client        MSGraphClientV3
  * @param siteId        SharePoint site ID
  * @param driveId       Document library drive ID
- * @param intervalMs    Poll interval in milliseconds (default 45 000 = 45 s)
+ * @param intervalMs    Poll interval in milliseconds (default 60 000 = 60 s)
  * @param onResult      Callback invoked with each DeltaSyncResult
  * @param onError       Optional error callback
  */
@@ -304,40 +353,101 @@ export function createSyncScheduler(
   siteId: string,
   driveId: string,
   onResult: (result: DeltaSyncResult) => void,
-  intervalMs: number = 45_000,
+  intervalMs: number = 60_000,
   onError?: (err: unknown) => void,
 ): SyncScheduler {
-  let timerId: ReturnType<typeof setInterval> | null = null;
+  let timerId: ReturnType<typeof setTimeout> | null = null;
+  let isRunning = false;
+  let isStopped = false;
   let hasBaseline = false;
+  const effectiveIntervalMs = Math.max(intervalMs, 30_000);
+
+  const scheduleNext = (delayMs: number): void => {
+    if (isStopped) return;
+    if (timerId !== null) {
+      clearTimeout(timerId);
+    }
+    timerId = setTimeout(() => {
+      void run();
+    }, delayMs);
+  };
 
   const run = async (): Promise<DeltaSyncResult | null> => {
+    if (isStopped) return null;
+
+    // Concurrency guard: avoid overlapping delta runs
+    if (isRunning) return null;
+
+    // Check throttle cooldown
+    const now = Date.now();
+    if (now < globalThrottledUntil) {
+      const waitRemainingSec = Math.ceil((globalThrottledUntil - now) / 1000);
+      console.warn(`[VesselDMS] Graph delta sync throttled (429). Cooldown active for ${waitRemainingSec}s more.`);
+      scheduleNext(waitRemainingSec * 1000 + 2000);
+      return null;
+    }
+
+    // Tab visibility guard: skip background polling if user is not actively viewing the tab
+    if (typeof document !== 'undefined' && document.hidden) {
+      scheduleNext(effectiveIntervalMs);
+      return null;
+    }
+
+    isRunning = true;
     try {
-      // isBaseline = true on the very first run of this scheduler instance,
-      // regardless of whether a stored deltaLink exists. The in-memory folder
-      // map is always empty on a fresh page load, so we treat the first result
-      // as a baseline (populate the map) and skip new-vessel alerts to avoid
-      // false positives before the vessels list has loaded from the DB.
       const isFirstRun = !hasBaseline;
       const result = await pollDelta(client, siteId, driveId, false);
       result.isBaseline = isFirstRun;
       hasBaseline = true;
       onResult(result);
+      scheduleNext(effectiveIntervalMs);
       return result;
-    } catch (err) {
+    } catch (err: any) {
+      const retrySec = extractRetryAfterSeconds(err);
+      if (retrySec > 0) {
+        globalThrottledUntil = Date.now() + retrySec * 1000;
+        console.warn(
+          `[VesselDMS] Graph delta sync throttled (429). Pausing delta polling for ${retrySec}s (until ${new Date(globalThrottledUntil).toLocaleTimeString()}).`
+        );
+        scheduleNext(retrySec * 1000 + 3000);
+      } else {
+        scheduleNext(effectiveIntervalMs);
+      }
       onError?.(err);
       return null;
+    } finally {
+      isRunning = false;
     }
   };
 
+  // Listen for tab visibility changes: when user comes back to the tab, check if sync is needed
+  const onVisibilityChange = (): void => {
+    if (typeof document !== 'undefined' && !document.hidden && !isStopped && !isRunning) {
+      const now = Date.now();
+      if (now >= globalThrottledUntil) {
+        void run();
+      }
+    }
+  };
+
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', onVisibilityChange);
+  }
+
   return {
     start() {
-      if (timerId !== null) return;
-      timerId = setInterval(() => { run().catch(() => undefined); }, intervalMs);
+      if (!isStopped && timerId !== null) return;
+      isStopped = false;
+      scheduleNext(effectiveIntervalMs);
     },
     stop() {
+      isStopped = true;
       if (timerId !== null) {
-        clearInterval(timerId);
+        clearTimeout(timerId);
         timerId = null;
+      }
+      if (typeof document !== 'undefined' && document.removeEventListener) {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
       }
     },
     triggerNow: run,

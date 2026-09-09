@@ -15,6 +15,7 @@ import type {
   ApprovalItem, NotificationItem, UserItem,
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
+import { isMobileWidth } from '../responsive';
 
 export function renderBentoComposeModal(host: VesselEmail): React.ReactElement | null {
     const {
@@ -22,6 +23,7 @@ export function renderBentoComposeModal(host: VesselEmail): React.ReactElement |
       bentoComposeMsg, bentoComposeErr, vessels, bentoLogs, bentoApprovedFiles,
     } = host.state;
     if (!bentoComposeOpen) return null;
+    const isMobile = isMobileWidth(host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
 
     const FIXED_RECIPIENT = host.state.bentoConfigRecipient || host.props.userEmail || '';
 
@@ -137,9 +139,9 @@ export function renderBentoComposeModal(host: VesselEmail): React.ReactElement |
     };
 
     return (
-      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: isMobile ? 10 : 20 }}
         onClick={() => !bentoComposeBusy && host.setState({ bentoComposeOpen: false })}>
-        <div style={{ background: '#fff', borderRadius: 12, padding: '28px 32px', width: 540, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}
+        <div style={{ background: '#fff', borderRadius: 12, padding: isMobile ? '16px 14px' : '28px 32px', width: isMobile ? '95vw' : 540, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}
           onClick={e => e.stopPropagation()}>
           <div style={{ fontSize: 17, fontWeight: 800, color: '#0f172a', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 8 }}>
             ✉ Compose & Dispatch Email
@@ -258,16 +260,17 @@ export function renderBentoComposeModal(host: VesselEmail): React.ReactElement |
             </div>
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20, flexDirection: isMobile ? 'column' : 'row' }}>
             <button onClick={() => host.setState({ bentoComposeOpen: false, bentoComposeErr: null, bentoComposeMsg: null })}
               disabled={bentoComposeBusy}
-              style={{ background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 6, padding: '8px 16px', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+              style={{ background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 6, minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 16px', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
             <button onClick={handleSend} disabled={bentoComposeBusy}
-              style={{ background: '#0284c7', color: '#fff', border: 'none', borderRadius: 6, padding: '8px 20px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+              style={{ background: '#0284c7', color: '#fff', border: 'none', borderRadius: 6, minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 20px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
               {bentoComposeBusy ? '⏳ Sending...' : '✉ Send Email'}
             </button>
           </div>
         </div>
       </div>
-    );
+    );
+
 }

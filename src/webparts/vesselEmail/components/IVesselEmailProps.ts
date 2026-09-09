@@ -1,4 +1,4 @@
-import { MSGraphClientV3 } from '@microsoft/sp-http';
+import { MSGraphClientV3, SPHttpClient } from '@microsoft/sp-http';
 
 export interface IVesselEmailProps {
   apiBaseUrl: string;
@@ -14,6 +14,12 @@ export interface IVesselEmailProps {
 
   // Graph / SharePoint context — required for folder creation and delta sync
   graphClient?: MSGraphClientV3;
+  graphAccessToken?: string;
+  /** SharePoint REST-scoped delegated token (aud = tenant SP root). Used by the
+   *  backend for taxonomy field writes (ValidateUpdateListItem) which require a
+   *  different token audience than the Graph token above. */
+  spAccessToken?: string;
+  spHttpClient?: SPHttpClient;
   siteId?: string;
   driveId?: string;
   siteUrl?: string;  // absolute SharePoint site URL, e.g. https://tenant.sharepoint.com/sites/mysite

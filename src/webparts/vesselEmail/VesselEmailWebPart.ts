@@ -23,6 +23,8 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
   private _isDarkTheme: boolean = false;
   private _environmentMessage: string = '';
   private _graphClient: MSGraphClientV3 | undefined;
+  private _graphAccessToken: string | undefined;
+  private _spAccessToken: string | undefined;  // SharePoint REST-scoped token for taxonomy writes
   private _siteId: string | undefined;
   private _driveId: string | undefined;
   private _userEmail: string = '';
@@ -32,8 +34,12 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
   // component uses this to know it's safe to load data even when the backend
   // is running without a database (where session_id is legitimately null).
   private _sessionInitialized: boolean = false;
+  private _disposed: boolean = false;
 
   public render(): void {
+    if (this._disposed || !this.domElement) {
+      return;
+    }
     const element: React.ReactElement<IVesselEmailProps> = React.createElement(
       VesselEmail,
       {
@@ -43,6 +49,9 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
         userDisplayName: this.context.pageContext.user.displayName,
         userEmail: this._userEmail || this.context.pageContext.user.email,
         graphClient: this._graphClient,
+        graphAccessToken: this._graphAccessToken,
+        spAccessToken: this._spAccessToken,
+        spHttpClient: this.context.spHttpClient,
         siteId: this._siteId,
         driveId: this._driveId,
         sessionId: this._sessionId,
@@ -64,6 +73,20 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
     // Step 1: resolve Graph context (email, siteId, driveId)
     try {
       this._graphClient = await this.context.msGraphClientFactory.getClient('3');
+      const tokenProvider = await this.context.aadTokenProviderFactory.getTokenProvider();
+      this._graphAccessToken = await tokenProvider.getToken('https://graph.microsoft.com');
+      // Also fetch a SharePoint-scoped token; used by the backend for taxonomy (Vessel Name)
+      // ValidateUpdateListItem calls which require the SP REST token audience.
+      try {
+        const spHost = this.context.pageContext.site.absoluteUrl
+          ? new URL(this.context.pageContext.site.absoluteUrl).origin
+          : '';
+        if (spHost) {
+          this._spAccessToken = await tokenProvider.getToken(spHost);
+        }
+      } catch (spTokErr) {
+        console.warn('[VesselDMS] SP token fetch failed (non-fatal):', spTokErr);
+      }
       const me = await this._graphClient.api('/me').select('mail,userPrincipalName').get();
       this._userEmail = me.mail || me.userPrincipalName || this.context.pageContext.user.email;
 
@@ -95,9 +118,8 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
     }
     if (!this._userEmail) {
       // No email could be resolved at all — still mark init as settled and
-      // render so the UI (and vessel list) isn't stuck waiting forever.
+      // let the normal SPFx first render proceed.
       this._sessionInitialized = true;
-      this.render();
       return;
     }
     const base = (this.properties.apiBaseUrl || 'https://nk-dms-dev.sg-nissenkaiun.com').replace(/\/$/, '');
@@ -117,7 +139,7 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
         console.warn('[VesselDMS] Primary bypass-login failed (SSL/Network):', sslErr);
         if (base.includes('nk-dms-dev.sg-nissenkaiun.com')) {
           try {
-            res = await fetch(`http://localhost:8000/api/auth/bypass-login`, {
+            res = await fetch(`http://127.0.0.1:8000/api/auth/bypass-login`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -147,15 +169,11 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
     } finally {
 
 
-      // ALWAYS mark session init as settled and re-render — regardless of whether
-      // a session_id was actually obtained. Previously this.render() was only
-      // called inside the `if (data.session_id)` branch, so when the backend had
-      // no database configured (session_id === null) this method returned
-      // silently: the React component's props.sessionId stayed '' forever, its
-      // _loadData() guard ("if (!this.props.sessionId) return;") never passed,
-      // and the vessel list stayed blank with no error shown.
+      // ALWAYS mark session init as settled — regardless of whether a
+      // session_id was actually obtained. SPFx will render after onInit
+      // resolves, so avoid manual render() here to prevent workbench/
+      // property-pane lifecycle races.
       this._sessionInitialized = true;
-      this.render();
     }
   }
 
@@ -206,6 +224,7 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
   }
 
   protected onDispose(): void {
+    this._disposed = true;
     ReactDom.unmountComponentAtNode(this.domElement);
   }
 

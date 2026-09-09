@@ -16,6 +16,7 @@ import type {
   ApprovalItem, NotificationItem, UserItem, AlertItem,
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
+import { isMobileWidth, isTabletOrBelow } from '../responsive';
 
 // Must match NAV_ACCENTS in Sidebar.tsx
 const VIEW_ACCENTS: Record<string, string> = {
@@ -53,9 +54,12 @@ const VIEW_LABELS: Record<string, string> = {
 // Inject global CSS once to break out of SharePoint workbench constraints
 function injectFullScreenStyles(): void {
   const id = 'vessel-dms-fullscreen';
-  if (document.getElementById(id)) return;
-  const style = document.createElement('style');
-  style.id = id;
+  let style = document.getElementById(id) as HTMLStyleElement | null;
+  if (!style) {
+    style = document.createElement('style');
+    style.id = id;
+    document.head.appendChild(style);
+  }
   style.textContent = `
     /* Force web part zone to not clip our fixed overlay */
     .CanvasZone, .CanvasSection, .CanvasComponent,
@@ -70,13 +74,130 @@ function injectFullScreenStyles(): void {
     }
     /* Placeholder input text color fix */
     .vessel-dms-search::placeholder { color: rgba(255,255,255,0.55); }
+    /* Sidebar nav scrollbar hiding */
+    .vessel-dms-sidebar-nav::-webkit-scrollbar {
+      display: none;
+      width: 0px;
+      height: 0px;
+    }
+    .vessel-dms-sidebar-nav {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    /* ── Animated Vessel Banner ── */
+    @keyframes vesselShipMotion {
+      0% {
+        transform: translate(0px, 0px) rotate(0deg);
+      }
+      25% {
+        transform: translate(2px, -3.5px) rotate(-1.2deg);
+      }
+      50% {
+        transform: translate(3.5px, 0.5px) rotate(0.4deg);
+      }
+      75% {
+        transform: translate(1.5px, 3px) rotate(1.2deg);
+      }
+      100% {
+        transform: translate(0px, 0px) rotate(0deg);
+      }
+    }
+
+    @keyframes vesselWaveScroll {
+      0% {
+        transform: translateX(0);
+      }
+      100% {
+        transform: translateX(-400px);
+      }
+    }
+
+    @keyframes vesselCloudDrift {
+      0% {
+        transform: translateX(0);
+      }
+      50% {
+        transform: translateX(20px);
+      }
+      100% {
+        transform: translateX(0);
+      }
+    }
+
+    @keyframes vesselBowSprayPulse {
+      0%, 100% {
+        opacity: 0.4;
+        transform: scale(0.95);
+      }
+      25% {
+        opacity: 0.85;
+        transform: scale(1.1);
+      }
+      75% {
+        opacity: 0.35;
+        transform: scale(0.9);
+      }
+    }
+
+    .vessel-ship-animated {
+      animation: vesselShipMotion 3.8s ease-in-out infinite;
+      transform-origin: 200px 115px;
+      will-change: transform;
+    }
+
+    .vessel-wave-back {
+      animation: vesselWaveScroll 6.5s linear infinite;
+      will-change: transform;
+    }
+
+    .vessel-wave-mid {
+      animation: vesselWaveScroll 4s linear infinite;
+      will-change: transform;
+    }
+
+    .vessel-wave-front {
+      animation: vesselWaveScroll 3s linear infinite;
+      will-change: transform;
+    }
+
+    .vessel-cloud-slow {
+      animation: vesselCloudDrift 18s ease-in-out infinite;
+      will-change: transform;
+    }
+
+    .vessel-cloud-fast {
+      animation: vesselCloudDrift 12s ease-in-out infinite reverse;
+      will-change: transform;
+    }
+
+    .vessel-bow-spray {
+      animation: vesselBowSprayPulse 3.8s ease-in-out infinite;
+      transform-origin: 390px 125px;
+    }
+
+    /* Accessibility: Respect prefers-reduced-motion */
+    @media (prefers-reduced-motion: reduce) {
+      .vessel-ship-animated,
+      .vessel-wave-back,
+      .vessel-wave-mid,
+      .vessel-wave-front,
+      .vessel-cloud-slow,
+      .vessel-cloud-fast,
+      .vessel-bow-spray {
+        animation: none !important;
+        transform: none !important;
+      }
+    }
   `;
-  document.head.appendChild(style);
 }
 
 export function renderLayout(host: VesselEmail, content: React.ReactElement): React.ReactElement {
   const userDisplayName = host.props.userDisplayName || 'Admin';
   const viewLabel = VIEW_LABELS[host.state.view] || host.state.view.replace(/_/g, ' ');
+  const viewportWidth = host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200);
+  const tabletOrBelow = isTabletOrBelow(viewportWidth);
+  const phone = isMobileWidth(viewportWidth);
 
   injectFullScreenStyles();
 
@@ -100,13 +221,36 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
           boxShadow: `0 4px 24px ${VIEW_ACCENTS[host.state.view] || '#3D5AFE'}88`,
           transition: 'background 0.4s ease, box-shadow 0.4s ease',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '0 36px',
+          padding: phone ? '0 12px' : tabletOrBelow ? '0 18px' : '0 36px',
+          gap: 10,
         }}>
           {/* Breadcrumb */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ color: 'rgba(255,255,255,0.75)', fontSize: 16, fontWeight: 600, letterSpacing: '0.2px' }}>Vessel DMS</span>
+            {tabletOrBelow && (
+              <button
+                type="button"
+                onClick={() => host.setState({ sidebarCollapsed: false })}
+                style={{
+                  width: 42,
+                  height: 42,
+                  borderRadius: 10,
+                  border: '1px solid rgba(255,255,255,0.5)',
+                  background: 'rgba(255,255,255,0.15)',
+                  color: '#fff',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+                aria-label="Open navigation"
+              >
+                <Icon iconName="GlobalNavButton" style={{ fontSize: 18 }} />
+              </button>
+            )}
+            {!phone && <span style={{ color: 'rgba(255,255,255,0.75)', fontSize: 16, fontWeight: 600, letterSpacing: '0.2px' }}>Vessel DMS</span>}
             <Icon iconName="ChevronRight" style={{ fontSize: 14, color: 'rgba(255,255,255,0.55)' }} />
-            <span style={{ color: '#ffffff', fontSize: 24, fontWeight: 900, letterSpacing: '-0.5px', textShadow: '0 2px 12px rgba(0,0,0,0.25)' }}>
+            <span style={{ color: '#ffffff', fontSize: phone ? 18 : 24, fontWeight: 900, letterSpacing: '-0.5px', textShadow: '0 2px 12px rgba(0,0,0,0.25)' }}>
               {viewLabel}
             </span>
           </div>
@@ -114,7 +258,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
           {/* Right controls */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {/* Search */}
-            <div style={{ position: 'relative', width: 260 }}>
+            {!phone && <div style={{ position: 'relative', width: tabletOrBelow ? 180 : 260 }}>
               <input
                 type="text"
                 placeholder="Search..."
@@ -131,7 +275,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                 onBlur={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.18)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.35)'; }}
               />
               <Icon iconName="Search" style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.85)', fontSize: 17 }} />
-            </div>
+            </div>}
 
             {/* ── Alert Bell ── */}
             <div style={{ position: 'relative' }}>
@@ -172,7 +316,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                   data-alert-bell="true"
                   style={{
                     position: 'absolute', top: 'calc(100% + 10px)', right: 0,
-                    width: 400, background: '#fff', border: '1px solid #e2e8f0',
+                    width: phone ? Math.min(360, Math.max(290, viewportWidth - 24)) : 400, background: '#fff', border: '1px solid #e2e8f0',
                     borderRadius: 14, boxShadow: '0 12px 40px rgba(16,24,40,.22)',
                     overflow: 'hidden', zIndex: 9999,
                   }}
@@ -195,6 +339,8 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       {([
                         ['dms', 'DMS folders'],
+                        ['unclassified', 'SharePoint site Unclassified Items'],
+                        ['classified', 'SharePoint Classified Items'],
                         ['crud', 'SPFx activity'],
                         ['email', 'Email alerts'],
                       ] as const).map(([category, label]) => (
@@ -244,7 +390,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                   <div style={{ maxHeight: 420, overflowY: 'auto' }}>
                     {(() => {
                       const filtered = host.state.alertsList.filter(
-                        a => (a.alert_category || (
+                          a => (a.alert_type === 'vessel_unrecognised' ? 'unclassified' : a.alert_category || (
                           a.alert_type === 'crud_operation' ? 'crud' : a.alert_type === 'email_alert' ? 'email' : 'dms'
                         )) === host.state.alertCategory && (host.state.alertFilter === 'all' || !a.read)
                       );
@@ -272,6 +418,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
 
                             const iconName = alert.alert_type === 'vessel_provisioned' ? 'Ferry'
                               : alert.alert_type === 'vessel_deleted' ? 'Delete'
+                              : alert.alert_type === 'document_deleted' ? 'Delete'
                               : alert.alert_type === 'vessel_unrecognised' ? 'Warning'
                               : alert.alert_type === 'file_outside_structure' ? 'PageSolid'
                               : alert.alert_type === 'subfolder_anomaly' ? 'FabricNewFolder'
@@ -279,6 +426,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
 
                             const iconBg = alert.alert_type === 'vessel_provisioned' ? '#dcfce7'
                               : alert.alert_type === 'vessel_deleted' ? '#fee2e2'
+                              : alert.alert_type === 'document_deleted' ? '#fee2e2'
                               : alert.alert_type === 'vessel_unrecognised' ? '#fef3c7'
                               : alert.alert_type === 'file_outside_structure' ? '#f3e8ff'
                               : alert.alert_type === 'subfolder_anomaly' ? '#fff7ed'
@@ -286,6 +434,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
 
                             const iconColor = alert.alert_type === 'vessel_provisioned' ? '#166534'
                               : alert.alert_type === 'vessel_deleted' ? '#991b1b'
+                              : alert.alert_type === 'document_deleted' ? '#991b1b'
                               : alert.alert_type === 'vessel_unrecognised' ? '#92400e'
                               : alert.alert_type === 'file_outside_structure' ? '#6b21a8'
                               : alert.alert_type === 'subfolder_anomaly' ? '#9a3412'
@@ -293,6 +442,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
 
                             const typeLabel = alert.alert_type === 'vessel_provisioned' ? 'Provisioned'
                               : alert.alert_type === 'vessel_deleted' ? 'Deleted'
+                              : alert.alert_type === 'document_deleted' ? 'Deleted'
                               : alert.alert_type === 'vessel_unrecognised' ? 'Unrecognised'
                               : alert.alert_type === 'file_outside_structure' ? 'File'
                               : alert.alert_type === 'subfolder_anomaly' ? 'Anomaly'
@@ -359,6 +509,8 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                                         ? 'Detected in SharePoint Online — needs classification'
                                         : alert.alert_type === 'vessel_deleted'
                                           ? `Moved to Recycle Bin by ${alert.created_by_name || alert.created_by_email}`
+                                          : alert.alert_type === 'document_deleted'
+                                            ? `Moved to Recycle Bin by ${alert.created_by_name || alert.created_by_email}`
                                           : `Created by ${alert.created_by_name || alert.created_by_email}`}
                                       {alert.created_at && ` • ${new Date(alert.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}
                                     </div>
@@ -379,6 +531,11 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                                       >
                                         <Icon iconName="NavigateForward" style={{ fontSize: 10 }} />
                                         View in Recycle Bin
+                                      </button>
+                                    )}
+                                    {alert.alert_type === 'document_deleted' && (
+                                      <button onClick={e => { e.stopPropagation(); if (!alert.read) host._markAlertRead(alert.id); host._closeAlertBell(); void host._goToView('recycle'); }} style={{ marginTop: 7, padding: '4px 12px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff5f5', color: '#dc2626', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                                        <Icon iconName="NavigateForward" style={{ fontSize: 10 }} /> View in Recycle Bin
                                       </button>
                                     )}
                                     {alert.alert_type === 'vessel_unrecognised' && (() => {
@@ -513,7 +670,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
         </div>
 
         {/* ── Main Content ── */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: 32, background: '#EEF2F7' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: phone ? 12 : tabletOrBelow ? 18 : 32, background: '#EEF2F7' }}>
           {content}
         </div>
 

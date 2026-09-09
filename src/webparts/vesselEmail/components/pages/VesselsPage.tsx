@@ -15,6 +15,10 @@ import type {
   ApprovalItem, NotificationItem, UserItem, FolderAnomalyItem, NormalFolderRecord,
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
+import { KAIZEN_KNOWLEDGE_BANK_TREE, MAIN_FOLDERS } from '../vesselFolderTemplate';
+import { retryUntilComplete } from '../graphFolderService';
+import { isMobileWidth } from '../responsive';
+
 
 function getSpoVesselFolderUrl(siteUrlProp?: string, vesselName?: string): string {
   const fallbackSite = 'https://nissenkaiunsingapore.sharepoint.com';
@@ -23,8 +27,8 @@ function getSpoVesselFolderUrl(siteUrlProp?: string, vesselName?: string): strin
     const urlObj = new URL(site);
     const basePath = urlObj.pathname.replace(/\/$/, '');
     const folderPath = vesselName
-      ? `${basePath}/Shared Documents/Vessels/Specific Vessels/${vesselName}`
-      : `${basePath}/Shared Documents/Vessels`;
+      ? `${basePath}/Shared Documents/Technical & Crewing/${vesselName}`
+      : `${basePath}/Shared Documents`;
     return `${urlObj.origin}${basePath}/Shared Documents/Forms/AllItems.aspx?id=${encodeURIComponent(folderPath)}`;
   } catch {
     return '#';
@@ -37,6 +41,7 @@ function getSpoVesselFolderUrl(siteUrlProp?: string, vesselName?: string): strin
 export function renderDismissConfirmDialog(host: VesselEmail): React.ReactElement | null {
   const anomaly = host.state.spoAnomalyDismissConfirm;
   if (!anomaly) return null;
+  const isMobile = isMobileWidth(host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
 
   return (
     <div
@@ -47,18 +52,18 @@ export function renderDismissConfirmDialog(host: VesselEmail): React.ReactElemen
         position: 'fixed', inset: 0, zIndex: 100010,
         background: 'rgba(15,23,42,0.6)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 16,
+        padding: isMobile ? 10 : 16,
       }}
       onClick={e => { if (e.target === e.currentTarget) host.setState({ spoAnomalyDismissConfirm: null }); }}
     >
       <div style={{
         background: '#fff', borderRadius: 16, boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
-        padding: 32, width: '100%', maxWidth: 440, position: 'relative',
+        padding: isMobile ? 16 : 32, width: '100%', maxWidth: 440, maxHeight: '90vh', overflowY: 'auto', position: 'relative',
       }}>
         {/* Close */}
         <button
           onClick={() => host.setState({ spoAnomalyDismissConfirm: null })}
-          style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
+          style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
           title="Cancel"
         >✕</button>
 
@@ -88,7 +93,7 @@ export function renderDismissConfirmDialog(host: VesselEmail): React.ReactElemen
             onClick={() => host.setState({ spoAnomalyDismissConfirm: null })}
             style={{
               background: '#f8fafc', color: '#334155',
-              border: '2px solid #e2e8f0', borderRadius: 10, padding: '14px 18px',
+              border: '2px solid #e2e8f0', borderRadius: 10, padding: '14px 18px', minHeight: 44,
               cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left',
               transition: 'border-color 0.15s',
             }}
@@ -107,7 +112,7 @@ export function renderDismissConfirmDialog(host: VesselEmail): React.ReactElemen
             onClick={() => host._moveAnomalyToRecycleBin(anomaly)}
             style={{
               background: 'linear-gradient(135deg, #ef4444, #dc2626)',
-              color: '#fff', border: 'none', borderRadius: 10, padding: '14px 18px',
+              color: '#fff', border: 'none', borderRadius: 10, padding: '14px 18px', minHeight: 44,
               cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left',
               transition: 'opacity 0.15s',
             }}
@@ -137,8 +142,51 @@ export function renderClassifyDialog(host: VesselEmail): React.ReactElement | nu
 function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): React.ReactElement {
 
   const { anomaly, provisioning, done, doneNormal, alreadyExisted, error } = dlg;
+  const [documentScope, setDocumentScope] = React.useState<'vessels' | 'common' | 'kaizen'>('vessels');
+  const [selectedVessel, setSelectedVessel] = React.useState('');
+  const [selectedMainFolder, setSelectedMainFolder] = React.useState(MAIN_FOLDERS[0]?.name || '');
+  const [selectedFolderPath, setSelectedFolderPath] = React.useState<string[]>([]);
+
+  const selectedMain = MAIN_FOLDERS.find(main => main.name === selectedMainFolder);
+  const categoryNodes = documentScope === 'kaizen'
+    ? KAIZEN_KNOWLEDGE_BANK_TREE
+    : (selectedMain ? (documentScope === 'common' ? selectedMain.commonTree : selectedMain.perVesselTree) : []);
+  const categoryLabel = documentScope === 'kaizen' ? 'Kaizen category' : 'Category';
+  const folderLevels: Array<{ level: number; options: typeof categoryNodes }> = [];
+  let levelNodes = categoryNodes;
+  for (let level = 0; level < 8 && levelNodes.length > 0; level += 1) {
+    folderLevels.push({ level, options: levelNodes });
+    const selected = selectedFolderPath[level];
+    const selectedNode = levelNodes.find(folder => folder.name === selected);
+    if (!selectedNode?.children?.length) break;
+    levelNodes = selectedNode.children;
+  }
+  const selectedDestinationChildren = selectedFolderPath.reduce<typeof categoryNodes>((nodes, name) => {
+    return nodes.find(folder => folder.name === name)?.children || [];
+  }, categoryNodes);
+  const canPlaceInCategory = !!(
+    selectedFolderPath.length > 0 &&
+    selectedDestinationChildren.length === 0 &&
+    (documentScope !== 'vessels' || selectedVessel)
+  );
+
+  React.useEffect(() => {
+    setDocumentScope('vessels');
+    setSelectedVessel(host.state.vessels[0]?.name || '');
+    setSelectedMainFolder(MAIN_FOLDERS[0]?.name || '');
+    setSelectedFolderPath([]);
+  }, [anomaly.id]);
+
+  React.useEffect(() => {
+    const nextNodes = documentScope === 'kaizen'
+      ? KAIZEN_KNOWLEDGE_BANK_TREE
+      : (selectedMain ? (documentScope === 'common' ? selectedMain.commonTree : selectedMain.perVesselTree) : []);
+    const nextCategory = nextNodes[0]?.name || '';
+    setSelectedFolderPath(nextCategory ? [nextCategory] : []);
+  }, [documentScope, selectedMainFolder]);
   const [elapsed, setElapsed] = React.useState(0);
   const [autoClose, setAutoClose] = React.useState(8);
+  const isMobile = isMobileWidth(host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
 
   React.useEffect(() => {
     if (!provisioning) {
@@ -216,6 +264,19 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
     }
   };
 
+  const handlePlaceInCategory = async (): Promise<void> => {
+    if (!canPlaceInCategory) return;
+    host.setState({ spoClassifyDialog: { ...dlg, provisioning: true, error: null } });
+    try {
+      const result = await host._placeAnomalyInDmsCategory(anomaly, documentScope, selectedVessel, selectedMainFolder, selectedFolderPath);
+      host._dismissAnomaly(anomaly.id);
+      host._loadNormalFolders();
+      host.setState({ spoClassifyDialog: { ...dlg, provisioning: false, done: false, doneNormal: true, alreadyExisted: result?.already_existed === true, error: null } });
+    } catch (e: any) {
+      host.setState({ spoClassifyDialog: { ...dlg, provisioning: false, done: false, doneNormal: false, error: e?.message || 'Failed to place folder in the selected category.' } });
+    }
+  };
+
   const handleClose = (): void => {
     if (done || doneNormal) {
       host._loadData();
@@ -229,17 +290,17 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
         <div style={{ textAlign: 'center', padding: '12px 0' }}>
           <div style={{ fontSize: 52, marginBottom: 12 }}>📁</div>
           <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#0f172a' }}>
-            {alreadyExisted ? 'Folder Already Registered' : 'Folder Confirmed as Normal Folder!'}
+            {alreadyExisted ? 'Folder Already Registered' : 'Folder Added to the DMS'}
           </h3>
           <p style={{ margin: '0 0 20px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
             <strong>"{anomaly.name}"</strong> {alreadyExisted
               ? 'was already listed as a Normal Folder in the system.'
-              : 'has been saved and will appear in the Normal Folders section below the vessel list.'}
+              : 'has been saved in the selected DMS location.'}
           </p>
           <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 10, padding: '12px 16px', marginBottom: 24, fontSize: 12, color: '#0369a1', textAlign: 'left' }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>📋 Saved to Normal Folders</div>
             <div>• Anomaly warning dismissed</div>
-            <div>• Folder listed in "Normal Folders" section</div>
+            <div>• Folder linked to the DMS</div>
             <div>• Record stored in database</div>
           </div>
           <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
@@ -374,15 +435,15 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
         </div>
 
         <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#0f172a', textAlign: 'center' }}>
-          Unrecognised SharePoint {anomaly.item_type === 'folder' ? 'Folder' : 'File'} Detected
+          Unclassified SharePoint {anomaly.item_type === 'folder' ? 'Folder' : 'File'}
         </h3>
         <p style={{ margin: '0 0 20px', fontSize: 13, color: '#64748b', textAlign: 'center' }}>
-          A {anomaly.item_type} named <strong>"{anomaly.name}"</strong> was found directly inside the vessel management area in SharePoint Online but is not registered in DMS.
+          We found an {anomaly.item_type === 'folder' ? 'folder' : 'file'} in SharePoint that is not currently linked to the DMS. Please choose how you would like to organize it.
         </p>
 
         {/* Path */}
         <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px', marginBottom: 20, fontSize: 11, color: '#475569', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-          📂 {anomaly.spo_path}
+          <strong>Current location:</strong><br />📂 {anomaly.spo_path}
         </div>
 
         {error && (
@@ -393,9 +454,7 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
 
         {anomaly.item_type === 'folder' ? (
           <>
-            <p style={{ margin: '0 0 16px', fontSize: 13, fontWeight: 600, color: '#0f172a', textAlign: 'center' }}>
-              What is this folder?
-            </p>
+            <p style={{ margin: '0 0 16px', fontSize: 13, fontWeight: 600, color: '#0f172a', textAlign: 'center' }}>Choose how to organize this folder</p>
             <div style={{ display: 'flex', gap: 12, flexDirection: 'column' }}>
               {/* Vessel option */}
               <button
@@ -413,12 +472,60 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
                     This is a Vessel
                   </div>
                   <div style={{ fontSize: 12, opacity: 0.9 }}>
-                    Register it as a vessel and create its full DMS folder structure in SharePoint
+                    Register this as a vessel and create the required DMS folder structure for it.
                   </div>
                 </div>
               </button>
 
-              {/* Normal folder option */}
+              <div style={{ background: '#fff', color: '#334155', border: '2px solid #e2e8f0', borderRadius: 12, padding: '16px 20px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <span style={{ fontSize: 28 }}>📁</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', marginBottom: 2 }}>Place Under a DMS Category</div>
+                    <div style={{ fontSize: 12, color: '#64748b' }}>Choose the document area and destination where this folder should be placed.</div>
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 8, marginTop: 14 }}>
+                  <select value={documentScope} onChange={e => setDocumentScope(e.target.value as 'vessels' | 'common' | 'kaizen')} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}>
+                    <option value="vessels">Vessels</option>
+                    <option value="common">Common for all vessels</option>
+                    <option value="kaizen">Kaizen - Knowledge Bank</option>
+                  </select>
+                  {documentScope === 'vessels' ? (
+                    <select value={selectedVessel} onChange={e => setSelectedVessel(e.target.value)} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}>
+                      <option value="">Select Vessel</option>
+                      {host.state.vessels.map(vessel => <option key={vessel.id} value={vessel.name}>{vessel.name}</option>)}
+                    </select>
+                  ) : <div />}
+                  {documentScope !== 'kaizen' && (
+                    <select value={selectedMainFolder} onChange={e => setSelectedMainFolder(e.target.value)} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}>
+                      <option value="">Select Main Folder</option>
+                      {MAIN_FOLDERS.map(main => <option key={main.name} value={main.name}>{main.name}</option>)}
+                    </select>
+                  )}
+                  {folderLevels.map(({ level, options }) => (
+                    <select
+                      key={level}
+                      value={selectedFolderPath[level] || ''}
+                      onChange={e => {
+                        const nextPath = selectedFolderPath.slice(0, level);
+                        if (e.target.value) nextPath.push(e.target.value);
+                        setSelectedFolderPath(nextPath);
+                      }}
+                      style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}
+                    >
+                      <option value="">Select {level === 0 ? categoryLabel : `Sub-category ${level}`}</option>
+                      {options.map(folder => <option key={folder.name} value={folder.name}>{folder.name}</option>)}
+                    </select>
+                  ))}
+                </div>
+                <div style={{ marginTop: 10, fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>
+                  {(documentScope === 'vessels' ? `${selectedMainFolder || '[Main Folder]'} / ${selectedVessel || '[Vessel]'}` : documentScope === 'common' ? `${selectedMainFolder || '[Main Folder]'} / Common for all ships` : 'Kaizen - Knowledge Bank')}
+                  {` / ${selectedFolderPath.join(' / ') || '[Category]'}`} / {anomaly.name}
+                </div>
+                <button onClick={handlePlaceInCategory} disabled={!canPlaceInCategory} style={{ marginTop: 12, minHeight: 44, width: isMobile ? '100%' : 'auto', background: canPlaceInCategory ? '#eff6ff' : '#f1f5f9', color: canPlaceInCategory ? '#0369a1' : '#94a3b8', border: '1px solid #bae6fd', borderRadius: 8, padding: '9px 14px', fontWeight: 700, cursor: canPlaceInCategory ? 'pointer' : 'not-allowed' }}>Place in Category</button>
+              </div>
+
               <button
                 onClick={handleNormal}
                 style={{
@@ -431,25 +538,102 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
                 <span style={{ fontSize: 28 }}>📁</span>
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2, color: '#0f172a' }}>
-                    This is a Normal Folder
+                    Keep Current Folder Location
                   </div>
                   <div style={{ fontSize: 12, color: '#64748b' }}>
-                    Dismiss the warning and keep it listed as an unstructured folder
+                    Keep this folder in its current SharePoint location and add it to the DMS without changing its folder path.
                   </div>
                 </div>
               </button>
             </div>
           </>
         ) : (
-          <div style={{ display: 'flex', justifyContent: 'center' }}>
+          /* File item — provide classify + recycle options */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* Place Under DMS Category */}
+            <div style={{ background: '#fff', color: '#334155', border: '2px solid #e2e8f0', borderRadius: 12, padding: '16px 20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
+                <span style={{ fontSize: 28 }}>📁</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', marginBottom: 2 }}>Place Under a DMS Category</div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>Move this file to a DMS document folder.</div>
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 8 }}>
+                <select value={documentScope} onChange={e => setDocumentScope(e.target.value as 'vessels' | 'common' | 'kaizen')} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}>
+                  <option value="vessels">Vessels</option>
+                  <option value="common">Common for all vessels</option>
+                  <option value="kaizen">Kaizen - Knowledge Bank</option>
+                </select>
+                {documentScope === 'vessels' ? (
+                  <select value={selectedVessel} onChange={e => setSelectedVessel(e.target.value)} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}>
+                    <option value="">Select Vessel</option>
+                    {host.state.vessels.map(vessel => <option key={vessel.id} value={vessel.name}>{vessel.name}</option>)}
+                  </select>
+                ) : <div />}
+                {documentScope !== 'kaizen' && (
+                  <select value={selectedMainFolder} onChange={e => setSelectedMainFolder(e.target.value)} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}>
+                    <option value="">Select Main Folder</option>
+                    {MAIN_FOLDERS.map(main => <option key={main.name} value={main.name}>{main.name}</option>)}
+                  </select>
+                )}
+                {folderLevels.map(({ level, options }) => (
+                  <select
+                    key={level}
+                    value={selectedFolderPath[level] || ''}
+                    onChange={e => {
+                      const nextPath = selectedFolderPath.slice(0, level);
+                      if (e.target.value) nextPath.push(e.target.value);
+                      setSelectedFolderPath(nextPath);
+                    }}
+                    style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}
+                  >
+                    <option value="">Select {level === 0 ? categoryLabel : `Sub-category ${level}`}</option>
+                    {options.map(folder => <option key={folder.name} value={folder.name}>{folder.name}</option>)}
+                  </select>
+                ))}
+              </div>
+              <div style={{ marginTop: 10, fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>
+                {(documentScope === 'vessels' ? `${selectedMainFolder || '[Main Folder]'} / ${selectedVessel || '[Vessel]'}` : documentScope === 'common' ? `${selectedMainFolder || '[Main Folder]'} / Common for all ships` : 'Kaizen - Knowledge Bank')}
+                {` / ${selectedFolderPath.join(' / ') || '[Category]'}`} / {anomaly.name}
+              </div>
+              <button onClick={handlePlaceInCategory} disabled={!canPlaceInCategory} style={{ marginTop: 12, minHeight: 44, width: isMobile ? '100%' : 'auto', background: canPlaceInCategory ? '#eff6ff' : '#f1f5f9', color: canPlaceInCategory ? '#0369a1' : '#94a3b8', border: '1px solid #bae6fd', borderRadius: 8, padding: '9px 14px', fontWeight: 700, cursor: canPlaceInCategory ? 'pointer' : 'not-allowed' }}>Place in Category</button>
+            </div>
+
+            {/* Move to Recycle Bin */}
+            <button
+              onClick={() => host._moveAnomalyToRecycleBin(anomaly)}
+              style={{
+                background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                color: '#fff', border: 'none', borderRadius: 12, padding: '14px 20px',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, textAlign: 'left',
+              }}
+            >
+              <span style={{ fontSize: 26 }}>🗑️</span>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>Move to Recycle Bin</div>
+                <div style={{ fontSize: 12, opacity: 0.9 }}>Remove this unclassified file and move it to the Recycle Bin.</div>
+              </div>
+            </button>
+
+            {/* Dismiss only */}
             <button
               onClick={handleNormal}
-              style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 8, padding: '8px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+              style={{
+                background: '#f8fafc', color: '#334155',
+                border: '2px solid #e2e8f0', borderRadius: 12, padding: '12px 20px',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, textAlign: 'left',
+              }}
             >
-              Dismiss Warning
+              <span style={{ fontSize: 26 }}>📌</span>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2, color: '#0f172a' }}>Keep in Current Location</div>
+                <div style={{ fontSize: 12, color: '#64748b' }}>Dismiss the warning and keep this file in its current SharePoint location.</div>
+              </div>
             </button>
           </div>
         )}
+
       </>
     );
   };
@@ -463,18 +647,18 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
         position: 'fixed', inset: 0, zIndex: 100010,
         background: 'rgba(15,23,42,0.6)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 16,
+        padding: isMobile ? 10 : 16,
       }}
      onClick={e => { if (e.target === e.currentTarget) handleClose(); }}
     >
       <div style={{
-        background: '#fff', borderRadius: 20, padding: '32px 36px',
-        width: 480, maxWidth: '92vw',
+        background: '#fff', borderRadius: 20, padding: isMobile ? '18px 14px' : '32px 36px',
+        width: isMobile ? '95vw' : 480, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto',
         boxShadow: '0 24px 64px rgba(0,0,0,0.28)', position: 'relative',
       }}>
         <button
           onClick={handleClose}
-          style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
+          style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
           title="Close (provisioning continues in the background)"
         >✕</button>
         {renderBody()}
@@ -571,90 +755,6 @@ function renderUnrecognisedFolders(host: VesselEmail, items: FolderAnomalyItem[]
             </div>
           </div>
         ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Vessel-Level Uploaded Files Section ──────────────────────────────────────
-function renderVesselLevelFiles(host: VesselEmail, items: FolderAnomalyItem[]): React.ReactElement {
-  const formatSize = (bytes?: number): string => {
-    if (!bytes) return '';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / 1048576).toFixed(1)} MB`;
-  };
-
-  return (
-    <div style={{ marginTop: 24, background: 'linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%)', border: '2px solid #a855f7', borderRadius: 16, padding: 24 }}>
-      {/* Header */}
-      <div style={{ marginBottom: 16 }}>
-        <h3 style={{ margin: '0 0 4px', fontSize: 16, fontWeight: 700, color: '#6b21a8', display: 'flex', alignItems: 'center', gap: 8 }}>
-          📄 Files Uploaded Outside DMS Structure
-          <span style={{ background: '#a855f7', color: '#fff', borderRadius: 20, padding: '1px 10px', fontSize: 12, fontWeight: 700 }}>{items.length}</span>
-        </h3>
-        <p style={{ margin: 0, fontSize: 12, color: '#7c3aed' }}>
-          These files were uploaded directly to the vessel management area in SharePoint Online — not inside any vessel's DMS folder structure.
-        </p>
-      </div>
-
-      {/* Table-like list */}
-      <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e9d5ff', overflow: 'hidden' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-          <thead>
-            <tr style={{ background: '#f3e8ff', borderBottom: '1px solid #e9d5ff' }}>
-              <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 700, color: '#6b21a8', width: 36 }}></th>
-              <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 700, color: '#6b21a8' }}>File Name</th>
-              <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 700, color: '#6b21a8' }}>Location</th>
-              <th style={{ padding: '10px 14px', textAlign: 'left', fontWeight: 700, color: '#6b21a8' }}>Detected</th>
-              <th style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 700, color: '#6b21a8' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item, idx) => {
-              const ext = item.name.split('.').pop()?.toUpperCase() || '';
-              const extColor: Record<string, string> = { PDF: '#ef4444', DOCX: '#3b82f6', XLSX: '#10b981', PPTX: '#f59e0b', JPG: '#ec4899', PNG: '#ec4899' };
-              const color = extColor[ext] || '#64748b';
-
-              return (
-                <tr
-                  key={item.id}
-                  style={{ borderBottom: idx < items.length - 1 ? '1px solid #f3e8ff' : 'none', background: idx % 2 === 0 ? '#fff' : '#faf5ff' }}
-                >
-                  <td style={{ padding: '10px 14px' }}>
-                    <span style={{ background: `${color}18`, color, borderRadius: 4, padding: '2px 5px', fontSize: 10, fontWeight: 700 }}>
-                      {ext || 'FILE'}
-                    </span>
-                  </td>
-                  <td style={{ padding: '10px 14px', fontWeight: 600, color: '#1e293b' }}>{item.name}</td>
-                  <td style={{ padding: '10px 14px', color: '#64748b', fontFamily: 'monospace', fontSize: 11, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {item.spo_path}
-                  </td>
-                  <td style={{ padding: '10px 14px', color: '#94a3b8', whiteSpace: 'nowrap' }}>
-                    {item.detected_at ? new Date(item.detected_at).toLocaleDateString() : '—'}
-                  </td>
-                  <td style={{ padding: '10px 14px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                    <div style={{ display: 'inline-flex', gap: 6 }}>
-                      <a
-                        href={getSpoVesselFolderUrl(host.props.siteUrl, item.vessel_name || undefined)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, textDecoration: 'none' }}
-                      >
-                        ↗ Open
-                      </a>
-                      <button
-                        onClick={() => host.setState({ spoAnomalyDismissConfirm: item })}
-                        style={{ background: '#f1f5f9', color: '#64748b', border: '1px solid #cbd5e1', borderRadius: 6, padding: '4px 8px', fontSize: 11, cursor: 'pointer' }}
-                        title="Dismiss"
-                      >✕ Dismiss</button>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
       </div>
     </div>
   );
@@ -763,6 +863,10 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
   const { vessel, provisioning, done, error } = dlg;
   const [elapsed, setElapsed] = React.useState(0);
   const [autoClose, setAutoClose] = React.useState(10);
+  const [retrying, setRetrying] = React.useState(false);
+  const [retryAttempt, setRetryAttempt] = React.useState(0);
+  const RETRY_MAX = 3;
+  const isMobile = isMobileWidth(host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
 
   const isProvisioned = (
     host.state.provisionedVesselIds?.has(vessel.id) ||
@@ -770,25 +874,65 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
     vessel.is_provisioned === true
   );
 
-  React.useEffect(() => {
-    if (!provisioning) { setElapsed(0); return; }
-    const timer = setInterval(() => setElapsed(e => e + 1), 1000);
-    return () => clearInterval(timer);
-  }, [provisioning]);
+  const isBusy = (provisioning || host.state.folderProvisioningVesselId === vessel.id || host.state.folderCreationBusy) && !done;
+  const isDone = done || (!isBusy && ((host.state.folderCreationResults?.length ?? 0) > 0));
 
   React.useEffect(() => {
-    if (!done) { setAutoClose(10); return; }
+    if (!isBusy) { setElapsed(0); return; }
+    const timer = setInterval(() => setElapsed(e => e + 1), 1000);
+    return () => clearInterval(timer);
+  }, [isBusy]);
+
+  React.useEffect(() => {
+    if (!isDone) { setAutoClose(10); return; }
     const timer = setInterval(() => setAutoClose(s => {
       if (s <= 1) { clearInterval(timer); handleClose(); return 0; }
       return s - 1;
     }), 1000);
     return () => clearInterval(timer);
-  }, [done]);
+  }, [isDone]);
 
   const formatTimer = (sec: number): string => {
     const m = Math.floor(sec / 60);
     const s = sec % 60;
     return `${m < 10 ? '0' + m : m}:${s < 10 ? '0' + s : s}`;
+  };
+
+  /** Retry only the failed folders, inline, without closing the dialog. */
+  const handleRetryInPlace = async (): Promise<void> => {
+    const { graphClient, siteId, driveId } = host.props;
+    if (!graphClient || !siteId || !driveId) return;
+    const currentResults = host.state.folderCreationResults;
+    if (!currentResults) return;
+    setRetrying(true);
+    setRetryAttempt(0);
+    try {
+      const updated = await retryUntilComplete(
+        graphClient,
+        siteId,
+        driveId,
+        currentResults,
+        RETRY_MAX,
+        3000,
+        (attempt, _total, latest) => {
+          setRetryAttempt(attempt);
+          host.setState({ folderCreationResults: latest });
+        },
+      );
+      host.setState({ folderCreationResults: updated });
+      // If all resolved, mark provisioned in backend
+      const allGood = updated.every(r => r.status !== 'failed');
+      if (allGood && vessel.id) {
+        void fetch(`${host._base()}/api/vessels/${vessel.id}/provision`, {
+          method: 'POST',
+          headers: host._headers(),
+        }).catch(() => undefined);
+        void host._syncScheduler?.triggerNow().catch(() => undefined);
+      }
+    } finally {
+      setRetrying(false);
+      setRetryAttempt(0);
+    }
   };
 
   const handleProvision = async (): Promise<void> => {
@@ -814,7 +958,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
   };
 
   const renderBody = (): React.ReactElement => {
-    if (provisioning) {
+    if (isBusy) {
       return (
         <div style={{ textAlign: 'center', padding: '8px 0' }}>
           <div style={{ fontSize: 44, marginBottom: 12 }}>⏳</div>
@@ -822,7 +966,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
             Provisioning DMS Folder Structure…
           </h3>
           <p style={{ margin: '0 0 16px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
-            Creating standard DMS folder hierarchy for <strong>"{ vessel.name }"</strong> in SharePoint Online. Please wait.
+            Creating standard DMS folder hierarchy for <strong>&quot;{ vessel.name }&quot;</strong> in SharePoint Online. Please wait.
           </p>
 
           {/* Live Timer badge */}
@@ -863,7 +1007,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
       );
     }
 
-   if (done) {
+   if (isDone) {
       const spoUrl = getSpoVesselFolderUrl(host.props.siteUrl, vessel.name);
       const failedFolders = (host.state.folderCreationResults || []).filter(r => r.status === 'failed');
       const hasFailures = failedFolders.length > 0;
@@ -875,9 +1019,9 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
           </h3>
           <p style={{ margin: '0 0 20px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
             {hasFailures ? (
-              <><strong>"{vessel.name}"</strong> has been provisioned, but {failedFolders.length} folder{failedFolders.length === 1 ? '' : 's'} could not be created.</>
+              <><strong>&quot;{vessel.name}&quot;</strong> has been provisioned, but {failedFolders.length} folder{failedFolders.length === 1 ? '' : 's'} could not be created.</>
             ) : (
-              <><strong>"{vessel.name}"</strong> has been fully provisioned — all SharePoint DMS folder structures have been created.</>
+              <><strong>&quot;{vessel.name}&quot;</strong> has been fully provisioned — all SharePoint DMS folder structures have been created.</>
             )}
           </p>
           {hasFailures ? (
@@ -888,7 +1032,38 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
                   <div key={`${r.path}-${i}`} title={r.error}>• {r.path.split('/').pop()}</div>
                 ))}
               </div>
-              <div style={{ marginTop: 8, color: '#78716c' }}>Click "🔄 Re-Provision Folders" after closing this dialog to retry.</div>
+              {/* Live retry status badge */}
+              {retrying ? (
+                <div style={{
+                  marginTop: 10, display: 'flex', alignItems: 'center', gap: 8,
+                  background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd',
+                  borderRadius: 8, padding: '7px 12px',
+                }}>
+                  <span style={{ fontSize: 15 }}>⏳</span>
+                  <span style={{ fontWeight: 600 }}>
+                    Retrying failed folders… attempt {retryAttempt || 1} of {RETRY_MAX}
+                  </span>
+                </div>
+              ) : (
+                <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    id="btn-retry-failed-folders"
+                    onClick={handleRetryInPlace}
+                    style={{
+                      background: 'linear-gradient(135deg,#f59e0b,#d97706)',
+                      color: '#fff', border: 'none', borderRadius: 8,
+                      padding: '8px 16px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      boxShadow: '0 3px 8px rgba(217,119,6,0.35)',
+                    }}
+                  >
+                    🔁 Retry Failed Folders
+                  </button>
+                  <div style={{ fontSize: 11, color: '#78716c', alignSelf: 'center' }}>
+                    Or click &quot;🔄 Re-Provision Folders&quot; for a full re-run.
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 12, color: '#065f46', textAlign: 'left' }}>
@@ -947,7 +1122,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
             Folders Already Provisioned
           </h3>
           <p style={{ margin: '0 0 16px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
-            The standard SharePoint DMS folder tree for <strong>"{vessel.name}"</strong> is already provisioned and registered.
+            The standard SharePoint DMS folder tree for <strong>&quot;{vessel.name}&quot;</strong> is already provisioned and registered.
           </p>
 
           <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 12, color: '#166534', textAlign: 'left' }}>
@@ -1007,7 +1182,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
             Provision SharePoint Folders
           </h3>
           <p style={{ margin: '0 0 12px', fontSize: 13, color: '#64748b', lineHeight: 1.5 }}>
-            This will create the full DMS folder hierarchy for <strong>"{ vessel.name }"</strong> in SharePoint Online across all departments.
+            This will create the full DMS folder hierarchy for <strong>&quot;{ vessel.name }&quot;</strong> in SharePoint Online across all departments.
           </p>
         </div>
 
@@ -1057,16 +1232,17 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
         background: 'rgba(15,23,42,0.6)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         backdropFilter: 'blur(4px)',
+        padding: isMobile ? 10 : 16,
       }}
       onClick={e => { if (e.target === e.currentTarget) handleClose(); }}
     >
       <div style={{
         background: '#fff', borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
-        padding: 32, width: '100%', maxWidth: 480, position: 'relative',
+        padding: isMobile ? 16 : 32, width: '100%', maxWidth: 480, maxHeight: '90vh', overflowY: 'auto', position: 'relative',
       }}>
         <button
           onClick={handleClose}
-          style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
+          style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
           title="Close (provisioning continues in the background)"
         >✕</button>
         {renderBody()}
@@ -1086,6 +1262,7 @@ export function renderFileAlertDialog(host: VesselEmail): React.ReactElement | n
 
 function FileAlertDialogContent({ host, dlg }: { host: VesselEmail; dlg: import('../types/ui').SpoFileAlertDialog }): React.ReactElement {
   const { fileName, spoPath, moving, moved, error } = dlg;
+  const isMobile = isMobileWidth(host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
 
   // ── Cascading selection state ──
   const [selVessel, setSelVessel] = React.useState(dlg.vesselName || '');
@@ -1142,7 +1319,9 @@ function FileAlertDialogContent({ host, dlg }: { host: VesselEmail; dlg: import(
         const parts = target.subFolderPath.split('>').map((p: string) => p.trim()).filter(Boolean);
         const vName = parts[0] || selVessel;
         const rest = parts.slice(1).join('/');
+        const MAIN_FOLDER_LIST = ['Technical & Crewing', 'Commercial & Chartering', 'Insurance'];
         const candidatePaths = [
+          ...MAIN_FOLDER_LIST.map(mf => `${mf}/${vName}${rest ? `/${rest}` : ''}`),
           `Vessels/Specific Vessels/${vName}/${rest}`,
           `Vessels/${vName}/${rest}`,
         ].filter(Boolean);
@@ -1209,12 +1388,12 @@ function FileAlertDialogContent({ host, dlg }: { host: VesselEmail; dlg: import(
   return (
     <div
       role="dialog" aria-modal="true" aria-label="File Uploaded Outside DMS Structure"
-      style={{ position: 'fixed', inset: 0, zIndex: 100010, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      style={{ position: 'fixed', inset: 0, zIndex: 100010, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: isMobile ? 10 : 16 }}
       onClick={e => { if (e.target === e.currentTarget && !moving) handleClose(); }}
     >
-      <div style={{ background: '#fff', borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.28)', padding: 32, width: '100%', maxWidth: 520, position: 'relative' }}>
+      <div style={{ background: '#fff', borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.28)', padding: isMobile ? 16 : 32, width: '100%', maxWidth: 520, maxHeight: '90vh', overflowY: 'auto', position: 'relative' }}>
         {!moving && (
-          <button onClick={handleClose} style={{ position: 'absolute', top: 14, right: 14, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#94a3b8' }} title="Close">✕</button>
+          <button onClick={handleClose} style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: '#94a3b8' }} title="Close">✕</button>
         )}
 
         {moved ? (
@@ -1222,7 +1401,7 @@ function FileAlertDialogContent({ host, dlg }: { host: VesselEmail; dlg: import(
             <div style={{ fontSize: 52, marginBottom: 12 }}>✅</div>
             <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#059669' }}>File Moved Successfully!</h3>
             <p style={{ margin: '0 0 8px', fontSize: 13, color: '#475569' }}>
-              <strong>"{fileName}"</strong> has been moved to the selected DMS folder.
+              <strong>&quot;{fileName}&quot;</strong> has been moved to the selected DMS folder.
             </p>
             {selGroupKey && (() => {
               const t = subFolderOptions.find(o => o.groupKey === selGroupKey);
@@ -1324,43 +1503,217 @@ function FileAlertDialogContent({ host, dlg }: { host: VesselEmail; dlg: import(
 function renderVesselActionPicker(host: VesselEmail): React.ReactElement {
   const action = host.state.vesselActionPicker;
   const isEdit = action === 'edit';
+  const isNarrow = host.state.windowWidth < 980;
+  const isMobile = isMobileWidth(host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
+  const selectedDeleteIds = host.state.deleteVesselIds || new Set<string>();
+  const selectedDeleteVessels = host.state.vessels.filter(v => selectedDeleteIds.has(v.id));
+  const selectedDeleteCount = selectedDeleteVessels.length;
+  const allDeleteSelected = host.state.vessels.length > 0 && host.state.vessels.every(v => selectedDeleteIds.has(v.id));
+
+  const toggleDeleteSelection = (vesselId: string): void => {
+    host.setState(prev => {
+      const next = new Set(prev.deleteVesselIds);
+      if (next.has(vesselId)) next.delete(vesselId);
+      else next.add(vesselId);
+      return { deleteVesselIds: next, modalError: null };
+    });
+  };
+
+  const selectAllForDelete = (selectAll: boolean): void => {
+    host.setState({
+      deleteVesselIds: selectAll ? new Set(host.state.vessels.map(v => v.id)) : new Set<string>(),
+      modalError: null,
+    });
+  };
+
+  const proceedToDeleteModal = (): void => {
+    if (selectedDeleteVessels.length === 0) {
+      host.setState({ modalError: 'Select at least one vessel to delete.' });
+      return;
+    }
+    host.setState({
+      modal: 'delete',
+      vesselActionPicker: null,
+      selectedVessel: selectedDeleteVessels[0],
+      deleteVesselIds: new Set(selectedDeleteVessels.map(v => v.id)),
+      modalMsg: null,
+      modalError: null,
+    });
+  };
+
+  const openSingleDeleteModal = (vessel: VesselRecord): void => {
+    host.setState({
+      modal: 'delete',
+      vesselActionPicker: null,
+      selectedVessel: vessel,
+      deleteVesselIds: new Set([vessel.id]),
+      modalMsg: null,
+      modalError: null,
+    });
+  };
 
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-label={isEdit ? 'Select vessel to edit' : 'Select vessel to delete'}
-      style={{ position: 'fixed', inset: 0, zIndex: 100010, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      style={{ position: 'fixed', inset: 0, zIndex: 100010, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: isMobile ? 10 : 16 }}
       onClick={e => { if (e.target === e.currentTarget) host.setState({ vesselActionPicker: null }); }}
     >
-      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 560, maxHeight: '82vh', overflow: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.28)' }}>
+      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: isEdit ? 560 : 1020, maxHeight: '90vh', overflow: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.28)' }}>
         <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <h3 style={{ margin: 0, fontSize: 18, color: '#0f172a' }}>{isEdit ? 'Select Vessel to Edit' : 'Select Vessel to Delete'}</h3>
             <p style={{ margin: '5px 0 0', fontSize: 12, color: '#64748b' }}>
-              {isEdit ? 'Choose a vessel to update its details.' : 'Choose a vessel to move it and its folder contents to the Recycle Bin.'}
+              {isEdit ? 'Choose a vessel to update its details.' : 'Choose one or more vessels to move their folders and contents to the Recycle Bin.'}
             </p>
           </div>
-          <button onClick={() => host.setState({ vesselActionPicker: null })} style={{ border: 'none', background: 'none', color: '#64748b', fontSize: 20, cursor: 'pointer' }} title="Close">✕</button>
+          <button onClick={() => host.setState({ vesselActionPicker: null })} style={{ border: 'none', background: 'none', color: '#64748b', fontSize: 20, minHeight: 44, minWidth: 44, cursor: 'pointer' }} title="Close">✕</button>
         </div>
-        <div style={{ padding: 16, maxHeight: 'calc(82vh - 100px)', overflowY: 'auto' }}>
-          {host.state.vessels.length === 0 ? (
-            <div style={{ padding: 20, textAlign: 'center', color: '#64748b', fontSize: 13 }}>No vessels are available.</div>
-          ) : host.state.vessels.map(vessel => (
-            <button
-              key={vessel.id}
-              onClick={() => isEdit ? host._openEditVessel(vessel) : host._openDeleteVessel(vessel)}
-              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', marginBottom: 8, border: '1px solid #e2e8f0', borderRadius: 10, background: '#fff', textAlign: 'left', cursor: 'pointer' }}
-            >
-              <span style={{ width: 36, height: 36, borderRadius: 8, background: isEdit ? '#e0f2fe' : '#fef2f2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>{isEdit ? '✏️' : '🗑️'}</span>
-              <span style={{ minWidth: 0, flex: 1 }}>
-                <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
-                <span style={{ display: 'block', marginTop: 3, fontSize: 11, color: '#64748b' }}>{vessel.vessel_type || 'Vessel'}{vessel.imo ? ` | IMO ${vessel.imo}` : ''}</span>
-              </span>
-              <span style={{ color: isEdit ? '#0284c7' : '#dc2626', fontSize: 12, fontWeight: 700 }}>{isEdit ? 'Edit →' : 'Delete →'}</span>
-            </button>
-          ))}
-        </div>
+        {isEdit ? (
+          <div style={{ padding: 16, maxHeight: 'calc(84vh - 100px)', overflowY: 'auto' }}>
+            {host.state.vessels.length === 0 ? (
+              <div style={{ padding: 20, textAlign: 'center', color: '#64748b', fontSize: 13 }}>No vessels are available.</div>
+            ) : host.state.vessels.map(vessel => (
+              <button
+                key={vessel.id}
+                onClick={() => host._openEditVessel(vessel)}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', marginBottom: 8, border: '1px solid #e2e8f0', borderRadius: 10, background: '#fff', textAlign: 'left', cursor: 'pointer' }}
+              >
+                <span style={{ width: 36, height: 36, borderRadius: 8, background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>✏️</span>
+                <span style={{ minWidth: 0, flex: 1 }}>
+                  <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
+                  <span style={{ display: 'block', marginTop: 3, fontSize: 11, color: '#64748b' }}>{vessel.vessel_type || 'Vessel'}{vessel.imo ? ` | IMO ${vessel.imo}` : ''}</span>
+                </span>
+                <span style={{ color: '#0284c7', fontSize: 12, fontWeight: 700 }}>Edit →</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div style={{ padding: 16 }}>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: isNarrow ? '1fr' : 'minmax(0, 1.25fr) minmax(0, 0.95fr)',
+              gap: 14,
+              height: isNarrow ? 'calc(84vh - 132px)' : 'calc(84vh - 132px)',
+              minHeight: isNarrow ? 360 : 420,
+            }}>
+              <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#fff' }}>
+                <div style={{ padding: '12px 14px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'linear-gradient(180deg,#fff,#f8fafc)' }}>
+                  <span style={{ fontSize: 12, color: '#334155', fontWeight: 700 }}>Vessel List</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>{selectedDeleteCount} selected</span>
+                    <button
+                      onClick={() => selectAllForDelete(!allDeleteSelected)}
+                      style={{ border: '1px solid #cbd5e1', background: '#fff', color: '#334155', borderRadius: 8, padding: '5px 9px', fontSize: 12, cursor: 'pointer' }}
+                    >
+                      {allDeleteSelected ? 'Clear all' : 'Select all'}
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ padding: 10, overflowY: 'auto', flex: 1 }}>
+                  {host.state.vessels.length === 0 ? (
+                    <div style={{ padding: 20, textAlign: 'center', color: '#64748b', fontSize: 13 }}>No vessels are available.</div>
+                  ) : host.state.vessels.map(vessel => {
+                    const checked = selectedDeleteIds.has(vessel.id);
+                    return (
+                      <div
+                        key={vessel.id}
+                        onClick={() => toggleDeleteSelection(vessel.id)}
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: '20px 1fr auto',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: '10px 12px',
+                          marginBottom: 8,
+                          border: checked ? '1px solid #fca5a5' : '1px solid #e2e8f0',
+                          borderRadius: 10,
+                          background: checked ? '#fff1f2' : '#fff',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleDeleteSelection(vessel.id)}
+                          onClick={e => e.stopPropagation()}
+                          aria-label={`Select ${vessel.name} for deletion`}
+                          style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#dc2626' }}
+                        />
+                        <span style={{ minWidth: 0 }}>
+                          <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
+                          <span style={{ display: 'block', marginTop: 2, fontSize: 11, color: '#64748b' }}>{vessel.vessel_type || 'Vessel'}{vessel.imo ? ` | IMO ${vessel.imo}` : ''}</span>
+                        </span>
+                        <button
+                          onClick={e => {
+                            e.stopPropagation();
+                            openSingleDeleteModal(vessel);
+                          }}
+                          style={{ border: '1px solid #fecaca', background: '#fff', color: '#dc2626', borderRadius: 8, padding: '5px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+                          title="Delete this vessel only"
+                        >
+                          Delete only
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div style={{ border: '1px solid #fecdd3', borderRadius: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'linear-gradient(180deg,#fff1f2,#fff)' }}>
+                <div style={{ padding: '12px 14px', borderBottom: '1px solid #fecdd3', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ fontSize: 12, color: '#9f1239', fontWeight: 700 }}>Selected For Deletion</span>
+                  <button
+                    onClick={proceedToDeleteModal}
+                    disabled={selectedDeleteCount === 0}
+                    style={{ background: selectedDeleteCount > 0 ? 'linear-gradient(135deg, #ef4444, #dc2626)' : '#fca5a5', color: '#fff', border: 'none', borderRadius: 8, padding: '7px 11px', fontSize: 12, fontWeight: 700, cursor: selectedDeleteCount > 0 ? 'pointer' : 'not-allowed' }}
+                  >
+                    Delete Selected ({selectedDeleteCount})
+                  </button>
+                </div>
+
+                <div style={{ padding: 12, overflowY: 'auto', flex: 1 }}>
+                  {selectedDeleteCount === 0 ? (
+                    <div style={{ marginTop: 8, background: '#fff', border: '1px dashed #fda4af', borderRadius: 10, padding: '12px 12px', color: '#9f1239', fontSize: 12, lineHeight: 1.45 }}>
+                      Select one or more vessels from the left list to enable bulk delete.
+                    </div>
+                  ) : (
+                    selectedDeleteVessels.map(vessel => (
+                      <div key={vessel.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 10px', marginBottom: 8, border: '1px solid #fecdd3', borderRadius: 9, background: '#fff' }}>
+                        <span style={{ minWidth: 0 }}>
+                          <span style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#881337', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
+                          <span style={{ display: 'block', marginTop: 2, fontSize: 11, color: '#9f1239' }}>{vessel.vessel_type || 'Vessel'}{vessel.imo ? ` | IMO ${vessel.imo}` : ''}</span>
+                        </span>
+                        <button
+                          onClick={() => toggleDeleteSelection(vessel.id)}
+                          style={{ border: 'none', background: 'transparent', color: '#e11d48', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                          title="Remove from selected"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {!!host.state.modalError && (
+                  <div style={{ margin: '0 12px 12px', background: '#fde7e9', color: '#a4262c', padding: 8, borderRadius: 6, fontSize: 12 }}>{host.state.modalError}</div>
+                )}
+
+                <div style={{ padding: '0 12px 12px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                  <button
+                    onClick={() => host.setState({ vesselActionPicker: null, modalError: null })}
+                    style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#334155', borderRadius: 8, padding: '7px 12px', fontSize: 12, cursor: 'pointer' }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1569,6 +1922,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
               return (
                 <div
                   key={vessel.id}
+                  className="vessel-card"
                   onClick={() => host.setState({ selectedVessel: isSelected ? null : vessel })}
                   style={{
                     background: '#fff',
@@ -1589,6 +1943,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                   {/* Card image header */}
                   <div style={{ position: 'relative', height: 140, overflow: 'hidden', background: '#1e3a5f' }}>
                     <img
+                      className="vessel-card-image"
                       src={resolveImgUrl(imgSrc)}
                       alt={vessel.name}
                       style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.9 }}
@@ -1597,6 +1952,44 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                       position: 'absolute', inset: 0,
                       background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(15,23,42,0.8) 100%)',
                     }} />
+                    {/* Lightweight SVG overlay: subtle animated ship + water + clouds. */}
+                    <div className="vessel-illustration" aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }}>
+                      <svg viewBox="0 0 320 140" preserveAspectRatio="none" style={{ width: '100%', height: '100%' }}>
+                        <g transform="translate(24 26)">
+                          <g className="cloud cloud-a">
+                          <ellipse cx="0" cy="0" rx="15" ry="6" fill="rgba(255,255,255,0.20)" />
+                          <ellipse cx="13" cy="-3" rx="12" ry="7" fill="rgba(255,255,255,0.20)" />
+                          <ellipse cx="25" cy="1" rx="11" ry="6" fill="rgba(255,255,255,0.20)" />
+                          </g>
+                        </g>
+                        <g transform="translate(208 18)">
+                          <g className="cloud cloud-b">
+                          <ellipse cx="0" cy="0" rx="14" ry="6" fill="rgba(255,255,255,0.16)" />
+                          <ellipse cx="12" cy="-3" rx="10" ry="6" fill="rgba(255,255,255,0.16)" />
+                          <ellipse cx="23" cy="1" rx="9" ry="5" fill="rgba(255,255,255,0.16)" />
+                          </g>
+                        </g>
+
+                        <g transform="translate(96 86)">
+                          <g className="ship-bob">
+                          <g className="ship-body">
+                            <path d="M0 18 L14 6 H128 L146 18 Z" fill="rgba(255,255,255,0.30)" />
+                            <rect x="26" y="2" width="20" height="10" rx="2" fill="rgba(255,255,255,0.24)" />
+                            <g transform="translate(52 2)"><g className="deck deck-1">
+                              <rect x="0" y="0" width="15" height="8" rx="1.5" fill="rgba(125,211,252,0.70)" />
+                            </g></g>
+                            <g transform="translate(71 3)"><g className="deck deck-2">
+                              <rect x="0" y="0" width="14" height="7" rx="1.5" fill="rgba(134,239,172,0.68)" />
+                            </g></g>
+                            <g transform="translate(89 2)"><g className="deck deck-3">
+                              <rect x="0" y="0" width="16" height="8" rx="1.5" fill="rgba(253,224,71,0.62)" />
+                            </g></g>
+                          </g>
+                          </g>
+                        </g>
+
+                      </svg>
+                    </div>
                     {/* Status badge */}
                     <span style={{
                       position: 'absolute', top: 12, right: 12,
@@ -1710,10 +2103,138 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
         {/* Keyframe animation for spinners */}
         <style>{`
           @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        `}</style>
 
-        {/* ── Classify Dialog ── */}
-        {renderClassifyDialog(host)}
+          @keyframes vesselBob {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-3.5px); }
+          }
+
+          @keyframes vesselImageBob {
+            0%, 100% { transform: scale(1.03) translateY(0); }
+            50% { transform: scale(1.03) translateY(-4px); }
+          }
+
+          @keyframes waterDriftA {
+            0% { transform: translateX(-120px); }
+            100% { transform: translateX(0); }
+          }
+
+          @keyframes waterDriftB {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(120px); }
+          }
+
+          @keyframes deckSwayA {
+            0%, 100% { transform: rotate(0deg); }
+            50% { transform: rotate(0.5deg); }
+          }
+
+          @keyframes deckSwayB {
+            0%, 100% { transform: rotate(0deg); }
+            50% { transform: rotate(-0.45deg); }
+          }
+
+          @keyframes deckSwayC {
+            0%, 100% { transform: rotate(0deg); }
+            50% { transform: rotate(0.4deg); }
+          }
+
+          @keyframes cloudDriftA {
+            0%, 100% { transform: translateX(0); }
+            50% { transform: translateX(8px); }
+          }
+
+          @keyframes cloudDriftB {
+            0%, 100% { transform: translateX(0); }
+            50% { transform: translateX(-6px); }
+          }
+
+          .vessel-card .ship-bob {
+            transform-box: fill-box;
+            transform-origin: center center;
+            animation: vesselBob 3s ease-in-out infinite;
+            will-change: transform;
+          }
+
+          .vessel-card .vessel-card-image {
+            animation: vesselImageBob 3s ease-in-out infinite;
+            transform-origin: center center;
+            will-change: transform;
+          }
+
+          .vessel-card .water-track-a {
+            animation: waterDriftA 6s linear infinite;
+            will-change: transform;
+          }
+
+          .vessel-card .water-track-b {
+            animation: waterDriftB 6s linear infinite;
+            will-change: transform;
+          }
+
+          .vessel-card .deck {
+            transform-box: fill-box;
+            transform-origin: center bottom;
+            will-change: transform;
+          }
+
+          .vessel-card .deck-1 {
+            animation: deckSwayA 4.1s ease-in-out infinite;
+            animation-delay: -0.45s;
+          }
+
+          .vessel-card .deck-2 {
+            animation: deckSwayB 4.6s ease-in-out infinite;
+            animation-delay: -1.1s;
+          }
+
+          .vessel-card .deck-3 {
+            animation: deckSwayC 4.0s ease-in-out infinite;
+            animation-delay: -0.7s;
+          }
+
+          .vessel-card .cloud {
+            transform-box: fill-box;
+            transform-origin: center center;
+            will-change: transform;
+          }
+
+          .vessel-card .cloud-a {
+            animation: cloudDriftA 14s ease-in-out infinite;
+          }
+
+          .vessel-card .cloud-b {
+            animation: cloudDriftB 16s ease-in-out infinite;
+            animation-delay: -1.4s;
+          }
+
+          .vessel-card:hover .ship-bob,
+          .vessel-card:hover .vessel-card-image,
+          .vessel-card:hover .water-track-a,
+          .vessel-card:hover .water-track-b,
+          .vessel-card:hover .deck-1,
+          .vessel-card:hover .deck-2,
+          .vessel-card:hover .deck-3,
+          .vessel-card:hover .cloud-a,
+          .vessel-card:hover .cloud-b {
+            animation-play-state: paused;
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .vessel-card .ship-bob,
+            .vessel-card .vessel-card-image,
+            .vessel-card .water-track-a,
+            .vessel-card .water-track-b,
+            .vessel-card .deck-1,
+            .vessel-card .deck-2,
+            .vessel-card .deck-3,
+            .vessel-card .cloud-a,
+            .vessel-card .cloud-b {
+              animation: none !important;
+              transform: none !important;
+            }
+          }
+        `}</style>
 
         {/* ── Dismiss Confirm Dialog ── */}
         {renderDismissConfirmDialog(host)}

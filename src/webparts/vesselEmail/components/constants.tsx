@@ -6,6 +6,138 @@ export function cleanName(name: string): string {
   return (name || '').replace(/^_+|_+$/g, '').trim();
 }
 
+export function resolveDetectedVesselForFile(
+  file: { name: string; id?: string; vesselName?: string; vessel?: string; detectedVessel?: string },
+  host?: any,
+  rowVesselName?: string | null
+): string {
+  if (!file || !file.name) return '';
+  const fileName = file.name;
+  const fnLower = fileName.toLowerCase();
+
+  // 1. Check explicit vessel property on file object
+  const explicitVessel = (file as any).detectedVessel || (file as any).vesselName || (file as any).vessel;
+  if (explicitVessel && typeof explicitVessel === 'string') {
+    const vClean = explicitVessel.trim();
+    if (vClean && !/^(common for all|kaizen|unknown|not detected|n\/a)$/i.test(vClean)) {
+      return vClean;
+    }
+  }
+
+  // 2. Check filename prefix (e.g. "GHANA EXPRESS - General Arrangement.pdf")
+  const cleanFn = fileName.replace(/\.[^/.]+$/, '').trim();
+  const dashMatch = cleanFn.match(/^([A-Z0-9\s]{3,30}?)\s*[-–—_]\s*(.+)$/i);
+  if (dashMatch) {
+    const cand = dashMatch[1].trim();
+    const generic = new Set(['drawing', 'manual', 'certificate', 'plan', 'report', 'spec', 'file', 'doc', 'pdf', '1', '2', '3']);
+    if (!generic.has(cand.toLowerCase()) && cand.length >= 3 && !/^\d+$/.test(cand)) {
+      return cand.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+    }
+  }
+
+  // 3. Map of Vessel Aliases, Hull Numbers, IMO Numbers, and Yard Series
+  const VESSEL_MATCH_MAP: Array<{ name: string; patterns: (string | RegExp)[] }> = [
+    {
+      name: 'Ghana Express',
+      patterns: [
+        'ghana express', 'ghana-express', 'ghana_express',
+        /\b(?:s\.?no\.?|hull|h|s|ship\s*no\.?|ship)?\s*721\b/i,
+        /\bho-?[1-4]\b/i,
+        'kitanihon'
+      ]
+    },
+    {
+      name: 'Peissy',
+      patterns: [
+        'peissy',
+        /\b(?:s\.?no\.?|hull|h|s|ship\s*no\.?|ship)?\s*378\b/i,
+        'ss378', 'ss-378', 'ss_378'
+      ]
+    },
+    {
+      name: 'Belle Lune',
+      patterns: [
+        'belle lune', 'belle-lune', 'belle_lune',
+        /\b(?:s\.?no\.?|hull|h|s|ship\s*no\.?|ship)?\s*268\b/i,
+        'ss268', 'ss-268', 'ss_268'
+      ]
+    },
+    {
+      name: 'Norse Evolution',
+      patterns: [
+        'norse evolution', 'norse-evolution', 'norse_evolution',
+        /\b(?:hull|h|s)?\s*501\b/i, 'ne-501', 'ne501'
+      ]
+    },
+    {
+      name: 'Bow Fighter',
+      patterns: [
+        'bow fighter', 'bow-fighter', 'bow_fighter',
+        'n-2119', 'n2119', 'n 2119', 'n.2119',
+        /\b(?:hull|h|n|s)?-?\s*2119\b/i,
+        '1054292', 'nk-23', 'nk23', 'gh-3030', 'gh3030'
+      ]
+    },
+    { name: 'Bow Fraternity', patterns: ['bow fraternity', 'bow-fraternity', 'bow_fraternity'] },
+    { name: 'Cameroun Express', patterns: ['cameroun express', 'cameroon express', 'cameroun-express'] },
+    { name: 'Cecilie F', patterns: ['cecilie f', 'cecilie-f', 'cecilief'] },
+    { name: 'Cote D Ivoire Express', patterns: ['cote d ivoire express', "cote d'ivoire express", "côte d'ivoire express", 'cote divoire express'] },
+    { name: 'Dutches Emerald', patterns: ['dutches emerald', 'duchess emerald', 'dutchess emerald'] },
+    { name: 'Lignum Grid', patterns: ['lignum grid', 'lignum-grid'] },
+    { name: 'Lignum Mesh', patterns: ['lignum mesh', 'lignum-mesh'] },
+    { name: 'Lignum Web', patterns: ['lignum web', 'lignum-web'] },
+    { name: 'Maersk EI Banco', patterns: ['maersk ei banco', 'maersk el banco', 'ei banco', 'el banco'] },
+    { name: 'Maersk EI Palomar', patterns: ['maersk ei palomar', 'maersk el palomar', 'ei palomar', 'el palomar'] },
+    { name: 'Maersk Ferrato', patterns: ['maersk ferrato', 'maersk-ferrato'] },
+    { name: 'Maersk Finisterre', patterns: ['maersk finisterre', 'maersk-finisterre'] },
+    { name: 'Maersk Frio', patterns: ['maersk frio', 'maersk-frio'] },
+    { name: 'Norse Ijmuiden', patterns: ['norse ijmuiden', 'norse ymuiden', 'norse-ijmuiden'] },
+    { name: 'Norse New Haven', patterns: ['norse new haven', 'norse-new-haven'] },
+    { name: 'Potiniere', patterns: ['potiniere', 'potinière'] },
+    { name: 'Senegal Express', patterns: ['senegal express', 'senegal-express'] },
+    { name: 'Snow Flake', patterns: ['snow flake', 'snowflake', 'snow-flake'] },
+    { name: 'Snow Flower', patterns: ['snow flower', 'snowflower', 'snow-flower'] }
+  ];
+
+  for (const entry of VESSEL_MATCH_MAP) {
+    for (const pat of entry.patterns) {
+      if (typeof pat === 'string') {
+        if (fnLower.includes(pat.toLowerCase())) return entry.name;
+      } else if (pat instanceof RegExp) {
+        if (pat.test(fnLower)) return entry.name;
+      }
+    }
+  }
+
+  // 4. Check host.state.vessels dynamically (name, imo, hull_number)
+  if (host?.state?.vessels) {
+    for (const v of host.state.vessels) {
+      if (!v.name) continue;
+      const vNameLow = v.name.trim().toLowerCase();
+      if (vNameLow && fnLower.includes(vNameLow)) return v.name;
+      if (v.imo && v.imo.length >= 5 && fnLower.includes(v.imo.toLowerCase())) return v.name;
+      if (v.hull_number && v.hull_number.length >= 2 && fnLower.includes(v.hull_number.trim().toLowerCase())) return v.name;
+    }
+  }
+
+  // 5. If file is associated with a specific rowVesselName in flat rows, use matching row vessel
+  if (rowVesselName && typeof rowVesselName === 'string') {
+    const rClean = rowVesselName.trim();
+    if (rClean && !/^(common for all|kaizen|unknown|not detected|n\/a)$/i.test(rClean)) {
+      if (host?.state?.rows) {
+        const fileId = (file as any).id || file.name;
+        const matchingRow = host.state.rows.find((r: any) =>
+          (r.fileName === file.name || r.fileId === fileId) &&
+          r.vesselName && r.vesselName.trim().toLowerCase() === rClean.toLowerCase()
+        );
+        if (matchingRow) return matchingRow.vesselName;
+      }
+    }
+  }
+
+  return '';
+}
+
 export const VESSEL_TYPES = [
   'Bulk Carrier', 'Container Ship', 'Gas Carrier',
   'Oil Tanker', 'Chemical Tanker', 'General Cargo', 'Offshore Support', 'Other Cargo Ships',
@@ -124,4 +256,5 @@ export const INITIAL_MOCK_USERS: UserItem[] = [
   { id: 'u3', name: 'Rohit Kumar', email: 'rohit.kumar@company.com', role: 'User', status: 'Active', lastLogin: 'May 11, 2024' },
   { id: 'u4', name: 'Ankita Verma', email: 'ankita.verma@company.com', role: 'User', status: 'Active', lastLogin: 'May 10, 2024' },
   { id: 'u5', name: 'Vikram Singh', email: 'vikram.singh@company.com', role: 'Reviewer', status: 'Inactive', lastLogin: 'May 08, 2024' },
-];
+];
+

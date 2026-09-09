@@ -5,6 +5,7 @@ export type ModalMode = 'none' | 'create' | 'edit' | 'delete' | 'user' | 'templa
 export type AppView = 
   | 'dashboard'
   | 'list'
+  | 'sites'
   | 'vessels'
   | 'templates'
   | 'approvals'

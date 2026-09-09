@@ -15,6 +15,7 @@ import type {
   ApprovalItem, NotificationItem, UserItem,
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
+import { isMobileWidth } from '../responsive';
 
 export function renderVesselForm(host: VesselEmail, mode: 'create' | 'edit'): React.ReactElement {
   return <VesselFormContent host={host} mode={mode} />;
@@ -22,6 +23,7 @@ export function renderVesselForm(host: VesselEmail, mode: 'create' | 'edit'): Re
 
 function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' | 'edit' }): React.ReactElement {
   const { form, modalBusy, modalMsg, modalError, formFieldErrors, vessels } = host.state;  const isCreate = mode === 'create';
+  const isMobile = isMobileWidth(host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
   const [elapsed, setElapsed] = React.useState(0);
 
   React.useEffect(() => {
@@ -68,10 +70,10 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
 
   return (
     <div
-      style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: isMobile ? 10 : 20 }}
       onClick={e => { if (e.target === e.currentTarget && !modalBusy) handleClose(); }}
     >
-      <div style={{ background: '#fff', borderRadius: 20, padding: '32px 36px', width: 480, maxWidth: '92vw', boxShadow: '0 24px 64px rgba(0,0,0,0.28)', position: 'relative' }}>
+      <div style={{ background: '#fff', borderRadius: 20, padding: isMobile ? '20px 16px' : '32px 36px', width: isMobile ? '95vw' : 480, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.28)', position: 'relative' }}>
 
         {!modalBusy && (
           <button
@@ -277,12 +279,12 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
               </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 28 }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', flexDirection: isMobile ? 'column' : 'row', gap: 10, marginTop: 28 }}>
               <button
-                style={{ background: 'transparent', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 14, fontWeight: 500, color: '#475569', cursor: 'pointer' }}
+                style={{ background: 'transparent', border: '1px solid #cbd5e1', borderRadius: 8, minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '10px 20px', fontSize: 14, fontWeight: 500, color: '#475569', cursor: 'pointer' }}
                 onClick={handleClose}>Cancel</button>
               <button
-                style={{ background: 'linear-gradient(135deg, #0d9488, #0f766e)', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+                style={{ background: 'linear-gradient(135deg, #0d9488, #0f766e)', color: '#fff', border: 'none', borderRadius: 8, minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '10px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
                 onClick={isCreate ? host._submitCreate : host._submitEdit}>
                 {isCreate ? 'Create Vessel' : 'Update Vessel'}
               </button>

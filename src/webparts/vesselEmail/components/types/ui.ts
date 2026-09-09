@@ -28,9 +28,12 @@ export interface DeletedNode {
   modified?: string | null;
   ext?: string;
   vessel_name?: string;
+  document_section?: string;
+  group?: string;
   category?: string;
   sub_category?: string;
   imo?: string;
+  vessel_imo?: string;
   shipyard?: string;
   hull_number?: string;
   vessel_type?: string;
@@ -52,6 +55,58 @@ export interface DocumentItem {
   isFolder?: boolean;
 }
 
+export interface TagFieldDef {
+  key: string;
+  label: string;
+  type: 'text' | 'textarea' | 'select_vessel' | 'select_dept' | 'select_category' | 'select';
+  required: boolean;
+  options?: string[] | null;
+}
+
+export interface DocumentCategory {
+  id: number;
+  name: string;
+  department: string | null;
+  dms_path_template: string | null;
+  tag_fields: TagFieldDef[];
+  ocr_hints: string[];
+  is_active: boolean;
+  created_by_email?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface OcrFieldResult {
+  value: string;
+  confidence: number;
+  tier: 1 | 2;
+}
+
+export type OcrSuggestedTags = Record<string, OcrFieldResult | string | any>;
+
+export interface OcrStagingItem {
+  id: number;
+  filename: string;
+  drive_item_id: string | null;
+  source_folder_id: string | null;
+  source_subfolder_path: string | null;
+  vessel_name: string | null;
+  upload_source: 'folder' | 'direct';
+  status: 'ocr_pending' | 'ocr_complete' | 'tag_suggested' | 'needs_review' | 'moved' | 'dismissed';
+  category_id: number | null;
+  category_name: string | null;
+  tag_fields: TagFieldDef[];
+  suggested_tags: OcrSuggestedTags;
+  ocr_text_preview: string | null;
+  confidence: number | null;
+  matched_keywords: string[];
+  final_path: string | null;
+  uploaded_by_email: string | null;
+  error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export interface TemplateItem {
   id: string;
   name: string;
@@ -67,6 +122,7 @@ export interface ApprovalItem {
   requestedBy: string;
   requestedOn: string;
   status: 'Pending' | 'Approved' | 'Rejected';
+  actionType?: string;
 }
 
 export interface NotificationItem {
@@ -96,14 +152,17 @@ export interface AlertItem {
     | 'folder_created'
     | 'vessel_provisioned'
     | 'vessel_deleted'         // vessel moved to recycle bin
+    | 'document_deleted'       // file or folder moved to recycle bin
     | 'vessel_unrecognised'   // folder at vessel level not in DMS
     | 'file_outside_structure' // file uploaded outside DMS folder tree
     | 'subfolder_anomaly'      // unexpected subfolder inside a vessel's category
     | 'crud_operation'
     | 'email_alert';
-  alert_category?: 'dms' | 'crud' | 'email';
+  alert_category?: 'dms' | 'unclassified' | 'classified' | 'crud' | 'email';
   read: boolean;
+  read_at?: string | null;
   created_at: string | null;
+  updated_at?: string | null;
   // Anomaly-specific fields (populated for anomaly alert types)
   anomaly_id?: number;
   item_type?: 'folder' | 'file';
@@ -130,6 +189,9 @@ export interface FolderAnomalyItem {
   spo_path: string;
   resolved: boolean;
   detected_at: string | null;
+  read?: boolean;
+  read_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface NormalFolderRecord {
@@ -157,4 +219,72 @@ export interface SpoFileAlertDialog {
   error: string | null;
 }
 
+
+// ── Vessel Suggestions Module ─────────────────────────────────────────────────
+
+/** Extracted + editable vessel identity extracted from uploaded document file names / OCR text. */
+export interface VesselSuggestion {
+  /** 7-digit IMO number, e.g. "9812345" */
+  imoNumber: string;
+  /** Shipyard name, e.g. "Hyundai Heavy Industries" */
+  shipyard: string;
+  /** Hull / yard number, e.g. "SS268" */
+  hullNumber: string;
+  /** Vessel type, e.g. "Bulk Carrier" */
+  vesselType: string;
+  /** Inferred or matched vessel display name */
+  vesselName: string;
+  /** Non-null when an existing vessel was found in the Term Store that matches */
+  matchedExisting: import('./rows').VesselRecord | null;
+  /** 0–1 confidence score for the match */
+  confidence: number;
+  /** File names that contributed to the extraction */
+  sourceFiles: string[];
+  /** Whether this suggestion was verified from backend OCR extraction */
+  ocrVerified?: boolean;
+  /** OCR scanned preview text */
+  ocrTextPreview?: string;
+  /** Backend OCR confidence score (0–1) */
+  ocrConfidence?: number;
+  /** Keywords matched by OCR */
+  matchedKeywords?: string[];
+  /** Suggested metadata tags from OCR classification */
+  suggestedTags?: Record<string, any>;
+  /** Last time this suggestion was detected from scanned/uploaded files */
+  lastDetectedAt?: number;
+}
+
+/** Upload context captured at the time files were uploaded, used to map the
+ * vessel suggestion wizard action back to the correct OCR staging rows. */
+export interface VesselSuggestionUploadEntry {
+  filename: string;
+  drive_item_id: string | null;
+  source_subfolder_path?: string | null;
+  source_vessel_name?: string | null;
+  uploaded_at?: number;
+}
+
+/** State shape for the Vessel Suggestions wizard dialog. */
+export interface VesselSuggestionDialog {
+  open: boolean;
+  /** Current wizard step */
+  step: 'extract' | 'match' | 'review' | 'done';
+  /** Raw File objects being analysed */
+  files: File[];
+  /** Upload context for robust staging row matching (drive_item_id first). */
+  uploadEntries?: VesselSuggestionUploadEntry[];
+  /** True while async extraction is running */
+  extracting: boolean;
+  /** Primary result of extraction + Term Store match */
+  suggestion: VesselSuggestion | null;
+  /** User-editable copy of suggestion — pre-filled, but all fields are editable */
+  editedSuggestion: VesselSuggestion | null;
+  /** List of all distinct vessel suggestions found across uploaded files/folder */
+  allSuggestions?: VesselSuggestion[];
+  /** Currently selected suggestion index from allSuggestions */
+  selectedSuggestionIndex?: number;
+  /** True while the create-vessel / provision API call is in flight */
+  creating: boolean;
+  error: string | null;
+}
 

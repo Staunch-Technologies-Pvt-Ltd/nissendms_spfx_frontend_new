@@ -61,6 +61,13 @@ function encodePath(path: string): string {
     .join('/');
 }
 
+function sanitizeFolderName(name: string): string {
+  return (name || '')
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -86,6 +93,8 @@ async function createFolder(
   parentPath: string,
   folderName: string,
 ): Promise<{ id: string; existed: boolean }> {
+  const safeFolderName = sanitizeFolderName(folderName);
+
   // When parentPath is empty, the folder goes at the drive root.
   // Graph API root-level children endpoint is /root/children (no path segment).
   // Using /root:/<empty>:/children produces a double-slash and a 400/404.
@@ -93,19 +102,19 @@ async function createFolder(
     ? `/sites/${siteId}/drives/${driveId}/root:/${encodePath(parentPath)}:/children`
     : `/sites/${siteId}/drives/${driveId}/root/children`;
 
-  console.log(`[VesselDMS] createFolder → POST ${url} name="${folderName}"`);
+  console.log(`[VesselDMS] createFolder → POST ${url} name="${safeFolderName}"`);
 
   try {
   const response = await withTimeout(
       client.api(url).post({
-        name: folderName,
+        name: safeFolderName,
         folder: {},
         '@microsoft.graph.conflictBehavior': 'fail',
       }),
       GRAPH_CALL_TIMEOUT_MS,
-      `create "${folderName}"`,
+      `create "${safeFolderName}"`,
     );
-    console.log(`[VesselDMS] createFolder ✓ created id=${response.id} "${folderName}"`);
+    console.log(`[VesselDMS] createFolder ✓ created id=${response.id} "${safeFolderName}"`);
     return { id: response.id as string, existed: false };
   } catch (err: any) {
     // 409 = folder already exists — treat as success
@@ -116,21 +125,21 @@ async function createFolder(
       (err?.message ?? '').toLowerCase().includes('namealreadyexists');
 
     if (isConflict) {
-      console.log(`[VesselDMS] createFolder ↩ existed "${folderName}"`);
+      console.log(`[VesselDMS] createFolder ↩ existed "${safeFolderName}"`);
       // Fetch the existing folder's ID so callers have it
       try {
-        const fullPath = parentPath ? `${parentPath}/${folderName}` : folderName;
+        const fullPath = parentPath ? `${parentPath}/${safeFolderName}` : safeFolderName;
        const existing = await withTimeout(
           client.api(`/sites/${siteId}/drives/${driveId}/root:/${encodePath(fullPath)}`).get(),
           GRAPH_CALL_TIMEOUT_MS,
-          `lookup existing "${folderName}"`,
+          `lookup existing "${safeFolderName}"`,
         );
         return { id: existing.id as string, existed: true };
       } catch {
         return { id: '', existed: true };
       }
     }
-    console.error(`[VesselDMS] createFolder ✗ FAILED "${folderName}" status=${status}`, err?.message ?? err);
+    console.error(`[VesselDMS] createFolder ✗ FAILED "${safeFolderName}" status=${status}`, err?.message ?? err);
     throw err;
   }
 }
@@ -149,14 +158,15 @@ async function createTree(
   onProgress?: (result: FolderResult) => void,
 ): Promise<void> {
   for (const node of nodes) {
-    const fullPath = `${parentPath}/${node.name}`;
+    const safeName = sanitizeFolderName(node.name);
+    const fullPath = `${parentPath}/${safeName}`;
     try {
       const { id, existed } = await createFolder(
         client,
         siteId,
         driveId,
         parentPath,
-        node.name,
+        safeName,
       );
       const entry: FolderResult = { path: fullPath, id, status: existed ? 'existed' : 'created' };
       log.push(entry);
@@ -182,10 +192,9 @@ async function createTree(
 
 /**
  * Ensure the base structure exists:
- *   Documents/Vessels/
- *   Documents/Vessels/Specific Vessels/
- *   Documents/Vessels/Common for all ships/{MainFolder}/{commonTree}
- *   Documents/Kaizen - Knowledge Bank/  (sibling of Vessels)
+ *   Documents/{MainFolder}/
+ *   Documents/{MainFolder}/Common for all ships/{commonTree}
+ *   Documents/Kaizen - Knowledge Bank/  (at drive root)
  * Safe to call on every app load — all operations are idempotent.
  */
 export async function ensureRootStructure(
@@ -199,38 +208,26 @@ export async function ensureRootStructure(
 
   const record = (result: FolderResult): void => { log.push(result); onProgress?.(result); };
 
-  // 1. Documents/Vessels
-  await createFolder(client, siteId, driveId, '', VESSEL_MANAGEMENT_ROOT)
-    .then(({ id, existed }) => record({ path: VESSEL_MANAGEMENT_ROOT, id, status: existed ? 'existed' : 'created' }))
-    .catch(err => record({ path: VESSEL_MANAGEMENT_ROOT, status: 'failed', error: err?.message }));
-
-  // 2. Documents/Vessels/Specific Vessels
-  const specificPath = `${VESSEL_MANAGEMENT_ROOT}/${SPECIFIC_VESSELS_ROOT}`;
-  await createFolder(client, siteId, driveId, VESSEL_MANAGEMENT_ROOT, SPECIFIC_VESSELS_ROOT)
-    .then(({ id, existed }) => record({ path: specificPath, id, status: existed ? 'existed' : 'created' }))
-    .catch(err => record({ path: specificPath, status: 'failed', error: err?.message }));
-
-  // 3. Documents/Vessels/Common for all ships
-  const commonPath = `${VESSEL_MANAGEMENT_ROOT}/${COMMON_SHIPS_ROOT}`;
-  await createFolder(client, siteId, driveId, VESSEL_MANAGEMENT_ROOT, COMMON_SHIPS_ROOT)
-    .then(({ id, existed }) => record({ path: commonPath, id, status: existed ? 'existed' : 'created' }))
-    .catch(err => record({ path: commonPath, status: 'failed', error: err?.message }));
-
-  // 4. Documents/Vessels/Common for all ships/{MainFolder}/{commonTree}
+  // 1. Documents/{MainFolder} & Documents/{MainFolder}/{commonFolderName}
   for (const mf of MAIN_FOLDERS) {
-    const mfPath = `${commonPath}/${mf.name}`;
     try {
-      const { id, existed } = await createFolder(client, siteId, driveId, commonPath, mf.name);
-      record({ path: mfPath, id, status: existed ? 'existed' : 'created' });
+      const { id: mfId, existed: mfExisted } = await createFolder(client, siteId, driveId, '', mf.name);
+      record({ path: mf.name, id: mfId, status: mfExisted ? 'existed' : 'created' });
+
+      const commonName = (mf as any).commonFolderName ?? COMMON_SHIPS_ROOT;
+      const commonPath = `${mf.name}/${commonName}`;
+      const { id: cId, existed: cExisted } = await createFolder(client, siteId, driveId, mf.name, commonName);
+      record({ path: commonPath, id: cId, status: cExisted ? 'existed' : 'created' });
+
       if (mf.commonTree.length > 0) {
-        await createTree(client, siteId, driveId, mfPath, mf.commonTree, log, onProgress);
+        await createTree(client, siteId, driveId, commonPath, mf.commonTree, log, onProgress);
       }
     } catch (err: any) {
-      record({ path: mfPath, status: 'failed', error: err?.message });
+      record({ path: mf.name, status: 'failed', error: err?.message });
     }
   }
 
-  // 5. Documents/Kaizen - Knowledge Bank (sibling of Vessels, at drive root)
+  // 2. Documents/Kaizen - Knowledge Bank (at drive root)
   const kaizenName = 'Kaizen - Knowledge Bank';
   await createFolder(client, siteId, driveId, '', kaizenName)
     .then(({ id, existed }) => record({ path: kaizenName, id, status: existed ? 'existed' : 'created' }))
@@ -238,9 +235,10 @@ export async function ensureRootStructure(
 
   return log;
 }
+
 /**
  * Create the full per-vessel folder tree for a new vessel.
- * Structure: Documents/Vessels/Specific Vessels/{VesselName}/{MainFolder}/...
+ * Structure: Documents/{MainFolder}/{VesselName}/{perVesselTree}
  */
 export async function createVesselFolders(
   client: MSGraphClientV3,
@@ -251,52 +249,38 @@ export async function createVesselFolders(
   skipRootStructure?: boolean,
 ): Promise<VesselFolderCreationResult> {
   const log: FolderResult[] = [];
-  console.log(`[VesselDMS] createVesselFolders START vessel="${vesselName}"`);
+  const safeVesselName = sanitizeFolderName(vesselName);
+  console.log(`[VesselDMS] createVesselFolders START vessel="${safeVesselName}"`);
 
   if (!siteId || !driveId) {
-    return { vesselName, siteId, driveId, results: log, success: false };
+    return { vesselName: safeVesselName, siteId, driveId, results: log, success: false };
   }
 
-  // Ensure Vessels/, Vessels/Specific Vessels/, Vessels/Common for all ships/, Kaizen/
+  // Ensure main folders & common trees exist
   if (!skipRootStructure) {
     const rootLog = await ensureRootStructure(client, siteId, driveId, onProgress);
     log.push(...rootLog);
   }
 
-  // Documents/Vessels/Specific Vessels/{VesselName}
-  const specificVesselsPath = `${VESSEL_MANAGEMENT_ROOT}/${SPECIFIC_VESSELS_ROOT}`;
-  const vesselFolderPath = `${specificVesselsPath}/${vesselName}`;
-  try {
-    const { id, existed } = await createFolder(client, siteId, driveId, specificVesselsPath, vesselName);
-    const result: FolderResult = { path: vesselFolderPath, id, status: existed ? 'existed' : 'created' };
-    log.push(result);
-    onProgress?.(result);
-  } catch (err: any) {
-    const result: FolderResult = { path: vesselFolderPath, status: 'failed', error: err?.message ?? String(err) };
-    log.push(result);
-    onProgress?.(result);
-    return { vesselName, siteId, driveId, results: log, success: false };
-  }
-
-  // Documents/Vessels/Specific Vessels/{VesselName}/{MainFolder}/{perVesselTree}
+  // For each main folder, create {MainFolder}/{VesselName}/{perVesselTree}
   for (const mf of MAIN_FOLDERS) {
-    const mainFolderPath = `${vesselFolderPath}/${mf.name}`;
+    const vesselFolderPath = `${mf.name}/${safeVesselName}`;
     try {
-      const { id, existed } = await createFolder(client, siteId, driveId, vesselFolderPath, mf.name);
-      const result: FolderResult = { path: mainFolderPath, id, status: existed ? 'existed' : 'created' };
+      const { id, existed } = await createFolder(client, siteId, driveId, mf.name, safeVesselName);
+      const result: FolderResult = { path: vesselFolderPath, id, status: existed ? 'existed' : 'created' };
       log.push(result);
       onProgress?.(result);
-      await createTree(client, siteId, driveId, mainFolderPath, mf.perVesselTree, log, onProgress);
+      await createTree(client, siteId, driveId, vesselFolderPath, mf.perVesselTree, log, onProgress);
     } catch (err: any) {
-      const result: FolderResult = { path: mainFolderPath, status: 'failed', error: err?.message ?? String(err) };
+      const result: FolderResult = { path: vesselFolderPath, status: 'failed', error: err?.message ?? String(err) };
       log.push(result);
       onProgress?.(result);
     }
   }
 
   const success = log.every(r => r.status !== 'failed');
-  console.log(`[VesselDMS] createVesselFolders DONE vessel="${vesselName}" success=${success}`);
-  return { vesselName, siteId, driveId, results: log, success };
+  console.log(`[VesselDMS] createVesselFolders DONE vessel="${safeVesselName}" success=${success}`);
+  return { vesselName: safeVesselName, siteId, driveId, results: log, success };
 }
 /**
  * Retry only the paths that previously failed.
@@ -337,3 +321,113 @@ export async function retryFailedFolders(
 
   return updated;
 }
+
+/**
+ * Automatically retry failed folders in a loop until all succeed or the
+ * attempt budget is exhausted.
+ *
+ * @param client         - MSGraph client
+ * @param siteId         - SharePoint site ID
+ * @param driveId        - Drive ID
+ * @param previousResults - Full result array from a previous createVesselFolders / retryFailedFolders call
+ * @param maxAttempts    - Maximum number of retry rounds (default 3)
+ * @param delayMs        - Milliseconds to wait between rounds (default 3 000 ms)
+ * @param onProgress     - Optional callback fired after each round with (attemptNumber, updatedResults)
+ * @returns Final merged FolderResult[] — may still contain failures if all attempts exhausted
+ */
+export async function retryUntilComplete(
+  client: MSGraphClientV3,
+  siteId: string,
+  driveId: string,
+  previousResults: FolderResult[],
+  maxAttempts = 3,
+  delayMs = 3000,
+  onProgress?: (attempt: number, totalAttempts: number, results: FolderResult[]) => void,
+): Promise<FolderResult[]> {
+  let results = [...previousResults];
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const stillFailed = results.filter(r => r.status === 'failed');
+    if (stillFailed.length === 0) break; // all resolved — stop early
+
+    // Wait between rounds (no wait before the very first retry so it feels snappy)
+    if (attempt > 1) {
+      await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+    }
+
+    console.log(
+      `[VesselDMS] retryUntilComplete attempt ${attempt}/${maxAttempts} — retrying ${stillFailed.length} failed folder(s)`,
+    );
+
+    results = await retryFailedFolders(client, siteId, driveId, results);
+    onProgress?.(attempt, maxAttempts, results);
+  }
+
+  const remaining = results.filter(r => r.status === 'failed').length;
+  console.log(
+    `[VesselDMS] retryUntilComplete finished — ${remaining} folder(s) still failed after ${maxAttempts} attempt(s)`,
+  );
+
+  return results;
+}
+
+/**
+ * Delete a vessel's root folders across all main departments in SharePoint Online.
+ * Calling DELETE on a folder via Graph API automatically moves it into the
+ * SharePoint Site Recycle Bin (accessible via Site Contents > Recycle Bin).
+ *
+ * For each department in MAIN_FOLDERS:
+ *   DELETE /sites/{siteId}/drives/{driveId}/root:/{MainFolder}/{vesselName}
+ */
+export async function deleteVesselFolders(
+  client: MSGraphClientV3,
+  siteId: string,
+  driveId: string,
+  vesselName: string,
+): Promise<{ success: boolean; deletedPaths: string[]; errors: string[] }> {
+  const safeName = sanitizeFolderName(vesselName);
+  const deletedPaths: string[] = [];
+  const errors: string[] = [];
+
+  for (const mf of MAIN_FOLDERS) {
+    // Check both standard name and sanitized name
+    const pathsToTry = [
+      `${mf.name}/${safeName}`,
+      ...(safeName !== vesselName ? [`${mf.name}/${vesselName}`] : []),
+    ];
+
+    for (const vesselFolderPath of pathsToTry) {
+      const url = `/sites/${siteId}/drives/${driveId}/root:/${encodePath(vesselFolderPath)}`;
+      try {
+        console.log(`[VesselDMS] deleteVesselFolders → DELETE ${url}`);
+        await withTimeout(
+          client.api(url).delete(),
+          GRAPH_CALL_TIMEOUT_MS,
+          `delete folder "${vesselFolderPath}"`,
+        );
+        deletedPaths.push(vesselFolderPath);
+        console.log(`[VesselDMS] deleteVesselFolders ✓ moved to SharePoint Recycle Bin: "${vesselFolderPath}"`);
+        break; // Successfully deleted for this main folder
+      } catch (err: any) {
+        const status: number =
+          err?.statusCode ?? err?.response?.status ?? err?.code ?? 0;
+        const msg: string = (err?.message || '').toLowerCase();
+        // 404 or itemNotFound means it doesn't exist under this path — continue checking or skip
+        if (status === 404 || msg.includes('itemnotfound') || msg.includes('resource not found')) {
+          console.log(`[VesselDMS] deleteVesselFolders ℹ not found at "${vesselFolderPath}"`);
+        } else {
+          console.error(`[VesselDMS] deleteVesselFolders ✗ failed "${vesselFolderPath}" status=${status}`, err);
+          errors.push(`${vesselFolderPath}: ${err?.message ?? String(err)}`);
+        }
+      }
+    }
+  }
+
+  return {
+    success: errors.length === 0,
+    deletedPaths,
+    errors,
+  };
+}
+
+
