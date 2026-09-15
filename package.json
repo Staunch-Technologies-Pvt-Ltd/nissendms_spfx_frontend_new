@@ -1,6 +1,6 @@
 {
   "name": "vessel-email-spfx-v-2",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
   "engines": {
     "node": ">=22.14.0 < 23.0.0"
@@ -9,7 +9,7 @@
     "build": "heft test --clean --production && heft package-solution --production",
     "clean": "heft clean",
     "eject-webpack": "heft eject-webpack",
-    "start": "heft start --clean"
+    "start": "heft build-watch --serve"
   },
   "dependencies": {
     "@fluentui/react": "^8.106.4",
@@ -30,6 +30,7 @@
   "devDependencies": {
     "@microsoft/eslint-config-spfx": "1.23.2",
     "@microsoft/eslint-plugin-spfx": "1.23.2",
+    "@microsoft/rush-stack-compiler-4.7": "^0.1.1",
     "@microsoft/sp-build-web": "1.23.2",
     "@microsoft/sp-module-interfaces": "1.23.2",
     "@microsoft/spfx-heft-plugins": "1.23.2",
@@ -40,9 +41,10 @@
     "@types/react-dom": "17.0.17",
     "@types/webpack-env": "~1.15.2",
     "css-loader": "~7.1.2",
-    "eslint": "9.37.0",
-    "eslint-plugin-react-hooks": "5.2.0" 
-   },
+    "eslint": "8.57.0",
+    "eslint-plugin-react-hooks": "5.2.0",
+    "typescript": "5.3.3"
+  },
   "overrides": {
     "@rushstack/heft": "1.2.17"
   },

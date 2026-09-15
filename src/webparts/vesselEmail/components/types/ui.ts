@@ -2,6 +2,7 @@
 
 export interface FormState {
   name: string; imo: string; shipyard: string; hull_number: string; vessel_type: string;
+  target_site_ids?: string[];
 }
 
 export interface DocPreviewItem {

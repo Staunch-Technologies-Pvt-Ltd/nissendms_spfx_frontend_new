@@ -335,8 +335,12 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
       }
       const data = await res.json();
       const metadataPatch = data?.metadata_patch;
-      const metadataWarning = metadataPatch && metadataPatch.ok === false
-        ? `Metadata patch warning: ${metadataPatch.error || metadataPatch.reason || 'Columns were not updated.'}`
+      const metadataWarning = metadataPatch
+        ? metadataPatch.partial_success
+          ? `Metadata patch warning: ${metadataPatch.vessel_rest_error?.error || metadataPatch.warning || metadataPatch.error || metadataPatch.reason || 'Some OCR tags were not saved.'}`
+          : metadataPatch.ok === false
+            ? `Metadata patch warning: ${metadataPatch.error || metadataPatch.reason || 'Columns were not updated.'}`
+            : undefined
         : undefined;
 
       setActionSuccess({

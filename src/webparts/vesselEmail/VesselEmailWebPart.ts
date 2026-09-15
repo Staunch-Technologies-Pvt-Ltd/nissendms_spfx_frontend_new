@@ -29,6 +29,7 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
   private _driveId: string | undefined;
   private _userEmail: string = '';
   private _sessionId: string = '';
+  private _sessionExpired: boolean = false;
   // True once the bypass-login call has SETTLED (success, no-session-stub-mode,
   // failure, or network error) — NOT the same as having a session id. The React
   // component uses this to know it's safe to load data even when the backend
@@ -43,7 +44,7 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
     const element: React.ReactElement<IVesselEmailProps> = React.createElement(
       VesselEmail,
       {
-        apiBaseUrl: this.properties.apiBaseUrl,
+        apiBaseUrl: this._apiBaseUrl(),
         apiToken: this.properties.apiToken,
         isDarkTheme: this._isDarkTheme,
         userDisplayName: this.context.pageContext.user.displayName,
@@ -55,6 +56,7 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
         siteId: this._siteId,
         driveId: this._driveId,
         sessionId: this._sessionId,
+        sessionExpired: this._sessionExpired,
         sessionInitialized: this._sessionInitialized,
         siteUrl: this.context.pageContext.site.absoluteUrl,
       }
@@ -102,6 +104,11 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
       this._driveId = docLib?.id;
     } catch (e) {
       console.warn('[VesselDMS] Graph context init failed:', e);
+      if (this._isExpiredGraphTokenError(e)) {
+        this._sessionExpired = true;
+        this._sessionInitialized = true;
+        return;
+      }
     }
 
     // Step 2: create a backend session BEFORE first render so _loadData has a valid session_id
@@ -109,6 +116,14 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
     // NOTE: Do NOT call this.render() here — BaseClientSideWebPart calls render()
     // automatically after onInit() resolves. Calling it manually causes a double
     // render where the first pass has sessionId='' and _loadData() bails out.
+  }
+
+  private _isExpiredGraphTokenError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error || '');
+    const details = JSON.stringify(error || '');
+    return /401|InvalidAuthenticationToken|Lifetime validation failed|token is expired|invalid authentication token/i.test(
+      `${message} ${details}`
+    );
   }
 
   private async _ensureSession(): Promise<void> {
@@ -122,7 +137,7 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
       this._sessionInitialized = true;
       return;
     }
-    const base = (this.properties.apiBaseUrl || 'https://nk-dms-dev.sg-nissenkaiun.com').replace(/\/$/, '');
+    const base = this._apiBaseUrl();
     try {
       let res: Response | null = null;
       try {
@@ -175,6 +190,17 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
       // property-pane lifecycle races.
       this._sessionInitialized = true;
     }
+  }
+
+  private _apiBaseUrl(): string {
+    const configured = (this.properties.apiBaseUrl || '').replace(/\/$/, '');
+    const hostedFromLocalDev = typeof window !== 'undefined' &&
+      /(?:debugManifestsFile|localhost:4321)/i.test(window.location.href);
+    if ((this.context.isServedFromLocalhost || hostedFromLocalDev) &&
+        (!configured || configured === 'https://nk-dms-dev.sg-nissenkaiun.com')) {
+      return 'http://localhost:8000';
+    }
+    return configured || 'https://nk-dms-dev.sg-nissenkaiun.com';
   }
 
 

@@ -127,7 +127,7 @@ interface State {
   reportsSelectedVessel: string;
 
   // Settings module state
-  settingsTab: 'General' | 'Site Selection' | 'Document Settings' | 'Notification Settings' | 'Permission Settings' | 'Integration' | 'Audit Logs';
+  settingsTab: 'General' | 'Site Selection' | 'Vessel Site Provisioning' | 'Document Settings' | 'Notification Settings' | 'Permission Settings' | 'Integration' | 'Audit Logs';
   settingsForm: {
     siteTitle: string;
     siteDescription: string;
@@ -302,10 +302,20 @@ interface State {
 
   // Real-time cached Dashboard/Home counts from backend
   dashboardStats: DashboardStats | null;
+
+  // Persistent progress for long-running site OCR scans, including navigation away from Sites.
+  scanProgress: {
+    status: 'idle' | 'running' | 'completed' | 'failed';
+    completed: number;
+    total: number;
+    title: string;
+    recentFiles: string[];
+    error?: string;
+  };
 }
 
 
-const BLANK_FORM: FormState = { name: '', imo: '', shipyard: '', hull_number: '', vessel_type: '' };
+const BLANK_FORM: FormState = { name: '', imo: '', shipyard: '', hull_number: '', vessel_type: '', target_site_ids: [] };
 
 const PAGE_SIZE = 50;
 
@@ -357,7 +367,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     this.state = {
       rows: [],
       vessels: [],
-      loading: false, error: null, reloadKey: 0,
+      loading: false, error: null, reloadKey: 0, sessionExpired: Boolean(props.sessionExpired),
       textFilter: '', vesselFilter: 'all', groupFilter: 'all', catFilter: 'all', attachmentFilter: 'all',
       sort: 'default', uploadingGroupKey: null, uploadInfo: null, uploadError: null,
       selectedFileIds: new Set(), page: 0,
@@ -431,7 +441,6 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       provisionedVesselIds: new Set<string>(),
       spoFolderMap: new Map(),
       lastDeltaSync: null,
-      sessionExpired: false,
       sessionReady: false,
 
       folderAnomalies: [],
@@ -464,6 +473,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       suppressUploadNavigationPrompt,
       vesselsNavExpanded: true,
       dashboardStats: null,
+      scanProgress: {
+        status: 'idle', completed: 0, total: 0, title: '', recentFiles: [],
+      },
     };
   }
 
@@ -4040,6 +4052,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         name: v.name, imo: v.imo || '',
         shipyard: v.shipyard || '', hull_number: v.hull_number || '',
         vessel_type: v.vessel_type || '',
+        target_site_ids: v.provisioned_site_ids || [],
       },
       modalMsg: null, modalError: null, formFieldErrors: {},
     });
@@ -4105,7 +4118,14 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         try {
       const res = await fetch(`${this._base()}/api/vessels`, {
         method: 'POST', headers: this._headers(),
-        body: JSON.stringify({ name: form.name.trim(), imo: form.imo.trim(), shipyard: form.shipyard.trim() || null, hull_number: form.hull_number.trim() || null, vessel_type: form.vessel_type || null }),
+        body: JSON.stringify({
+          name: form.name.trim(),
+          imo: form.imo.trim(),
+          shipyard: form.shipyard.trim() || null,
+          hull_number: form.hull_number.trim() || null,
+          vessel_type: form.vessel_type || null,
+          provisioned_site_ids: form.target_site_ids && form.target_site_ids.length > 0 ? form.target_site_ids : undefined,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok && res.status !== 202) {
@@ -4184,7 +4204,14 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     try {
       const res = await fetch(`${this._base()}/api/vessels/${selectedVessel.id}`, {
         method: 'PATCH', headers: this._headers(),
-        body: JSON.stringify({ name: form.name.trim() || null, imo: form.imo.trim() || null, shipyard: form.shipyard.trim() || null, hull_number: form.hull_number.trim() || null, vessel_type: form.vessel_type || null }),
+        body: JSON.stringify({
+          name: form.name.trim() || null,
+          imo: form.imo.trim() || null,
+          shipyard: form.shipyard.trim() || null,
+          hull_number: form.hull_number.trim() || null,
+          vessel_type: form.vessel_type || null,
+          provisioned_site_ids: form.target_site_ids && form.target_site_ids.length > 0 ? form.target_site_ids : undefined,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok && res.status !== 202) {

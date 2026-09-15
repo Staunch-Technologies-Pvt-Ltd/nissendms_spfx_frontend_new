@@ -43,5 +43,7 @@ export interface VesselRecord {
   status?: 'Active' | 'In Maintenance' | 'Inactive' | string;
   image_url?: string;
   is_provisioned?: boolean;
+  provisioned_site_ids?: string[];
+  site_provisioning_status?: Record<string, string>;
 }
 

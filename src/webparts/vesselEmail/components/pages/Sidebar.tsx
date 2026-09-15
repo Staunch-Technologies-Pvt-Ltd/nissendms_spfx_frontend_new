@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import * as React from 'react';
 import { Icon } from '@fluentui/react/lib/Icon';
 import type VesselEmail from '../VesselEmail';

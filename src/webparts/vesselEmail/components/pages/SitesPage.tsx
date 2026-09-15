@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable react/no-unescaped-entities */
+/* eslint-disable @typescript-eslint/no-unused-expressions */
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 
@@ -8,6 +11,7 @@ type FolderCounts = {
   direct_files: number;
   total_subfolders: number;
   total_files: number;
+  is_estimated?: boolean;
 };
 type SummaryCounts = {
   direct_folders: number;
@@ -23,7 +27,15 @@ type Item = {
   file?: object;
   size?: number;
   web_url?: string;
+  download_url?: string;
   tags?: Record<string, string>;
+};
+type FolderCacheEntry = {
+  items: Item[];
+  summaryCounts: SummaryCounts | null;
+  detectedVessel: string;
+  detectedTags: Tags;
+  timestamp: number;
 };
 type Context = { site: Site; drive: Drive };
 type Tags = { department: string; vessel: string; group: string; category: string };
@@ -40,6 +52,8 @@ type ScanResult = {
   proposed_tags?: Tags;
   ocr_suggestion?: Record<string, { value: string; confidence: number }>;
   path_suggestion?: Record<string, { value: string; label: string }>;
+  /** True when vessel was matched from filename alias (e.g. N-2119 → Bow Fighter) but is absent from file text. */
+  vessel_in_filename_only?: boolean;
 };
 
 type TagFeedEntry = {
@@ -55,6 +69,14 @@ type TaggingModal = {
   finished: boolean;
   summary: string;
 } | null;
+type TagFailure = {
+  file_id: string;
+  filename: string;
+  parent_path: string;
+  error_reason: string;
+  attempt_count: number;
+  last_attempted_at?: string | null;
+};
 
 
 
@@ -66,8 +88,42 @@ const tagNames: Array<[keyof Tags, string]> = [
   ['category', 'Category'],
 ];
 
+/** Placeholder values that mean "not really set" for Department/Vessel/Group. */
+const CORE_TAG_PLACEHOLDERS = new Set(['', 'to be classified', 'unknown', 'n/a']);
+
+/**
+ * True when a single tag field is missing. Mirrors the backend's
+ * `_tags_need_attention` policy: Department/Vessel/Group are missing when
+ * blank or a non-value placeholder; Category is only missing when
+ * completely blank ("To Be Classified" is an intentional already-reviewed
+ * state and does NOT count as missing).
+ */
+function isTagFieldMissing(item: Item, field: keyof Tags): boolean {
+  const value = (item.tags?.[field] || '').trim().toLowerCase();
+  if (field === 'category') return value === '';
+  return CORE_TAG_PLACEHOLDERS.has(value);
+}
+
+/** Auto-tag review targets only files without a vessel tag. */
+function hasAnyMissingTag(item: Item): boolean {
+  return isTagFieldMissing(item, 'vessel');
+}
+
+function getInitialSite(host: VesselEmail): Site[] {
+  const siteId = host.props.siteId;
+  if (!siteId) return [];
+  const siteUrl = host.props.siteUrl || '';
+  const siteName = siteUrl.split('/').filter(Boolean).pop() || siteId;
+  return [{
+    id: siteId,
+    display_name: siteName,
+    web_url: siteUrl,
+    description: 'Current SharePoint site',
+  }];
+}
+
 export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
-  const [sites, setSites] = React.useState<Site[]>([]);
+  const [sites, setSites] = React.useState<Site[]>(() => getInitialSite(host));
   const [query, setQuery] = React.useState('');
   const [expanded, setExpanded] = React.useState<string | null>(null);
   const [drives, setDrives] = React.useState<Record<string, Drive[]>>({});
@@ -75,11 +131,14 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
   const [items, setItems] = React.useState<Item[]>([]);
   const [crumbs, setCrumbs] = React.useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = React.useState(false);
+  const [sitesLoading, setSitesLoading] = React.useState(true);
   const [message, setMessage] = React.useState('');
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [editing, setEditing] = React.useState<string | null>(null);
   const [tagDraft, setTagDraft] = React.useState<Tags>(emptyTags);
   const [recursive, setRecursive] = React.useState(false);
+  const [rescanAll, setRescanAll] = React.useState(false);
+  const [tagFailures, setTagFailures] = React.useState<TagFailure[]>([]);
   const [scanResults, setScanResults] = React.useState<ScanResult[]>([]);
   const [fieldChoices, setFieldChoices] = React.useState<Record<string, Record<keyof Tags, string>>>({});
   const [vesselOptions, setVesselOptions] = React.useState<string[]>([]);
@@ -87,11 +146,65 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
   const [detectedVessel, setDetectedVessel] = React.useState('');
   const [detectedTags, setDetectedTags] = React.useState<Tags>(emptyTags);
   const [taggingModal, setTaggingModal] = React.useState<TaggingModal>(null);
+  const [confirmOverwrite, setConfirmOverwrite] = React.useState<{ count: number; vessel: string } | null>(null);
+  const [confirmScanModal, setConfirmScanModal] = React.useState<{
+    mode: 'autoTagAndReview' | 'scan' | 'autoTagFromPath';
+    targetItemIds: string[];
+    isSelection: boolean;
+    count: number;
+    missingCount?: number;
+    names: string[];
+    isRecursive: boolean;
+  } | null>(null);
   const [summaryCounts, setSummaryCounts] = React.useState<SummaryCounts | null>(null);
   const [countsLoading, setCountsLoading] = React.useState(false);
 
+  // In-memory client cache for folder views: enables 0ms instant folder switching
+  const folderCacheRef = React.useRef<Map<string, FolderCacheEntry>>(new Map());
+
   const api = host._base();
   const headers = host._headers();
+
+  const loadTagFailures = React.useCallback(async (): Promise<void> => {
+    if (!context) return;
+    try {
+      const response = await fetch(`${api}/api/sites/${encodeURIComponent(context.site.id)}/drives/${encodeURIComponent(context.drive.id)}/tag-failures?status=needs_retry`, { headers });
+      if (response.ok) setTagFailures((await response.json()).failures || []);
+    } catch {
+      // Retry queue is supplementary; keep the main folder view usable.
+    }
+  }, [api, context?.site.id, context?.drive.id]);
+
+  React.useEffect(() => { void loadTagFailures(); }, [loadTagFailures]);
+
+  const retryFailures = async (fileIds: string[] = []): Promise<void> => {
+    if (!context) return;
+    setLoading(true);
+    try {
+      const response = await fetch(`${api}/api/sites/${encodeURIComponent(context.site.id)}/drives/${encodeURIComponent(context.drive.id)}/retry-tag-failures`, {
+        method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_ids: fileIds }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Retry failed');
+      setMessage(`Retry completed for ${data.updated_count || 0} file(s).`);
+      await loadTagFailures();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Retry failed');
+    } finally { setLoading(false); }
+  };
+
+  const dismissFailures = async (fileIds: string[]): Promise<void> => {
+    if (!context) return;
+    try {
+      const response = await fetch(`${api}/api/sites/${encodeURIComponent(context.site.id)}/drives/${encodeURIComponent(context.drive.id)}/dismiss-tag-failures`, {
+        method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_ids: fileIds, reason: 'Dismissed from Needs Attention' }),
+      });
+      if (!response.ok) throw new Error('Could not dismiss failed files');
+      await loadTagFailures();
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not dismiss failed files'); }
+  };
 
   /** Async backfill for recursive counts so cold-cache folder views never block initial rendering */
   const fetchSubfolderCounts = React.useCallback(async (ctx: Context, folderId: string): Promise<void> => {
@@ -101,6 +214,19 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       if (response.ok) {
         const data = await response.json();
         const countsMap: Record<string, FolderCounts> = data.counts || {};
+        const cacheKey = `${ctx.drive.id}:${folderId}`;
+        const cached = folderCacheRef.current.get(cacheKey);
+        if (cached) {
+          cached.items = cached.items.map(it => {
+            if (it.folder && countsMap[it.id]) {
+              return { ...it, folder_counts: countsMap[it.id] };
+            }
+            return it;
+          });
+          if (data.summary_counts) {
+            cached.summaryCounts = data.summary_counts;
+          }
+        }
         setItems(previous => previous.map(it => {
           if (it.folder && countsMap[it.id]) {
             return { ...it, folder_counts: countsMap[it.id] };
@@ -153,16 +279,30 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
   }, [host]);
 
   const loadSites = React.useCallback(async (): Promise<void> => {
-    setLoading(true);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+    setSitesLoading(true);
     try {
-      const response = await fetch(`${api}/api/sites`, { headers });
+      const response = await fetch(`${api}/api/sites?limit=50`, { headers, signal: controller.signal });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Could not load sites');
-      setSites(data.sites || []);
+      const discoveredSites: Site[] = data.sites || [];
+      setSites(previous => {
+        const currentSite = previous.find(site => site.id === host.props.siteId);
+        const merged = currentSite && !discoveredSites.some(site => site.id === currentSite.id)
+          ? [currentSite, ...discoveredSites]
+          : discoveredSites;
+        return merged;
+      });
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Could not load sites');
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setMessage('Site discovery is taking longer than expected. The current site is still available.');
+      } else {
+        setMessage(error instanceof Error ? error.message : 'Could not load sites');
+      }
     } finally {
-      setLoading(false);
+      window.clearTimeout(timeoutId);
+      setSitesLoading(false);
     }
   }, [api]);
 
@@ -197,33 +337,108 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
     }
   };
 
-  /** Navigate into a folder and reset scan state */
-  const loadFolder = async (nextContext: Context, folderId: string, name: string, nextCrumbs: Array<{ id: string; name: string }>): Promise<void> => {
-    setLoading(true); setMessage(''); setScanResults([]); setFieldChoices({});
+  /** Navigate into a folder and reset scan state — uses client cache for 0ms instant opening */
+  const loadFolder = async (
+    nextContext: Context,
+    folderId: string,
+    name: string,
+    nextCrumbs: Array<{ id: string; name: string }>,
+    forceRefresh: boolean = false
+  ): Promise<void> => {
+    const cacheKey = `${nextContext.drive.id}:${folderId}`;
+    const cached = folderCacheRef.current.get(cacheKey);
+    const isFresh = cached && (Date.now() - cached.timestamp < 120_000);
+
+    if (!forceRefresh && cached) {
+      // Instant render from client cache — zero delay
+      setContext(nextContext);
+      setItems(cached.items);
+      setSummaryCounts(cached.summaryCounts);
+      setCrumbs(nextCrumbs.length ? nextCrumbs : [{ id: 'root', name }]);
+      setSelected(new Set());
+      setDetectedVessel(cached.detectedVessel);
+      if (cached.detectedVessel) {
+        setBulkVessel(cached.detectedVessel);
+      }
+      setDetectedTags(cached.detectedTags);
+      setMessage('');
+      setLoading(false);
+
+      if (isFresh) {
+        return;
+      }
+      // Revalidate in background without wiping UI or blocking user
+    } else {
+      setLoading(true);
+      setMessage('');
+      setScanResults([]);
+      setFieldChoices({});
+    }
+
     try {
       const response = await fetch(`${api}/api/sites/${encodeURIComponent(nextContext.site.id)}/drives/${encodeURIComponent(nextContext.drive.id)}/folders/${encodeURIComponent(folderId)}/children`, { headers });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Could not load folder');
       setContext(nextContext);
       const childItems: Item[] = data.items || [];
+      const sumCounts = data.summary_counts || null;
+      const detV = data.detected_vessel || '';
+      const detTags = data.detected_tags || emptyTags;
+
+      // Update client cache
+      folderCacheRef.current.set(cacheKey, {
+        items: childItems,
+        summaryCounts: sumCounts,
+        detectedVessel: detV,
+        detectedTags: detTags,
+        timestamp: Date.now(),
+      });
+
       setItems(childItems);
-      setSummaryCounts(data.summary_counts || null);
+      setSummaryCounts(sumCounts);
       setCrumbs(nextCrumbs.length ? nextCrumbs : [{ id: 'root', name }]);
       setSelected(new Set());
-      const detV = data.detected_vessel || '';
       setDetectedVessel(detV);
       if (detV) {
         setBulkVessel(detV);
       }
-      setDetectedTags(data.detected_tags || emptyTags);
+      setDetectedTags(detTags);
 
-      // Trigger non-blocking async count resolution if any folder lacks cached counts
-      const hasUncached = childItems.some(i => i.folder && !i.folder_counts);
+      // Trigger non-blocking async count resolution only if needed
+      const hasUncached = childItems.some(i => i.folder && (!i.folder_counts || i.folder_counts.is_estimated));
       if (hasUncached) {
         void fetchSubfolderCounts(nextContext, folderId);
       }
+
+      // Prefetch immediate child folders in background so clicking into them is 0ms instant!
+      const directSubfolders = childItems.filter(i => i.folder && i.id);
+      if (directSubfolders.length > 0 && directSubfolders.length <= 6) {
+        setTimeout(() => {
+          directSubfolders.forEach(sub => {
+            const subKey = `${nextContext.drive.id}:${sub.id}`;
+            if (!folderCacheRef.current.has(subKey)) {
+              fetch(`${api}/api/sites/${encodeURIComponent(nextContext.site.id)}/drives/${encodeURIComponent(nextContext.drive.id)}/folders/${encodeURIComponent(sub.id)}/children`, { headers })
+                .then(r => r.json())
+                .then(subData => {
+                  if (subData && subData.items) {
+                    folderCacheRef.current.set(subKey, {
+                      items: subData.items,
+                      summaryCounts: subData.summary_counts || null,
+                      detectedVessel: subData.detected_vessel || '',
+                      detectedTags: subData.detected_tags || emptyTags,
+                      timestamp: Date.now(),
+                    });
+                  }
+                })
+                .catch(() => {});
+            }
+          });
+        }, 120);
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Could not load folder');
+      if (!cached) {
+        setMessage(error instanceof Error ? error.message : 'Could not load folder');
+      }
     } finally {
       setLoading(false);
     }
@@ -236,6 +451,17 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       const data = await response.json();
       if (response.ok) {
         const childItems: Item[] = data.items || [];
+        const sumCounts = data.summary_counts || null;
+        const detV = data.detected_vessel || '';
+        const detTags = data.detected_tags || emptyTags;
+        const cacheKey = `${ctx.drive.id}:${folderId}`;
+        folderCacheRef.current.set(cacheKey, {
+          items: childItems,
+          summaryCounts: sumCounts,
+          detectedVessel: detV,
+          detectedTags: detTags,
+          timestamp: Date.now(),
+        });
         setItems(childItems);
         if (data.summary_counts) {
           setSummaryCounts(data.summary_counts);
@@ -249,7 +475,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           setDetectedTags(data.detected_tags);
         }
 
-        const hasUncached = childItems.some(i => i.folder && !i.folder_counts);
+        const hasUncached = childItems.some(i => i.folder && (!i.folder_counts || i.folder_counts.is_estimated));
         if (hasUncached) {
           void fetchSubfolderCounts(ctx, folderId);
         }
@@ -282,6 +508,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
 
   const openSiteFile = (item: Item): void => {
     if (item.web_url) { window.open(item.web_url, '_blank'); return; }
+    if (item.download_url) { window.open(item.download_url, '_blank'); return; }
     if (!context) return;
     const url = `${api}/api/sites/${encodeURIComponent(context.site.id)}/drives/${encodeURIComponent(context.drive.id)}/items/${encodeURIComponent(item.id)}/content`;
     window.open(url, '_blank');
@@ -330,6 +557,9 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       if (!response.ok) { setMessage(data.detail || 'Could not save tags'); return; }
       if (data.ok === false) { setMessage(data.metadata_patch?.error || 'SharePoint did not save the tags'); return; }
       setItems(previous => previous.map(current => current.id === item.id ? { ...current, tags: data.tags } : current));
+      if (crumbs.length > 0) {
+        folderCacheRef.current.delete(`${context.drive.id}:${crumbs[crumbs.length - 1].id}`);
+      }
       setEditing(null);
       setMessage(`Tags saved for ${item.name}`);
     } catch (error) {
@@ -337,17 +567,90 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
     }
   };
 
-  const scan = async (): Promise<void> => {
-    if (!context || selected.size === 0) return;
+  const promptScan = (targetItemIds?: string[]): void => {
+    if (!context) return;
+    const ids = targetItemIds && targetItemIds.length > 0
+      ? targetItemIds
+      : (selected.size > 0 ? Array.from(selected) : items.map(i => i.id));
+    if (ids.length === 0) {
+      setMessage('No items to scan.');
+      return;
+    }
+
+    const isSelection = (targetItemIds && targetItemIds.length > 0) || selected.size > 0;
+    const targetItems = ids.map(id => items.find(it => it.id === id)).filter(Boolean) as Item[];
+    const hasFolder = targetItems.some(it => it.folder);
+    const isRecursive = hasFolder ? true : (!isSelection && recursive);
+    const directFiles = targetItems.filter(item => !item.folder);
+    const missingCount = directFiles.filter(item => hasAnyMissingTag(item)).length;
+    const isSingleFile = isSelection && !hasFolder && ids.length === 1;
+
+    // If 1 single file selected and it already has a vessel tag, scan it directly
+    if (isSingleFile && missingCount === 0) {
+      void scan(ids, 'all');
+      return;
+    }
+    // If multiple files and none missing tags and no folders, scan directly
+    if (!isSingleFile && missingCount === 0 && !hasFolder) {
+      void scan(ids, 'all');
+      return;
+    }
+
+    let fileCount = 0;
+    if (isSelection) {
+      if (!hasFolder) {
+        fileCount = targetItems.length;
+      } else {
+        fileCount = summaryCounts?.total_files ?? ids.length;
+      }
+    } else {
+      fileCount = summaryCounts?.total_files ?? items.filter(it => !it.folder).length;
+    }
+
+    setConfirmScanModal({
+      mode: 'scan',
+      targetItemIds: ids,
+      isSelection,
+      count: fileCount,
+      missingCount,
+      names: targetItems.map(it => it.name),
+      isRecursive,
+    });
+  };
+
+  const scan = async (targetItemIds?: string[], scope: 'missing_only' | 'all' = 'missing_only'): Promise<void> => {
+    if (!context) return;
+    // If nothing is checked, scan all visible items (folders + files) at current level
+    const idsToScan = targetItemIds && targetItemIds.length > 0
+      ? targetItemIds
+      : (selected.size > 0 ? Array.from(selected) : items.map(i => i.id));
+    if (idsToScan.length === 0) {
+      setMessage('No items to scan.');
+      return;
+    }
+    const isSelection = (targetItemIds && targetItemIds.length > 0) || selected.size > 0;
+    const targetItems = idsToScan.map(id => items.find(it => it.id === id)).filter(Boolean) as Item[];
+    const hasFolder = targetItems.some(id => id.folder);
+    const scanRecursive = hasFolder ? true : (!isSelection && recursive);
+    const isSingleFile = isSelection && !hasFolder && idsToScan.length === 1;
+
     setLoading(true);
-    setScanResults([]);
     setFieldChoices({});
-    setMessage('Scanning selected items with OCR and AI classification...');
+    setMessage(isSingleFile
+      ? `Scanning "${targetItems[0]?.name || ''}" with OCR and AI classification...`
+      : `Scanning ${idsToScan.length} item(s) with OCR and AI classification...`);
+    const abortCtrl = new AbortController();
+    const timeoutId = setTimeout(() => abortCtrl.abort(), 90000);
     try {
       const response = await fetch(`${api}/api/sites/${encodeURIComponent(context.site.id)}/drives/${encodeURIComponent(context.drive.id)}/scan-tags`, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_ids: Array.from(selected), recursive }),
+        signal: abortCtrl.signal,
+        body: JSON.stringify({
+          item_ids: idsToScan,
+          recursive: scanRecursive,
+          scope: rescanAll ? 'all' : scope,
+        }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Scan failed');
@@ -365,7 +668,11 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           // because the file's folder location is the authoritative source.
           const isVesselOrGroup = field === 'vessel' || field === 'group';
           const ocrThreshold = isVesselOrGroup ? 0.8 : 0.5;
-          if (ocrVal && ocrConf >= ocrThreshold) {
+          // Category folders are the authoritative taxonomy location; OCR can read
+          // document content from a different drawing family (for example Hull).
+          if (field === 'category' && pathVal) {
+            initialChoices[res.item_id][field] = 'path';
+          } else if (ocrVal && ocrConf >= ocrThreshold) {
             initialChoices[res.item_id][field] = 'ocr';
           } else if (pathVal) {
             initialChoices[res.item_id][field] = 'path';
@@ -379,7 +686,11 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         });
       });
       setFieldChoices(initialChoices);
-      setScanResults(results);
+      setScanResults(previous => {
+        const merged = new Map(previous.map(result => [result.item_id, result]));
+        results.forEach(result => merged.set(result.item_id, result));
+        return Array.from(merged.values());
+      });
 
       if (crumbs.length > 0) {
         const crumb = crumbs[crumbs.length - 1];
@@ -387,8 +698,12 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       }
       setMessage(`Scanned ${data.scanned || results.length} item(s). Review suggestions and confirm below.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Scan failed');
+      const errorMessage = error instanceof Error && error.name === 'AbortError'
+        ? 'Scan request timed out after 90 seconds. Try scanning fewer files or specific sub-folders.'
+        : (error instanceof Error ? error.message : 'Scan failed');
+      setMessage(errorMessage);
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   };
@@ -414,34 +729,40 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
     const confirmedResults: Array<{ result: ScanResult; data: any }> = [];
 
     try {
-      for (let i = 0; i < reviewable.length; i++) {
-        const result = reviewable[i];
-        try {
-          const choices = fieldChoices[result.item_id] || {};
-          const values = result.proposed_tags || emptyTags;
-          const response = await fetch(`${api}/api/sites/${encodeURIComponent(context.site.id)}/drives/${encodeURIComponent(context.drive.id)}/items/${encodeURIComponent(result.item_id)}/resolve-tags`, {
-            method: 'POST',
-            headers: { ...headers, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              choices,
-              values: {
-                ...values,
-                ocr_tags: Object.fromEntries(Object.entries(result.ocr_suggestion || {}).map(([k, v]) => [k, v.value])),
-                path_tags: Object.fromEntries(Object.entries(result.path_suggestion || {}).map(([k, v]) => [k, v.value])),
-              },
-            }),
-          });
-          const data = await response.json();
-          if (!response.ok) throw new Error(data.detail || 'Could not confirm tags');
-          feedState[i] = { ...feedState[i], status: 'ok' };
-          okCount++;
-          confirmedResults.push({ result, data });
-        } catch (fileErr) {
-          feedState[i] = { ...feedState[i], status: 'failed', error: fileErr instanceof Error ? fileErr.message : 'Failed' };
-          failCount++;
+      let nextIndex = 0;
+      const confirmOne = async (): Promise<void> => {
+        while (true) {
+          const i = nextIndex++;
+          if (i >= reviewable.length) return;
+          const result = reviewable[i];
+          try {
+            const choices = fieldChoices[result.item_id] || {};
+            const values = result.proposed_tags || emptyTags;
+            const response = await fetch(`${api}/api/sites/${encodeURIComponent(context.site.id)}/drives/${encodeURIComponent(context.drive.id)}/items/${encodeURIComponent(result.item_id)}/resolve-tags`, {
+              method: 'POST',
+              headers: { ...headers, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                choices,
+                values: {
+                  ...values,
+                  ocr_tags: Object.fromEntries(Object.entries(result.ocr_suggestion || {}).map(([k, v]) => [k, v.value])),
+                  path_tags: Object.fromEntries(Object.entries(result.path_suggestion || {}).map(([k, v]) => [k, v.value])),
+                },
+              }),
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.detail || 'Could not confirm tags');
+            feedState[i] = { ...feedState[i], status: 'ok' };
+            okCount++;
+            confirmedResults.push({ result, data });
+          } catch (fileErr) {
+            feedState[i] = { ...feedState[i], status: 'failed', error: fileErr instanceof Error ? fileErr.message : 'Failed' };
+            failCount++;
+          }
+          setTaggingModal(prev => prev ? { ...prev, feed: [...feedState] } : prev);
         }
-        setTaggingModal(prev => prev ? { ...prev, feed: [...feedState] } : prev);
-      }
+      };
+      await Promise.all(Array.from({ length: Math.min(8, reviewable.length) }, () => confirmOne()));
 
       setScanResults(previous => previous.map(result => {
         const applied = confirmedResults.find(entry => entry.result.item_id === result.item_id);
@@ -469,11 +790,16 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       setMessage(errMsg);
     } finally {
       setLoading(false);
+      await loadTagFailures();
     }
   };
 
   /** Update vessel on selected files/folders directly in SharePoint WITHOUT scanning */
-  const applyBulkVessel = async (targetItemIds?: string[], specificVessel?: string): Promise<void> => {
+  const applyBulkVessel = async (
+    targetItemIds?: string[],
+    specificVessel?: string,
+    options?: { onlyMissing?: boolean; overwriteExisting?: boolean; confirmed?: boolean }
+  ): Promise<void> => {
     if (!context) return;
     const vesselToApply = (specificVessel !== undefined ? specificVessel : bulkVessel).trim();
     if (!vesselToApply) {
@@ -481,111 +807,188 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       return;
     }
 
-    let idsToUpdate: string[] = [];
+    const overwriteExisting = options?.overwriteExisting === true;
+    const onlyMissing = !overwriteExisting;
+
+    let candidateIds: string[] = [];
     if (targetItemIds && targetItemIds.length > 0) {
-      idsToUpdate = targetItemIds;
+      candidateIds = targetItemIds;
     } else if (selected.size > 0) {
-      idsToUpdate = Array.from(selected);
+      candidateIds = Array.from(selected);
     } else {
-      idsToUpdate = items.map(i => i.id);
+      candidateIds = items.map(i => i.id);
     }
 
-    if (idsToUpdate.length === 0) {
+    if (candidateIds.length === 0) {
       setMessage('No items available for vessel update.');
       return;
     }
 
-    // Safety check for large operations
-    const estimatedFiles = summaryCounts?.total_files ?? items.length;
-    const hasFolders = idsToUpdate.some(id => items.find(it => it.id === id)?.folder);
-    if (hasFolders || recursive) {
-      if (estimatedFiles > 200) {
-        const ok = window.confirm(`Found ${estimatedFiles} files across sub-folders. For system safety, this run will process the first 200 files (the remaining ${estimatedFiles - 200} can be run in a subsequent batch).\n\nDo you want to proceed?`);
-        if (!ok) return;
-      } else if (estimatedFiles > 50) {
-        const ok = window.confirm(`This will apply the vessel tag "${vesselToApply}" to ${estimatedFiles} files across all sub-folders.\n\nDo you want to proceed?`);
-        if (!ok) return;
+    // Inspect candidate items known in memory
+    const candidateItems = candidateIds.map(id => items.find(it => it.id === id)).filter(Boolean) as Item[];
+    const directFiles = candidateItems.filter(it => !it.folder);
+    const missingDirectFiles = directFiles.filter(it => !it.tags?.vessel);
+    const alreadyTaggedDirectFiles = directFiles.filter(it => Boolean(it.tags?.vessel));
+    const folderItems = candidateItems.filter(it => it.folder);
+    const hasFolders = folderItems.length > 0 || (candidateIds.length === items.length && items.some(i => i.folder));
+
+    // If overwrite is requested but not confirmed, show in-app confirmation modal (no alert box)
+    if (overwriteExisting && !options?.confirmed) {
+      const taggedCount = alreadyTaggedDirectFiles.length;
+      if (taggedCount > 0) {
+        setConfirmOverwrite({ count: taggedCount, vessel: vesselToApply });
+        return;
       }
     }
 
-    setLoading(true);
-    const initialFeed: TagFeedEntry[] = idsToUpdate.slice(0, 50).map(id => {
-      const it = items.find(i => i.id === id);
-      return {
-        name: it ? (it.folder ? `📁 ${it.name} (discovering files...)` : `📄 ${it.name}`) : id,
-        status: 'pending' as const,
-      };
-    });
-    if (idsToUpdate.length > 50) {
-      initialFeed.push({
-        name: `... and ${idsToUpdate.length - 50} more items across sub-folders`,
-        status: 'pending' as const,
-      });
+    // Resolve IDs to send
+    let idsToUpdate: string[] = [];
+    let expectedCount = 0;
+
+    if (onlyMissing) {
+      if (missingDirectFiles.length > 0) {
+        // Direct files missing vessel tag: update ONLY these files (no subfolders, no alert box)
+        idsToUpdate = missingDirectFiles.map(it => it.id);
+        expectedCount = missingDirectFiles.length;
+      } else if (hasFolders) {
+        // No direct files missing: update missing across subfolders
+        idsToUpdate = folderItems.length > 0 ? folderItems.map(it => it.id) : items.filter(i => i.folder).map(i => i.id);
+        expectedCount = summaryCounts?.total_files ?? candidateIds.length;
+      } else {
+        setMessage('All files in the current view already have a vessel tag.');
+        return;
+      }
+    } else {
+      idsToUpdate = candidateIds;
+      expectedCount = summaryCounts?.total_files ?? candidateIds.length;
     }
+
+    setLoading(true);
+    // Directly open the in-app progress popup modal!
     setTaggingModal({
-      title: `Updating Vessel Tag: "${vesselToApply}"`,
-      feed: initialFeed,
-      total: Math.max(estimatedFiles, idsToUpdate.length),
+      title: onlyMissing ? `Updating Missing Vessel: "${vesselToApply}"` : `Updating Vessel Tag: "${vesselToApply}"`,
+      feed: [],
+      total: expectedCount || idsToUpdate.length,
       finished: false,
       summary: '',
     });
 
     try {
-      const response = await fetch(`${api}/api/sites/${encodeURIComponent(context.site.id)}/drives/${encodeURIComponent(context.drive.id)}/bulk-update-tags`, {
+      const response = await fetch(`${api}/api/sites/${encodeURIComponent(context.site.id)}/drives/${encodeURIComponent(context.drive.id)}/bulk-update-tags/stream`, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_ids: idsToUpdate, vessel: vesselToApply, recursive: true }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || 'Could not update vessel');
-
-      const results = data.results || [];
-      const okCount = results.filter((r: { ok: boolean }) => r.ok).length;
-      const failCount = results.filter((r: { ok: boolean }) => !r.ok).length;
-
-      const feed: TagFeedEntry[] = results.map((r: { filename?: string; parent_path?: string; item_id: string; ok: boolean; error?: string; tags?: Record<string, string> }) => {
-        const folderName = r.parent_path ? r.parent_path.split('/').pop() || '' : '';
-        const tagLabel = r.tags?.vessel ? ` → ${r.tags.vessel}` : ` → ${vesselToApply}`;
-        return {
-          name: r.filename
-            ? `${r.filename}${folderName ? ` (${folderName})` : ''}${tagLabel}`
-            : r.item_id,
-          status: r.ok ? ('ok' as const) : ('failed' as const),
-          error: r.error,
-        };
+        body: JSON.stringify({
+          item_ids: idsToUpdate,
+          vessel: vesselToApply,
+          recursive: idsToUpdate.some(id => items.find(it => it.id === id)?.folder),
+          skip_if_tagged: !overwriteExisting,
+          skip_if_any_vessel_set: !overwriteExisting && Boolean(onlyMissing),
+        }),
       });
 
-      if (results.length === 0) {
-        feed.push({
-          name: 'No files found to update in the selected location.',
-          status: 'failed' as const,
-          error: '0 files discovered',
-        });
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error((errData as { detail?: string }).detail || 'Could not update vessel');
+      }
+      if (!response.body) throw new Error('No response body');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let updatedCount = 0;
+      let skippedCount = 0;
+      let failedCount = 0;
+      let totalFromServer = expectedCount || idsToUpdate.length;
+      let isTruncated = false;
+      const updatedMap = new Map<string, Record<string, string>>();
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process all complete newline-delimited JSON lines
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? ''; // last (possibly incomplete) line stays in buffer
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          let event: Record<string, unknown>;
+          try { event = JSON.parse(trimmed); } catch { continue; }
+
+          if (event.type === 'start') {
+            totalFromServer = (event.total as number) || totalFromServer;
+            isTruncated = !!(event.truncated);
+            setTaggingModal(prev => prev ? { ...prev, total: totalFromServer } : prev);
+
+          } else if (event.type === 'progress') {
+            const r = event.result as { item_id: string; filename?: string; parent_path?: string; ok: boolean; error?: string; tags?: Record<string, string>; skipped?: boolean };
+            if (r.ok && r.tags) updatedMap.set(r.item_id, r.tags);
+            updatedCount = (event.completed as number) ?? updatedCount;
+            skippedCount = (event.skipped as number) ?? skippedCount;
+            const progressTotal = (event.total as number) || totalFromServer;
+
+            const folderName = r.parent_path ? r.parent_path.split('/').pop() || '' : '';
+            const tagLabel = r.tags?.vessel ? ` → ${r.tags.vessel}` : ` → ${vesselToApply}`;
+            let formattedError = r.error;
+            if (formattedError) {
+              if (formattedError.includes('2147018884') || formattedError.toLowerCase().includes('lock')) {
+                formattedError = 'File is locked (open in Excel/Office). Close open file tab & retry.';
+              }
+            }
+            const feedEntry: TagFeedEntry = {
+              name: r.filename
+                ? `${r.filename}${folderName ? ` (${folderName})` : ''}${tagLabel}`
+                : r.item_id,
+              status: r.ok ? 'ok' : 'failed',
+              error: formattedError,
+            };
+            // Append the new result to the live feed
+            setTaggingModal(prev => {
+              if (!prev) return prev;
+              return { ...prev, feed: [...prev.feed, feedEntry], total: progressTotal };
+            });
+
+          } else if (event.type === 'done') {
+            updatedCount = (event.updated_count as number) ?? updatedCount;
+            skippedCount = (event.skipped_count as number) ?? skippedCount;
+            failedCount = (event.failed_count as number) ?? failedCount;
+          }
+        }
       }
 
-      const updatedMap = new Map<string, Record<string, string>>();
-      results.forEach((r: { item_id: string; ok: boolean; tags?: Record<string, string> }) => {
-        if (r.ok && r.tags) updatedMap.set(r.item_id, r.tags);
-      });
+      // Update items in list with new tags
       setItems(prev => prev.map(item => {
         const updated = updatedMap.get(item.id);
         return updated ? { ...item, tags: updated } : item;
       }));
       setSelected(new Set());
+      folderCacheRef.current.clear();
 
-      let summary = failCount > 0
-        ? `✓ ${okCount} file(s) updated. ✗ ${failCount} file(s) failed.`
-        : `✓ All ${okCount} file(s) successfully updated with vessel "${vesselToApply}"!`;
-      if (data.truncated) {
-        summary += ` (Capped at 200 files for safety; run again for remaining files.)`;
+      let summary = failedCount > 0
+        ? `✓ ${updatedCount} file(s) updated. ✗ ${failedCount} file(s) failed. (Please close any open Excel tabs for failed files & retry.)`
+        : `✓ All ${updatedCount} file(s) successfully updated with vessel "${vesselToApply}"!`;
+      if (skippedCount > 0) {
+        summary += ` (${skippedCount} already tagged — skipped.)`;
       }
-      setTaggingModal({
-        title: `Updating Vessel Tag: "${vesselToApply}"`,
-        feed,
-        total: Math.max(results.length, 1),
+      if (isTruncated) {
+        summary += ` (Large folder: select a narrower range and run again for remaining files.)`;
+      }
+      if (updatedCount === 0 && failedCount === 0 && skippedCount > 0) {
+        summary = `All ${skippedCount} file(s) already have vessel tags — none needed updating.`;
+      }
+      if (updatedCount === 0 && failedCount === 0 && skippedCount === 0) {
+        summary = 'No files found to update in the selected location.';
+      }
+
+      setTaggingModal(prev => prev ? {
+        ...prev,
         finished: true,
         summary,
-      });
+        total: Math.max(prev.feed.length, 1),
+      } : prev);
       setMessage(summary);
 
       if (crumbs.length > 0) {
@@ -599,6 +1002,38 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
     } finally {
       setLoading(false);
     }
+  };
+
+  const promptAutoTagFromPath = (targetItemIds?: string[]): void => {
+    if (!context) return;
+    let ids: string[] = [];
+    if (targetItemIds && targetItemIds.length > 0) {
+      ids = targetItemIds;
+    } else if (selected.size > 0) {
+      ids = Array.from(selected);
+    } else {
+      ids = items.map(i => i.id);
+    }
+    if (ids.length === 0) {
+      setMessage('No items to tag.');
+      return;
+    }
+
+    const isSelection = (targetItemIds && targetItemIds.length > 0) || selected.size > 0;
+    const targetItems = ids.map(id => items.find(it => it.id === id)).filter(Boolean) as Item[];
+    const hasFolder = targetItems.some(it => it.folder);
+    const fileCount = (isSelection && !hasFolder)
+      ? targetItems.length
+      : (summaryCounts?.total_files ?? items.filter(it => !it.folder).length);
+
+    setConfirmScanModal({
+      mode: 'autoTagFromPath',
+      targetItemIds: ids,
+      isSelection,
+      count: fileCount,
+      names: targetItems.map(it => it.name),
+      isRecursive: hasFolder || (!isSelection && recursive),
+    });
   };
 
   /** Automatically tag files from folder path hierarchy (Department, Vessel, Group, Category) WITHOUT scanning */
@@ -618,18 +1053,13 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       return;
     }
 
-    // Safety confirmation for large operations
-    const estimatedFiles = summaryCounts?.total_files ?? items.length;
-    const hasFolders = idsToUpdate.some(id => items.find(it => it.id === id)?.folder);
-    if (hasFolders || recursive) {
-      if (estimatedFiles > 200) {
-        const ok = window.confirm(`Found ${estimatedFiles} files across sub-folders. For system safety, this run will process the first 200 files (the remaining ${estimatedFiles - 200} can be run in a subsequent batch).\n\nDo you want to proceed?`);
-        if (!ok) return;
-      } else if (estimatedFiles > 50) {
-        const ok = window.confirm(`This will apply folder path tags to ${estimatedFiles} files across all sub-folders.\n\nDo you want to proceed?`);
-        if (!ok) return;
-      }
-    }
+    const isSelection = (targetItemIds && targetItemIds.length > 0) || selected.size > 0;
+    const targetItems = idsToUpdate.map(id => items.find(i => i.id === id)).filter(Boolean) as Item[];
+    const hasFolder = targetItems.some(it => it.folder);
+    const isSingleFile = isSelection && !hasFolder && idsToUpdate.length === 1;
+    const estimatedFiles = (isSelection && !hasFolder)
+      ? idsToUpdate.length
+      : (summaryCounts?.total_files ?? items.length);
 
     setLoading(true);
     const initialFeed: TagFeedEntry[] = idsToUpdate.slice(0, 50).map(id => {
@@ -646,7 +1076,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       });
     }
     setTaggingModal({
-      title: 'Auto-Tagging from Folder Path',
+      title: isSingleFile ? `Auto-Tagging: ${targetItems[0]?.name || 'Selected File'}` : 'Auto-Tagging from Folder Path',
       feed: initialFeed,
       total: Math.max(estimatedFiles, idsToUpdate.length),
       finished: false,
@@ -657,7 +1087,12 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       const response = await fetch(`${api}/api/sites/${encodeURIComponent(context.site.id)}/drives/${encodeURIComponent(context.drive.id)}/bulk-update-tags`, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_ids: idsToUpdate, auto_from_path: true, recursive: true }),
+        body: JSON.stringify({
+          item_ids: idsToUpdate,
+          auto_from_path: true,
+          recursive: hasFolder ? true : (!isSelection && recursive),
+          scope: rescanAll ? 'all' : 'missing_only',
+        }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Could not auto-tag files');
@@ -704,10 +1139,10 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         ? `✓ ${okCount} file(s) tagged. ✗ ${failCount} file(s) failed.`
         : `✓ All ${okCount} file(s) successfully tagged from folder path!`;
       if (data.truncated) {
-        summary += ` (Capped at 200 files for safety; run again for remaining files.)`;
+        summary += ` (The service limit was reached; narrow the folder selection to continue.)`;
       }
       setTaggingModal({
-        title: 'Auto-Tagging from Folder Path',
+        title: isSingleFile ? `Auto-Tagging: ${targetItems[0]?.name || 'Selected File'}` : 'Auto-Tagging from Folder Path',
         feed,
         total: Math.max(results.length, 1),
         finished: true,
@@ -728,9 +1163,70 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
     }
   };
 
-  /** Simultaneous Auto-Tag & Review across sub-folders */
-  const autoTagAndReview = async (targetItemIds?: string[]): Promise<void> => {
+  const promptAutoTagAndReview = (targetItemIds?: string[]): void => {
     if (!context) return;
+    let ids: string[] = [];
+    if (targetItemIds && targetItemIds.length > 0) {
+      ids = targetItemIds;
+    } else if (selected.size > 0) {
+      ids = Array.from(selected);
+    } else {
+      ids = items.map(i => i.id);
+    }
+    if (ids.length === 0) {
+      setMessage('No items to scan and review.');
+      return;
+    }
+
+    const isSelection = (targetItemIds && targetItemIds.length > 0) || selected.size > 0;
+    const targetItems = ids.map(id => items.find(it => it.id === id)).filter(Boolean) as Item[];
+    const hasFolder = targetItems.some(it => it.folder);
+    const isRecursive = hasFolder ? true : (!isSelection && recursive);
+
+    let fileCount = 0;
+    if (isSelection) {
+      if (!hasFolder) {
+        fileCount = targetItems.length;
+      } else {
+        fileCount = summaryCounts?.total_files ?? ids.length;
+      }
+    } else {
+      fileCount = summaryCounts?.total_files ?? items.filter(it => !it.folder).length;
+    }
+
+    // Count direct files (non-folders) missing ANY core tag (department/vessel/group/category)
+    const directFiles = targetItems.filter(it => !it.folder);
+    const missingCount = directFiles.filter(it => hasAnyMissingTag(it)).length;
+    const isSingleFile = isSelection && !hasFolder && ids.length === 1;
+
+    // A single file has no scope choice to make: start OCR review immediately.
+    if (isSingleFile) {
+      void autoTagAndReview(ids, rescanAll ? 'all' : 'missing_only');
+      return;
+    }
+
+    // If all direct files already have vessel tags and no folders are selected,
+    // skip the 2-option modal and go straight to a full scan
+    if (missingCount === 0 && !hasFolder) {
+      void autoTagAndReview(ids, 'all');
+      return;
+    }
+
+    setConfirmScanModal({
+      mode: 'autoTagAndReview',
+      targetItemIds: ids,
+      isSelection,
+      count: fileCount,
+      missingCount,
+      names: targetItems.map(it => it.name),
+      isRecursive,
+    });
+  };
+
+  /** Simultaneous Auto-Tag & Review across sub-folders */
+  const autoTagAndReview = async (targetItemIds?: string[], scope: 'missing_only' | 'all' = 'missing_only'): Promise<void> => {
+    if (!context) return;
+    const effectiveScope = rescanAll ? 'all' : scope;
     let idsToScan: string[] = [];
     if (targetItemIds && targetItemIds.length > 0) {
       idsToScan = targetItemIds;
@@ -744,66 +1240,169 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       return;
     }
 
-    const estimatedFiles = summaryCounts?.total_files ?? items.length;
-    if (estimatedFiles > 200) {
-      const ok = window.confirm(`Found ${estimatedFiles} files across sub-folders. For system safety, this run will process the first 200 files (remaining files can be run in a subsequent batch).\n\nDo you want to proceed?`);
-      if (!ok) return;
-    } else if (estimatedFiles > 50) {
-      const ok = window.confirm(`This will scan and auto-tag ${estimatedFiles} files across all sub-folders for review.\n\nDo you want to proceed?`);
-      if (!ok) return;
+    const isSelection = (targetItemIds && targetItemIds.length > 0) || selected.size > 0;
+    const targetItems = idsToScan.map(id => items.find(it => it.id === id)).filter(Boolean) as Item[];
+    const hasFolder = targetItems.some(it => it.folder);
+    const scanRecursive = hasFolder ? true : (!isSelection && recursive);
+    const isSingleFile = isSelection && !hasFolder && idsToScan.length === 1;
+
+    const initialFeed: TagFeedEntry[] = effectiveScope === 'all' ? idsToScan.slice(0, 50).map(id => {
+      const item = items.find(current => current.id === id);
+      return {
+        name: item ? (item.folder ? `📁 ${item.name} (scanning...)` : `📄 ${item.name}`) : id,
+        status: 'pending' as const,
+      };
+    }) : [{ name: 'Checking files for missing tags...', status: 'pending' as const }];
+    if (effectiveScope === 'all' && idsToScan.length > 50) {
+      initialFeed.push({
+        name: `... and ${idsToScan.length - 50} more items across sub-folders`,
+        status: 'pending',
+      });
     }
 
     setLoading(true);
     setScanResults([]);
     setFieldChoices({});
-    setMessage('Auto-tagging and scanning selected items with OCR & folder taxonomy...');
+    setTaggingModal({
+      title: isSingleFile ? `Scanning: ${targetItems[0]?.name || 'Selected File'}` : 'Scanning & Preparing Tag Review',
+      feed: initialFeed,
+      total: effectiveScope === 'all' ? idsToScan.length : 1,
+      finished: false,
+      summary: '',
+    });
+    const scanTitle = isSingleFile ? `Scanning: ${targetItems[0]?.name || 'Selected File'}` : 'Scanning & Preparing Tag Review';
+    host.setState({
+      scanProgress: { status: 'running', completed: 0, total: 0, title: scanTitle, recentFiles: [] },
+    });
+    setMessage(isSingleFile
+      ? `Auto-tagging and scanning selected file "${targetItems[0]?.name || ''}" with OCR...`
+      : (isSelection && !hasFolder
+        ? `Auto-tagging and scanning ${idsToScan.length} selected file(s) with OCR...`
+        : (effectiveScope === 'all'
+          ? 'Auto-tagging and scanning all files with OCR & folder taxonomy...'
+          : 'Finding files missing tags before OCR...')));
+    const abortCtrl = new AbortController();
+    const timeoutId = window.setTimeout(() => abortCtrl.abort(), 10 * 60 * 1000);
     try {
-      const response = await fetch(`${api}/api/sites/${encodeURIComponent(context.site.id)}/drives/${encodeURIComponent(context.drive.id)}/scan-tags`, {
+      const response = await fetch(`${api}/api/sites/${encodeURIComponent(context.site.id)}/drives/${encodeURIComponent(context.drive.id)}/scan-tags/stream`, {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ item_ids: idsToScan, recursive: true }),
+        signal: abortCtrl.signal,
+        body: JSON.stringify({
+          item_ids: idsToScan,
+          recursive: scanRecursive,
+          scope: effectiveScope,
+        }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || 'Scan failed');
-      const results: ScanResult[] = data.results || [];
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Scan failed');
+      }
+      if (!response.body) throw new Error('Scan stream was unavailable');
 
-      // Automatically pre-select best tags according to precedence rules
-      const initialChoices: Record<string, Record<keyof Tags, string>> = {};
-      results.forEach(res => {
-        initialChoices[res.item_id] = { ...emptyTags };
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let total = 0;
+      let completed = 0;
+      const results: ScanResult[] = [];
+      const addChoices = (res: ScanResult): Record<keyof Tags, string> => {
+        const choices = { ...emptyTags };
         (['department', 'vessel', 'group', 'category'] as Array<keyof Tags>).forEach(field => {
           const ocrVal = res.ocr_suggestion?.[field]?.value;
           const ocrConf = res.ocr_suggestion?.[field]?.confidence || 0;
           const pathVal = res.path_suggestion?.[field]?.value;
           const isVesselOrGroup = field === 'vessel' || field === 'group';
           const ocrThreshold = isVesselOrGroup ? 0.85 : 0.60;
-          if (ocrVal && ocrConf >= ocrThreshold) {
-            initialChoices[res.item_id][field] = 'ocr';
+          if (field === 'category' && pathVal) {
+            choices[field] = 'path';
+          } else if (ocrVal && ocrConf >= ocrThreshold) {
+            choices[field] = 'ocr';
           } else if (pathVal) {
-            initialChoices[res.item_id][field] = 'path';
+            choices[field] = 'path';
           } else if (ocrVal && ocrConf >= 0.40) {
-            initialChoices[res.item_id][field] = 'ocr';
+            choices[field] = 'ocr';
           } else if (res.proposed_tags?.[field]) {
-            initialChoices[res.item_id][field] = 'manual';
+            choices[field] = 'manual';
           } else {
-            initialChoices[res.item_id][field] = 'skip';
+            choices[field] = 'skip';
           }
         });
-      });
-      setFieldChoices(initialChoices);
-      setScanResults(results);
+        return choices;
+      };
+      const handleEvent = (event: { type: string; total?: number; completed?: number; result?: ScanResult; scanned?: number; scope?: string; total_discovered?: number }): void => {
+        if (event.type === 'start') {
+          total = event.total || 0;
+          setTaggingModal(prev => prev ? { ...prev, total: Math.max(total, 1), feed: [] } : prev);
+          host.setState(prev => ({ scanProgress: { ...prev.scanProgress, status: 'running', total, title: scanTitle } }));
+          return;
+        }
+        if (event.type === 'progress' && event.result) {
+          const result = event.result;
+          results.unshift(result);
+          completed = event.completed || completed + 1;
+          setFieldChoices(prev => ({ ...prev, [result.item_id]: addChoices(result) }));
+          setScanResults(prev => [result, ...prev.filter(item => item.item_id !== result.item_id)]);
+          setTaggingModal(prev => prev ? {
+            ...prev,
+            total: Math.max(total, 1),
+            feed: [{ name: result.filename || result.item_id, status: result.error ? 'failed' : 'ok', error: result.error }, ...prev.feed],
+          } : prev);
+          host.setState(prev => ({ scanProgress: {
+            ...prev.scanProgress,
+            status: 'running', completed, total,
+            recentFiles: [result.filename || result.item_id, ...prev.scanProgress.recentFiles].slice(0, 5),
+          } }));
+        }
+      };
+
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        lines.filter(line => line.trim()).forEach(line => {
+          try {
+            handleEvent(JSON.parse(line));
+          } catch (jsonErr) {
+            console.warn('Failed to parse scan stream event:', line, jsonErr);
+          }
+        });
+      }
+      if (buffer.trim()) {
+        try {
+          handleEvent(JSON.parse(buffer));
+        } catch (jsonErr) {
+          console.warn('Failed to parse trailing scan stream event:', buffer, jsonErr);
+        }
+      }
 
       if (crumbs.length > 0) {
         const crumb = crumbs[crumbs.length - 1];
         await refreshFolder(context, crumb.id, crumbs);
       }
-      const countMsg = data.truncated
-        ? `⚡ Scanned & auto-tagged ${results.length} item(s) (capped at 200). Review suggestions below and confirm!`
-        : `⚡ Scanned & auto-tagged ${results.length} item(s) across sub-folders. Review suggestions below and confirm!`;
+      const countMsg = effectiveScope === 'missing_only'
+        ? `⚡ Scanned ${results.length} file(s) missing a tag. Review suggestions below and confirm!`
+        : `⚡ Scanned all ${results.length} file(s) across sub-folders. Review suggestions below and confirm!`;
+      setTaggingModal(prev => prev ? {
+        ...prev,
+        feed: prev.feed.length > 0 ? prev.feed : [{ name: 'All selected files were already scanned.', status: 'ok' }],
+        total: Math.max(results.length, 1),
+        finished: true,
+        summary: countMsg,
+      } : prev);
+      host.setState(prev => ({ scanProgress: { ...prev.scanProgress, status: 'completed', completed: results.length, total: Math.max(total, results.length), title: countMsg } }));
       setMessage(countMsg);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Scan and review failed');
+      const errorMessage = error instanceof DOMException && error.name === 'AbortError'
+        ? 'Scan and review timed out. Only files missing tags are included; try a smaller folder.'
+        : (error instanceof Error ? error.message : 'Scan and review failed');
+      setTaggingModal(prev => prev ? { ...prev, finished: true, summary: `✗ ${errorMessage}` } : prev);
+      host.setState(prev => ({ scanProgress: { ...prev.scanProgress, status: 'failed', error: errorMessage, title: 'OCR scan failed' } }));
+      setMessage(errorMessage);
     } finally {
+      window.clearTimeout(timeoutId);
       setLoading(false);
     }
   };
@@ -833,10 +1432,19 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         </button>
       )}
       {!tagNames.some(([key]) => item.tags?.[key]) && item.folder && (() => {
-        const fileCount = item.folder_counts ? item.folder_counts.total_files : getFolderFileCount(item);
+        const fc = item.folder_counts;
+        const childCount = (item.folder as { childCount?: number } | null)?.childCount ?? 0;
+        // Prefer direct subfolder count; if there are subfolders, show "X folders"
+        const subfolderCount = fc ? fc.direct_subfolders : 0;
+        const fileCount = fc ? fc.direct_files : childCount;
+        const hasSubfolders = subfolderCount > 0;
+        const count = hasSubfolders ? subfolderCount : fileCount;
+        const label = hasSubfolders
+          ? `${count} folder${count === 1 ? '' : 's'}`
+          : `${count} file${count === 1 ? '' : 's'}`;
         return (
           <span style={{ color: '#64748b', fontSize: 11, fontStyle: 'italic', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            📁 Sub-folder ({fileCount} file{fileCount === 1 ? '' : 's'})
+            📁 Sub-folder ({label})
           </span>
         );
       })()}
@@ -902,6 +1510,11 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                   📁 {result.subfolder_name}
                 </span>
               )}
+              {Boolean(result.vessel_in_filename_only || (result.ocr_suggestion?.vessel as any)?.vessel_in_filename_only) && (
+                <span style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#c2410c', fontSize: 11, padding: '2px 8px', borderRadius: 12, fontWeight: 600 }}>
+                  ⚠️ Vessel name not in file
+                </span>
+              )}
             </div>
             <span>
               {result.status === 'confirmed'
@@ -921,6 +1534,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 const choice = fieldChoices[result.item_id]?.[field] || 'skip';
                 // For vessel field, show a Term Store dropdown when choice is 'manual'
                 const isVessel = field === 'vessel';
+                const isVesselNotInFile = isVessel && Boolean(result.vessel_in_filename_only || (ocr as any)?.vessel_in_filename_only);
                 return (
                   <div key={field} style={{ background: '#fff', border: '1px solid #fed7aa', borderRadius: 6, padding: '8px 10px' }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>
@@ -936,13 +1550,18 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                     >
                       <option value="skip">Skip / Keep unchanged</option>
                       <option value="ocr" disabled={!ocr?.value}>
-                        OCR: {ocr?.value || 'None'}{ocr ? ` (${Math.round(ocr.confidence * 100)}%)` : ''}
+                        OCR: {ocr?.value || 'None'}{ocr ? ` (${Math.round(ocr.confidence * 100)}%)` : ''}{isVesselNotInFile ? ' - vessel name not in the file' : ''}
                       </option>
                       <option value="path" disabled={!path?.value}>
                         Path: {path?.value || 'None'}
                       </option>
                       <option value="manual">Enter manually</option>
                     </select>
+                    {isVesselNotInFile && (
+                      <div style={{ marginTop: 4, fontSize: 11, color: '#c2410c', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
+                        <span>⚠️ Vessel name not in file (matched from term store)</span>
+                      </div>
+                    )}
                     {choice === 'manual' && (
                       isVessel && vesselOptions.length > 0 ? (
                         <select
@@ -1074,9 +1693,15 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                   {entry.name}
                 </span>
                 {entry.status === 'failed' && entry.error && (
-                  <span style={{ fontSize: 11, color: '#dc2626', whiteSpace: 'nowrap', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis' }}
-                    title={entry.error}>
-                    {entry.error}
+                  <span
+                    style={{
+                      fontSize: 11, color: '#dc2626', background: '#fee2e2', padding: '2px 8px',
+                      borderRadius: 4, whiteSpace: 'nowrap', maxWidth: 320, overflow: 'hidden',
+                      textOverflow: 'ellipsis', flexShrink: 0, fontWeight: 600,
+                    }}
+                    title={entry.error}
+                  >
+                    ⚠️ {entry.error}
                   </span>
                 )}
               </div>
@@ -1111,9 +1736,231 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
     );
   };
 
+  // ── In-App Overwrite Confirmation Modal (No native alert box) ───────────────
+  const renderConfirmOverwriteModal = (): React.ReactElement | null => {
+    if (!confirmOverwrite) return null;
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        background: 'rgba(15,23,42,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <div style={{
+          background: '#fff', borderRadius: 16, padding: '24px 28px', width: '100%', maxWidth: 460,
+          boxShadow: '0 20px 60px rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: 16,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 8, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>⚠️</div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: '#0f172a' }}>Overwrite Existing Vessel Tags?</div>
+          </div>
+          <div style={{ fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+            This will overwrite existing vessel tags on <b>{confirmOverwrite.count}</b> file(s) with vessel <b>"{confirmOverwrite.vessel}"</b>.
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+            <button
+              type="button"
+              onClick={() => setConfirmOverwrite(null)}
+              style={{
+                padding: '8px 16px', background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1',
+                borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmOverwrite(null);
+                void applyBulkVessel(undefined, undefined, { overwriteExisting: true, confirmed: true });
+              }}
+              style={{
+                padding: '8px 16px', background: '#0284c7', color: '#fff', border: 0,
+                borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: 'pointer',
+              }}
+            >
+              ✓ Confirm Overwrite
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── In-App Scan & Auto-Tag Confirmation Modal (No native alert box) ────────
+  const renderConfirmScanModal = (): React.ReactElement | null => {
+    if (!confirmScanModal) return null;
+    const { mode, isSelection, count, missingCount, names, isRecursive } = confirmScanModal;
+    const isSingle = isSelection && count === 1;
+
+    let modalTitle = 'Auto-Tag & Review OCR';
+    let icon = '⚡🔍';
+    let iconBg = 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)';
+    if (mode === 'scan') {
+      modalTitle = 'Scan & Review OCR';
+      icon = '🔍';
+      iconBg = 'linear-gradient(135deg, #0f766e 0%, #115e59 100%)';
+    } else if (mode === 'autoTagFromPath') {
+      modalTitle = 'Auto-Tag from Folder Path';
+      icon = '⚡';
+      iconBg = 'linear-gradient(135deg, #059669 0%, #047857 100%)';
+    }
+
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16,
+      }}>
+        <div style={{
+          background: '#fff', borderRadius: 16, padding: '24px 28px', width: '100%', maxWidth: 480,
+          boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: 16,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{
+              width: 42, height: 42, borderRadius: 10, background: iconBg,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, color: '#fff',
+              flexShrink: 0,
+            }}>
+              {icon}
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 17, color: '#0f172a' }}>{modalTitle}</div>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                {isSingle ? '1 Selected File' : (isSelection ? `${count} Selected Files` : `${count} Files (Folder Scope)`)}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ fontSize: 13, color: '#475569', lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {isSingle ? (
+              <>
+                <div>You have selected <b>1 file</b> to process:</div>
+                <div style={{
+                  background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 8,
+                  padding: '10px 14px', fontSize: 13, fontWeight: 600, color: '#0f172a',
+                  display: 'flex', alignItems: 'center', gap: 8, wordBreak: 'break-all',
+                }}>
+                  📄 {names[0] || 'Selected file'}
+                </div>
+                <div style={{ color: '#64748b', fontSize: 12 }}>
+                  {mode === 'autoTagFromPath'
+                    ? 'Only this selected file will be tagged using folder path taxonomy.'
+                    : 'This selected file alone will be scanned with OCR and AI classification for review. Other files will not be touched.'}
+                </div>
+              </>
+            ) : isSelection ? (
+              <>
+                <div>You have selected <b>{count} files</b> to process:</div>
+                <div style={{
+                  background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 8,
+                  padding: '8px 12px', fontSize: 12, color: '#334155', maxHeight: 110,
+                  overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4,
+                }}>
+                  {names.slice(0, 10).map((name, idx) => (
+                    <div key={idx} style={{ wordBreak: 'break-all' }}>📄 {name}</div>
+                  ))}
+                  {names.length > 10 && (
+                    <div style={{ color: '#64748b', fontStyle: 'italic' }}>
+                      ... and {names.length - 10} more files
+                    </div>
+                  )}
+                </div>
+                <div style={{ color: '#64748b', fontSize: 12 }}>
+                  Only these {count} selected files will be processed.
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  No specific file selected. This will scan and auto-tag all <b>{count} file(s)</b>{isRecursive ? ' across all sub-folders' : ' in this folder'} for review.
+                </div>
+                <div style={{ color: '#64748b', fontSize: 12 }}>
+                  OCR text extraction and folder path taxonomy will be evaluated for each file. You can review suggestions before changes are saved.
+                </div>
+              </>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 6 }}>
+            <button
+              type="button"
+              onClick={() => setConfirmScanModal(null)}
+              style={{
+                padding: '8px 16px', background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1',
+                borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer',
+              }}
+            >
+              Cancel
+            </button>
+            {mode === 'autoTagAndReview' && ((missingCount || 0) > 0 || isRecursive) && !isSingle ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { const target = confirmScanModal.targetItemIds; setConfirmScanModal(null); void autoTagAndReview(target, 'missing_only'); }}
+                  style={{ padding: '8px 14px', background: '#0284c7', color: '#fff', border: 0, borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                >
+                  ⚡ Tag Missing Files Only {(missingCount || 0) > 0 ? `(${missingCount})` : ''}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { const target = confirmScanModal.targetItemIds; setConfirmScanModal(null); void autoTagAndReview(target, 'all'); }}
+                  style={{ padding: '8px 14px', background: '#f8fafc', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                >
+                  🔍 Scan All Files ({count})
+                </button>
+              </>
+            ) : mode === 'scan' && ((missingCount || 0) > 0 || isRecursive) && !isSingle ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { const target = confirmScanModal.targetItemIds; setConfirmScanModal(null); void scan(target, 'missing_only'); }}
+                  style={{ padding: '8px 14px', background: '#0f766e', color: '#fff', border: 0, borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                >
+                  🔍 Scan Missing Files Only {(missingCount || 0) > 0 ? `(${missingCount})` : ''}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { const target = confirmScanModal.targetItemIds; setConfirmScanModal(null); void scan(target, 'all'); }}
+                  style={{ padding: '8px 14px', background: '#f8fafc', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                >
+                  Scan All Files ({count})
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  const target = confirmScanModal.targetItemIds;
+                  const m = confirmScanModal.mode;
+                  setConfirmScanModal(null);
+                  if (m === 'scan') void scan(target, 'all');
+                  else if (m === 'autoTagAndReview') void autoTagAndReview(target, 'all');
+                  else void autoTagFromPath(target);
+                }}
+                style={{
+                  padding: '8px 18px',
+                  background: mode === 'scan' ? '#0f766e' : mode === 'autoTagAndReview' ? '#0284c7' : '#059669',
+                  color: '#fff', border: 0, borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer',
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                }}
+              >
+                {isSingle
+                  ? (mode === 'autoTagFromPath' ? 'Tag Selected File' : '⚡🔍 Start OCR on Selected File')
+                  : mode === 'autoTagAndReview'
+                    ? `⚡🔍 Scan All Files (${count})`
+                    : `Proceed (${count} file${count === 1 ? '' : 's'})`}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ padding: '28px 32px', background: '#f7fafc', minHeight: '100%' }}>
       {renderTaggingModal()}
+      {renderConfirmOverwriteModal()}
+      {renderConfirmScanModal()}
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', marginBottom: 24, flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ margin: 0, color: '#123044', fontSize: 28 }}>Sites</h1>
@@ -1140,7 +1987,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       {/* Sites grid */}
       {!context && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 16 }}>
-          {loading && <div style={{ color: '#64748b' }}>Loading sites...</div>}
+          {sitesLoading && <div style={{ color: '#64748b' }}>Loading sites...</div>}
           {filteredSites.map(site => (
             <div key={site.id} style={{ background: '#fff', border: '1px solid #dbe5ec', borderRadius: 10, padding: 18, boxShadow: '0 2px 8px #1230440d' }}>
               <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
@@ -1217,9 +2064,13 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 <input type="checkbox" checked={recursive} onChange={event => setRecursive(event.target.checked)} />
                 Recursive
               </label>
+              <label style={{ fontSize: 13, display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer', color: rescanAll ? '#b45309' : '#475569' }} title="By default only files missing a tag (Department, Vessel, Group, or Category) are processed">
+                <input type="checkbox" checked={rescanAll} onChange={event => setRescanAll(event.target.checked)} />
+                Re-scan all files
+              </label>
               <button
                 disabled={loading}
-                onClick={() => void autoTagAndReview()}
+                onClick={() => void promptAutoTagAndReview()}
                 style={{
                   padding: '9px 13px', background: '#0284c7', color: '#fff', border: 0, borderRadius: 7,
                   cursor: loading ? 'not-allowed' : 'pointer',
@@ -1232,7 +2083,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
               </button>
               <button
                 disabled={selected.size === 0 || loading}
-                onClick={() => void scan()}
+                onClick={() => void promptScan()}
                 style={{
                   padding: '9px 13px', background: '#0f766e', color: '#fff', border: 0, borderRadius: 7,
                   cursor: selected.size === 0 || loading ? 'not-allowed' : 'pointer',
@@ -1256,6 +2107,24 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
               </button>
             </div>
           </div>
+
+          {tagFailures.length > 0 && (
+            <div style={{ marginBottom: 16, padding: 14, background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <strong style={{ color: '#9a3412' }}>Needs Attention ({tagFailures.length})</strong>
+                <button type="button" onClick={() => void retryFailures()} disabled={loading} style={{ marginLeft: 'auto', padding: '6px 10px', border: 0, borderRadius: 6, background: '#c2410c', color: '#fff', cursor: 'pointer' }}>Retry All</button>
+              </div>
+              <div style={{ display: 'grid', gap: 6, maxHeight: 180, overflowY: 'auto' }}>
+                {tagFailures.map(failure => (
+                  <div key={failure.file_id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: '#7c2d12' }}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={failure.error_reason}>{failure.filename} <span style={{ color: '#a16207' }}>({failure.attempt_count} attempts)</span></span>
+                    <button type="button" onClick={() => void retryFailures([failure.file_id])} disabled={loading} style={{ padding: '4px 8px', border: '1px solid #fdba74', borderRadius: 5, background: '#fff', color: '#9a3412', cursor: 'pointer' }}>Retry</button>
+                    <button type="button" onClick={() => void dismissFailures([failure.file_id])} style={{ padding: '4px 8px', border: '1px solid #fdba74', borderRadius: 5, background: '#fff', color: '#7c2d12', cursor: 'pointer' }}>Dismiss</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Folder and file count summary (matching Documents module with recursive accuracy) */}
           <div style={{ fontSize: 13, color: '#475569', marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1318,43 +2187,138 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 }}
               />
 
-              <button
-                type="button"
-                disabled={!bulkVessel.trim() || loading}
-                onClick={() => void applyBulkVessel()}
-                style={{
-                  padding: '7px 14px', background: '#0284c7', color: '#fff', border: 0,
-                  borderRadius: 6, fontWeight: 600, fontSize: 13,
-                  cursor: (!bulkVessel.trim() || loading) ? 'not-allowed' : 'pointer',
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                  opacity: (!bulkVessel.trim() || loading) ? 0.5 : 1,
-                }}
-                title="Save VesselName directly to SharePoint for selected items and sub-folders"
-              >
-                ⚓ Update Vessel {selected.size > 0 ? `(${selected.size} selected)` : `(all ${summaryCounts ? summaryCounts.total_files : items.length} files)`}
-              </button>
+              {(() => {
+                const targetFiles = selected.size > 0
+                  ? items.filter(i => selected.has(i.id) && !i.folder)
+                  : items.filter(i => !i.folder);
+                const missingCount = targetFiles.filter(i => !i.tags?.vessel).length;
+                const taggedCount = targetFiles.filter(i => Boolean(i.tags?.vessel)).length;
+                const hasFolders = selected.size > 0
+                  ? items.some(i => selected.has(i.id) && i.folder)
+                  : items.some(i => i.folder);
+                const totalTargetCount = selected.size > 0 ? selected.size : (summaryCounts ? summaryCounts.total_files : items.length);
+
+                return (
+                  <>
+                    {/* Primary Button: Updates ONLY missing vessel files */}
+                    {(missingCount > 0 || hasFolders) && (
+                      <button
+                        type="button"
+                        disabled={!bulkVessel.trim() || loading}
+                        onClick={() => void applyBulkVessel(undefined, undefined, { onlyMissing: true })}
+                        style={{
+                          padding: '7px 14px', background: '#0284c7', color: '#fff', border: 0,
+                          borderRadius: 6, fontWeight: 700, fontSize: 13,
+                          cursor: (!bulkVessel.trim() || loading) ? 'not-allowed' : 'pointer',
+                          display: 'inline-flex', alignItems: 'center', gap: 6,
+                          opacity: (!bulkVessel.trim() || loading) ? 0.5 : 1,
+                        }}
+                        title={missingCount > 0
+                          ? `Update vessel tag "${bulkVessel.trim()}" directly on the ${missingCount} file(s) missing a vessel tag`
+                          : 'Update vessel tag on missing files across sub-folders'}
+                      >
+                        ⚓ Tag Missing Vessels {missingCount > 0 ? `(${missingCount})` : (hasFolders ? '(missing only)' : '')}
+                      </button>
+                    )}
+
+                    {/* When all files in this view already have a vessel tag */}
+                    {missingCount === 0 && !hasFolders && (
+                      <button
+                        type="button"
+                        disabled={!bulkVessel.trim() || loading}
+                        onClick={() => void applyBulkVessel(undefined, undefined, { overwriteExisting: true })}
+                        style={{
+                          padding: '7px 14px', background: '#059669', color: '#fff', border: 0,
+                          borderRadius: 6, fontWeight: 600, fontSize: 13,
+                          cursor: (!bulkVessel.trim() || loading) ? 'not-allowed' : 'pointer',
+                          display: 'inline-flex', alignItems: 'center', gap: 6,
+                          opacity: (!bulkVessel.trim() || loading) ? 0.5 : 1,
+                        }}
+                        title={`All ${totalTargetCount} file(s) already have a vessel tag. Click to overwrite (confirmation required).`}
+                      >
+                        ✓ All Tagged — Overwrite ({totalTargetCount})
+                      </button>
+                    )}
+
+                    {/* Secondary Overwrite Button: requires explicit confirmation before updating existing tags */}
+                    {taggedCount > 0 && (missingCount > 0 || hasFolders) && (
+                      <button
+                        type="button"
+                        disabled={!bulkVessel.trim() || loading}
+                        onClick={() => void applyBulkVessel(undefined, undefined, { overwriteExisting: true })}
+                        style={{
+                          padding: '7px 12px', background: '#f8fafc', color: '#475569',
+                          border: '1px solid #cbd5e1', borderRadius: 6, fontWeight: 500, fontSize: 12,
+                          cursor: (!bulkVessel.trim() || loading) ? 'not-allowed' : 'pointer',
+                          display: 'inline-flex', alignItems: 'center', gap: 5,
+                          opacity: (!bulkVessel.trim() || loading) ? 0.5 : 1,
+                        }}
+                        title={`Overwrite vessel tag on all ${totalTargetCount} file(s) including the ${taggedCount} already-tagged file(s) (requires confirmation)`}
+                      >
+                        🔄 Overwrite All ({totalTargetCount})
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
 
               <button
                 type="button"
                 disabled={loading}
-                onClick={() => void autoTagFromPath()}
+                onClick={() => void promptAutoTagFromPath()}
                 style={{
                   padding: '7px 12px', background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0',
                   borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: 'pointer',
                   display: 'inline-flex', alignItems: 'center', gap: 5,
                 }}
-                title="Automatically tag all files from folder path and taxonomy across selected items and sub-folders"
+                title={selected.size > 0
+                  ? `Automatically tag ${selected.size} selected item(s) from folder path and taxonomy`
+                  : 'Automatically tag all files from folder path and taxonomy across selected items and sub-folders'}
               >
-                ⚡ Auto-Tag from Folder Path {detectedVessel ? `(${detectedVessel})` : ''}
+                ⚡ Auto-Tag from Folder Path {selected.size > 0 ? `(${selected.size} selected)` : (detectedVessel ? `(${detectedVessel})` : '')}
               </button>
+
+              {/* Direct OCR run on exactly the files missing a tag — no modal, since scope is already known here */}
+              {(() => {
+                const missingTagFiles = items.filter(i => !i.folder && hasAnyMissingTag(i));
+                if (missingTagFiles.length === 0) return null;
+                return (
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => void autoTagAndReview(missingTagFiles.map(i => i.id), 'missing_only')}
+                    style={{
+                      padding: '7px 12px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe',
+                      borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: loading ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex', alignItems: 'center', gap: 5, opacity: loading ? 0.6 : 1,
+                    }}
+                    title={`Run OCR & AI classification directly on the ${missingTagFiles.length} file(s) missing a vessel tag. Files with an existing vessel tag are skipped.`}
+                  >
+                    🔍 Run OCR on Missing Tags ({missingTagFiles.length})
+                  </button>
+                );
+              })()}
 
               <span style={{ marginLeft: 'auto', fontSize: 12 }}>
                 {items.filter(i => !i.folder && !i.tags?.vessel).length > 0 ? (
-                  <span style={{ color: '#d97706', fontWeight: 600, background: '#fef3c7', padding: '4px 9px', borderRadius: 6 }}>
+                  <button
+                    type="button"
+                    disabled={loading || !bulkVessel.trim()}
+                    onClick={() => void applyBulkVessel(undefined, undefined, { onlyMissing: true })}
+                    style={{
+                      color: '#b45309', fontWeight: 600, background: '#fef3c7', padding: '5px 12px',
+                      borderRadius: 6, border: '1px solid #fde68a', cursor: bulkVessel.trim() && !loading ? 'pointer' : 'default',
+                      display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12,
+                    }}
+                    title={bulkVessel.trim()
+                      ? `Click to tag these ${items.filter(i => !i.folder && !i.tags?.vessel).length} missing files with "${bulkVessel.trim()}"`
+                      : 'Select or enter a vessel name to tag these missing files'}
+                  >
                     ⚠️ {items.filter(i => !i.folder && !i.tags?.vessel).length} file{items.filter(i => !i.folder && !i.tags?.vessel).length > 1 ? 's' : ''} missing vessel tag
-                  </span>
+                    {bulkVessel.trim() && <span style={{ textDecoration: 'underline', fontWeight: 700, marginLeft: 2 }}>— Tag Now</span>}
+                  </button>
                 ) : (
-                  <span style={{ color: '#16a34a', fontWeight: 600, background: '#dcfce7', padding: '4px 9px', borderRadius: 6 }}>
+                  <span style={{ color: '#16a34a', fontWeight: 600, background: '#dcfce7', padding: '5px 10px', borderRadius: 6 }}>
                     ✓ Ready to auto-tag
                   </span>
                 )}
@@ -1517,8 +2481,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                           display: 'inline-flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          background: countsLoading ? '#e2e8f0' : (fallbackCount > 0 ? '#0284c7' : '#94a3b8'),
-                          color: countsLoading ? '#64748b' : '#fff',
+                          background: fallbackCount > 0 ? '#0284c7' : '#94a3b8',
+                          color: '#fff',
                           borderRadius: 20,
                           padding: '1px 8px',
                           fontSize: 10,
@@ -1526,9 +2490,9 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                           lineHeight: '16px',
                           whiteSpace: 'nowrap',
                         }}
-                        title={countsLoading ? 'Calculating recursive totals...' : `${fallbackCount} direct items`}
+                        title={countsLoading ? 'Updating recursive totals in background...' : `${fallbackCount} direct items`}
                       >
-                        {countsLoading ? '⏳ ...' : `${fallbackCount} ${fallbackCount === 1 ? 'file' : 'files'}`}
+                        {fallbackCount} {fallbackCount === 1 ? 'file' : 'files'}
                       </span>
                     );
                   })()}
@@ -1593,7 +2557,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                       {item.folder ? (
                         <button
                           type="button"
-                          onClick={() => void autoTagFromPath([item.id])}
+                          onClick={() => void promptAutoTagFromPath([item.id])}
                           title={`Auto-tag all files inside ${item.name} from folder path`}
                           style={{
                             border: '1px solid #7dd3fc',

@@ -3,7 +3,7 @@
   "solution": {
     "name": "vessel-email-spfx-v-2-client-side-solution",
     "id": "9396e02b-d757-4cac-bb8b-192a5143f0b8",
-    "version": "1.0.0.0",
+    "version": "1.0.1.0",
     "includeClientSideAssets": true,
     "skipFeatureDeployment": true,
     "isDomainIsolated": false,
@@ -40,7 +40,7 @@
         "title": "Application Extension - Deployment of custom action",
         "description": "Deploys a custom action with ClientSideComponentId association",
         "id": "9cd48429-3f36-4d05-820e-43591ffdc7a6",
-        "version": "1.0.0.0",
+        "version": "1.0.1.0",
         "assets": {
           "elementManifests": [
             "elements.xml",

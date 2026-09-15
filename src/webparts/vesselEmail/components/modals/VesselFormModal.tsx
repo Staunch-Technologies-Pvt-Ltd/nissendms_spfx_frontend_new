@@ -25,6 +25,25 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
   const { form, modalBusy, modalMsg, modalError, formFieldErrors, vessels } = host.state;  const isCreate = mode === 'create';
   const isMobile = isMobileWidth(host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
   const [elapsed, setElapsed] = React.useState(0);
+  const [availableSites, setAvailableSites] = React.useState<Array<{ site_key: string; display_name: string; is_available_for_provisioning: boolean; is_default_provisioning: boolean }>>([]);
+  const [loadingSites, setLoadingSites] = React.useState<boolean>(false);
+
+  React.useEffect(() => {
+    setLoadingSites(true);
+    fetch(`${host._base()}/api/admin/site-provisioning/sites`, { headers: host._headers() })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(d => {
+        const sites = (d.sites || []).filter((s: any) => s.is_available_for_provisioning);
+        setAvailableSites(sites);
+        if (isCreate && (!form.target_site_ids || form.target_site_ids.length === 0)) {
+          const defaults = sites.filter((s: any) => s.is_default_provisioning).map((s: any) => s.site_key);
+          const initialSelection = defaults.length > 0 ? defaults : (d.active_site ? [d.active_site] : []);
+          host.setState({ form: { ...form, target_site_ids: initialSelection } });
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingSites(false));
+  }, []);
 
   React.useEffect(() => {
     if (!modalBusy) {
@@ -276,6 +295,86 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
                   <option value="">Select a type...</option>
                   {VESSEL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
+              </div>
+
+              {/* Multi-Site Provisioning Target Selection */}
+              <div style={{ background: '#f8fafc', borderRadius: 10, border: '1px solid #e2e8f0', padding: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <label style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>
+                    Target Sites for Folder Structure
+                  </label>
+                  <span style={{ fontSize: 11, color: '#64748b' }}>
+                    {isCreate ? 'Select target sites' : 'Manage provisioned sites'}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10, lineHeight: 1.4 }}>
+                  {isCreate
+                    ? 'DMS folders will be created on the selected sites. Leaving unselected uses default site.'
+                    : 'Folders on already provisioned sites remain untouched. Checking new sites will provision only the missing ones.'}
+                </div>
+
+                {loadingSites ? (
+                  <div style={{ fontSize: 12, color: '#94a3b8', padding: '6px 0' }}>Loading available sites...</div>
+                ) : availableSites.length === 0 ? (
+                  <div style={{ fontSize: 12, color: '#94a3b8', padding: '6px 0' }}>Using primary site (default).</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {availableSites.map(site => {
+                      const isProvisioned = !isCreate && (host.state.selectedVessel?.provisioned_site_ids || []).includes(site.site_key);
+                      const isChecked = isProvisioned || (form.target_site_ids || []).includes(site.site_key);
+
+                      return (
+                        <label
+                          key={site.site_key}
+                          style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            padding: '8px 12px', borderRadius: 8,
+                            background: isChecked ? '#eff6ff' : '#fff',
+                            border: `1px solid ${isChecked ? '#bfdbfe' : '#cbd5e1'}`,
+                            cursor: isProvisioned ? 'default' : 'pointer',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <input
+                              type="checkbox"
+                              disabled={isProvisioned || modalBusy}
+                              checked={isChecked}
+                              onChange={e => {
+                                const current = form.target_site_ids || [];
+                                const next = e.target.checked
+                                  ? [...current, site.site_key]
+                                  : current.filter(k => k !== site.site_key);
+                                host.setState({ form: { ...form, target_site_ids: next } });
+                              }}
+                              style={{ width: 16, height: 16, cursor: isProvisioned ? 'default' : 'pointer', accentColor: '#0078d4' }}
+                            />
+                            <div>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>
+                                {site.display_name}
+                              </div>
+                              <div style={{ fontSize: 11, color: '#64748b' }}>
+                                Key: <code style={{ fontSize: 11, background: '#f1f5f9', padding: '1px 4px', borderRadius: 4 }}>{site.site_key}</code>
+                                {site.is_default_provisioning && <span style={{ marginLeft: 6, color: '#0284c7', fontWeight: 600 }}>Default</span>}
+                              </div>
+                            </div>
+                          </div>
+
+                          {isProvisioned ? (
+                            <span style={{ fontSize: 11, fontWeight: 700, background: '#dcfce7', color: '#15803d', padding: '3px 8px', borderRadius: 12 }}>
+                              ✅ Provisioned
+                            </span>
+                          ) : isChecked ? (
+                            <span style={{ fontSize: 11, fontWeight: 600, background: '#dbeafe', color: '#1d4ed8', padding: '3px 8px', borderRadius: 12 }}>
+                              {isCreate ? 'Selected' : '➕ Will Provision'}
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: 11, color: '#94a3b8' }}>Not provisioned</span>
+                          )}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
 

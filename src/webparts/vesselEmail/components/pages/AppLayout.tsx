@@ -669,6 +669,22 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
           </div>
         </div>
 
+        {host.state.scanProgress.status !== 'idle' && (
+          <div role="status" style={{ flexShrink: 0, padding: '7px 18px', background: host.state.scanProgress.status === 'failed' ? '#fef2f2' : '#eff6ff', borderBottom: '1px solid #bfdbfe', color: host.state.scanProgress.status === 'failed' ? '#b91c1c' : '#075985', display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
+            <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+              {host.state.scanProgress.status === 'running' ? 'Scanning files' : host.state.scanProgress.status === 'completed' ? 'Scan complete' : 'Scan failed'}
+            </span>
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {host.state.scanProgress.title}
+              {host.state.scanProgress.status === 'running' && host.state.scanProgress.recentFiles[0] ? ` · ${host.state.scanProgress.recentFiles[0]}` : ''}
+            </span>
+            {host.state.scanProgress.status === 'running' && <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{host.state.scanProgress.completed} / {host.state.scanProgress.total}</span>}
+            {host.state.scanProgress.status === 'completed' && (
+              <button type="button" onClick={() => host.setState({ scanProgress: { ...host.state.scanProgress, status: 'idle' } })} style={{ border: 0, background: 'transparent', color: '#075985', cursor: 'pointer', fontWeight: 700 }} aria-label="Dismiss scan status">Dismiss</button>
+            )}
+          </div>
+        )}
+
         {/* ── Main Content ── */}
         <div style={{ flex: 1, overflowY: 'auto', padding: phone ? 12 : tabletOrBelow ? 18 : 32, background: '#EEF2F7' }}>
           {content}

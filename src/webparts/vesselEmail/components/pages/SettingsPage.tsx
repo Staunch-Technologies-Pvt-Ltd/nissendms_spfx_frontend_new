@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable react/no-unescaped-entities */
+/* eslint-disable @typescript-eslint/no-unused-expressions */
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import {
@@ -35,7 +38,7 @@ function SettingsPageView({ host }: { host: VesselEmail }): React.ReactElement {
           {/* Settings Left Nav */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, borderRight: '1px solid #f1f5f9', paddingRight: 16 }}>
             {[
-              'General', 'Site Selection', 'Document Settings', 'Notification Settings',
+              'General', 'Site Selection', 'Vessel Site Provisioning', 'Document Settings', 'Notification Settings',
               'Permission Settings', 'Integration', 'Audit Logs'
             ].map(tab => (
               <button
@@ -53,7 +56,7 @@ function SettingsPageView({ host }: { host: VesselEmail }): React.ReactElement {
           </div>
 
           {/* Settings Content Area */}
-          <div style={{ maxWidth: 500 }}>
+          <div style={{ maxWidth: settingsTab === 'Vessel Site Provisioning' ? 950 : 500, width: '100%' }}>
             <h3 style={{ margin: '0 0 16px', fontSize: 15, fontWeight: 700, color: '#0f172a' }}>{settingsTab}</h3>
 
             {settingsSavedMsg && (
@@ -208,11 +211,15 @@ function SettingsPageView({ host }: { host: VesselEmail }): React.ReactElement {
               <SiteSelectorComponent host={host} />
             )}
 
+            {settingsTab === 'Vessel Site Provisioning' && (
+              <VesselSiteProvisioningPanel host={host} />
+            )}
+
             {settingsTab === 'Integration' && (
               <SiteIntegrationInfo host={host} />
             )}
 
-            {settingsTab !== 'General' && settingsTab !== 'Integration' && settingsTab !== 'Site Selection' && (
+            {settingsTab !== 'General' && settingsTab !== 'Integration' && settingsTab !== 'Site Selection' && settingsTab !== 'Vessel Site Provisioning' && (
               <div style={{ color: '#64748b', fontSize: 13 }}>
                 Configuration settings for {settingsTab} are active with system default policies.
               </div>
@@ -879,3 +886,471 @@ function SiteSelectorComponent({ host }: { host: VesselEmail }): React.ReactElem
     </div>
   );
 }
+
+function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.ReactElement {
+  const [sites, setSites] = React.useState<Array<{
+    site_key: string;
+    display_name: string;
+    site_name: string;
+    site_id: string;
+    drive_id: string;
+    is_available_for_provisioning: boolean;
+    is_default_provisioning: boolean;
+  }>>([]);
+  const [loading, setLoading] = React.useState<boolean>(true);
+  const [saving, setSaving] = React.useState<boolean>(false);
+  const [siteMsg, setSiteMsg] = React.useState<string | null>(null);
+  const [siteErr, setSiteErr] = React.useState<string | null>(null);
+
+  // Per-vessel provisioning
+  const [vesselSearch, setVesselSearch] = React.useState<string>('');
+  const [selectedVessel, setSelectedVessel] = React.useState<VesselRecord | null>(null);
+  const [targetSiteKeys, setTargetSiteKeys] = React.useState<string[]>([]);
+  const [provisioning, setProvisioning] = React.useState<boolean>(false);
+  const [provMsg, setProvMsg] = React.useState<string | null>(null);
+  const [provErr, setProvErr] = React.useState<string | null>(null);
+  const [provResults, setProvResults] = React.useState<Record<string, any> | null>(null);
+
+  const loadSites = () => {
+    setLoading(true);
+    fetch(`${host._base()}/api/admin/site-provisioning/sites`, { headers: host._headers() })
+      .then(r => r.ok ? r.json() : Promise.reject(r))
+      .then(d => {
+        setSites(d.sites || []);
+      })
+      .catch((e: any) => {
+        setSiteErr(e?.message || 'Failed to load site provisioning settings');
+      })
+      .finally(() => setLoading(false));
+  };
+
+  React.useEffect(() => {
+    loadSites();
+  }, []);
+
+  const handleSaveSiteSettings = async () => {
+    setSaving(true);
+    setSiteMsg(null);
+    setSiteErr(null);
+    try {
+      const res = await fetch(`${host._base()}/api/admin/site-provisioning/sites`, {
+        method: 'PUT',
+        headers: {
+          ...host._headers(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sites: sites.map(s => ({
+            site_key: s.site_key,
+            is_available_for_provisioning: s.is_available_for_provisioning,
+            is_default_provisioning: s.is_default_provisioning,
+            display_name: s.display_name,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || 'Failed to save settings');
+      if (data.sites) setSites(data.sites);
+      setSiteMsg('✓ Site provisioning settings saved successfully.');
+      setTimeout(() => setSiteMsg(null), 3000);
+    } catch (err: any) {
+      setSiteErr(err?.message || 'Failed to save site settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleOpenVesselModal = (v: VesselRecord) => {
+    setSelectedVessel(v);
+    setTargetSiteKeys(v.provisioned_site_ids || []);
+    setProvMsg(null);
+    setProvErr(null);
+    setProvResults(null);
+  };
+
+  const handleProvisionSites = async () => {
+    if (!selectedVessel) return;
+    setProvisioning(true);
+    setProvMsg(null);
+    setProvErr(null);
+    setProvResults(null);
+    try {
+      const res = await fetch(`${host._base()}/api/vessels/${selectedVessel.id}/provision-sites`, {
+        method: 'POST',
+        headers: {
+          ...host._headers(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ site_keys: targetSiteKeys }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || 'Provisioning failed');
+      setProvResults(data.results || {});
+      const newlyProvisioned = data.provisioned_sites || targetSiteKeys;
+      setProvMsg(`✓ Provisioning complete across target sites.`);
+
+      const updatedVessels = host.state.vessels.map(v =>
+        v.id === selectedVessel.id
+          ? { ...v, is_provisioned: true, provisioned_site_ids: newlyProvisioned }
+          : v
+      );
+      host.setState({ vessels: updatedVessels });
+      setSelectedVessel({ ...selectedVessel, is_provisioned: true, provisioned_site_ids: newlyProvisioned });
+    } catch (err: any) {
+      setProvErr(err?.message || 'Provisioning request failed');
+    } finally {
+      setProvisioning(false);
+    }
+  };
+
+  const vessels = host.state.vessels || [];
+  const filteredVessels = vessels.filter(v => {
+    const q = vesselSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (v.name || '').toLowerCase().includes(q) || (v.imo || '').includes(q);
+  });
+
+  const siteNameMap: Record<string, string> = {};
+  sites.forEach(s => { siteNameMap[s.site_key] = s.display_name; });
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Intro banner */}
+      <div style={{ background: '#f0f9ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#1e40af', marginBottom: 4 }}>
+          Multi-Site Vessel Provisioning & DMS Folder Structure
+        </div>
+        <div style={{ fontSize: 12, color: '#1e3a8a', lineHeight: 1.5 }}>
+          Control which connected SharePoint sites are available for vessel DMS folder structures. Adding sites to an existing vessel creates standard folders on the newly selected site only, preserving existing sites intact.
+        </div>
+        <div style={{ marginTop: 8, fontSize: 11, color: '#475569' }}>
+          <strong>Note:</strong> File uploads reside inside the targeted site document library and do not replicate files across sites.
+        </div>
+        <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-start' }}>
+          <button
+            onClick={() => host.setState({ settingsTab: 'Site Selection' })}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 6,
+              border: '1px solid #bfdbfe',
+              background: '#eff6ff',
+              color: '#1d4ed8',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            Configure Connected Sites
+          </button>
+        </div>
+      </div>
+
+      {siteMsg && <div style={{ background: '#dcfce7', border: '1px solid #86efac', color: '#15803d', padding: '10px 14px', borderRadius: 8, fontSize: 13 }}>{siteMsg}</div>}
+      {siteErr && <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#b91c1c', padding: '10px 14px', borderRadius: 8, fontSize: 13 }}>{siteErr}</div>}
+
+      {/* Section 1: Connected Sites */}
+      <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div>
+            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#0f172a' }}>1. Connected Sites & Availability</h4>
+            <span style={{ fontSize: 12, color: '#64748b' }}>Configure which sites can receive vessel folder structures.</span>
+          </div>
+          <button
+            onClick={handleSaveSiteSettings}
+            disabled={saving || loading}
+            style={{
+              padding: '8px 16px',
+              borderRadius: 6,
+              border: 'none',
+              background: saving ? '#cbd5e1' : '#0078d4',
+              color: '#fff',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: saving ? 'wait' : 'pointer',
+            }}
+          >
+            {saving ? 'Saving...' : 'Save Site Settings'}
+          </button>
+        </div>
+
+        {loading ? (
+          <div style={{ padding: 20, textAlign: 'center', color: '#64748b', fontSize: 13 }}>Loading sites...</div>
+        ) : sites.length === 0 ? (
+          <div style={{ padding: 20, textAlign: 'center', color: '#64748b', fontSize: 13 }}>No connected sites discovered.</div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', textAlign: 'left', color: '#475569' }}>
+                  <th style={{ padding: '10px 12px' }}>Site Display Name</th>
+                  <th style={{ padding: '10px 12px' }}>Internal Key</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center' }}>Available for Provisioning</th>
+                  <th style={{ padding: '10px 12px', textAlign: 'center' }}>Default for New Vessels</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sites.map(s => (
+                  <tr key={s.site_key} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <td style={{ padding: '10px 12px', fontWeight: 600, color: '#0f172a' }}>
+                      {s.display_name}
+                    </td>
+                    <td style={{ padding: '10px 12px', color: '#64748b' }}>
+                      <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: 4, fontSize: 11 }}>{s.site_key}</code>
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={s.is_available_for_provisioning}
+                        onChange={e => {
+                          const checked = e.target.checked;
+                          setSites(sites.map(item => item.site_key === s.site_key ? { ...item, is_available_for_provisioning: checked } : item));
+                        }}
+                        style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#0078d4' }}
+                      />
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        disabled={!s.is_available_for_provisioning}
+                        checked={s.is_default_provisioning}
+                        onChange={e => {
+                          const checked = e.target.checked;
+                          setSites(sites.map(item => item.site_key === s.site_key ? { ...item, is_default_provisioning: checked } : item));
+                        }}
+                        style={{ width: 16, height: 16, cursor: s.is_available_for_provisioning ? 'pointer' : 'default', accentColor: '#0078d4' }}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Section 2: Vessel Provisioning Status */}
+      <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div>
+            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#0f172a' }}>2. Vessel Site Allocation & Status</h4>
+            <span style={{ fontSize: 12, color: '#64748b' }}>View provisioned sites per vessel and trigger provisioning for newly added sites.</span>
+          </div>
+          <input
+            type="text"
+            value={vesselSearch}
+            onChange={e => setVesselSearch(e.target.value)}
+            placeholder="Search vessels by name or IMO..."
+            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 12, width: 220 }}
+          />
+        </div>
+
+        <div style={{ maxHeight: 380, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', textAlign: 'left', color: '#475569', position: 'sticky', top: 0, zIndex: 1 }}>
+                <th style={{ padding: '10px 12px' }}>Vessel</th>
+                <th style={{ padding: '10px 12px' }}>IMO</th>
+                <th style={{ padding: '10px 12px' }}>Provisioned Sites</th>
+                <th style={{ padding: '10px 12px', textAlign: 'right' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredVessels.length === 0 ? (
+                <tr>
+                  <td colSpan={4} style={{ padding: 20, textAlign: 'center', color: '#64748b' }}>No vessels match your search.</td>
+                </tr>
+              ) : (
+                filteredVessels.map(v => {
+                  const provSites = v.provisioned_site_ids || [];
+                  return (
+                    <tr key={v.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '10px 12px', fontWeight: 600, color: '#0f172a' }}>
+                        🚢 {v.name}
+                      </td>
+                      <td style={{ padding: '10px 12px', color: '#64748b' }}>
+                        {v.imo || '—'}
+                      </td>
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {provSites.length === 0 ? (
+                            <span style={{ fontSize: 11, background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: 10 }}>
+                              Default site only
+                            </span>
+                          ) : (
+                            provSites.map(sk => (
+                              <span
+                                key={sk}
+                                style={{
+                                  fontSize: 11,
+                                  fontWeight: 600,
+                                  background: '#dcfce7',
+                                  color: '#15803d',
+                                  padding: '2px 8px',
+                                  borderRadius: 10,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                }}
+                              >
+                                <span>✅</span> {siteNameMap[sk] || sk}
+                              </span>
+                            ))
+                          )}
+                        </div>
+                      </td>
+                      <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                        <button
+                          onClick={() => handleOpenVesselModal(v)}
+                          style={{
+                            padding: '5px 12px',
+                            borderRadius: 6,
+                            border: '1px solid #cbd5e1',
+                            background: '#fff',
+                            color: '#0f172a',
+                            fontSize: 11,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Manage Sites
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Per-Vessel Provisioning Modal */}
+      {selectedVessel && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}
+          onClick={e => { if (e.target === e.currentTarget && !provisioning) setSelectedVessel(null); }}
+        >
+          <div style={{ background: '#fff', borderRadius: 16, padding: 24, width: 480, maxWidth: '95vw', boxShadow: '0 20px 50px rgba(0,0,0,0.25)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0f172a' }}>
+                  Manage Sites: {selectedVessel.name}
+                </h3>
+                <span style={{ fontSize: 12, color: '#64748b' }}>IMO: {selectedVessel.imo || '—'}</span>
+              </div>
+              {!provisioning && (
+                <button
+                  onClick={() => setSelectedVessel(null)}
+                  style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}
+                >✕</button>
+              )}
+            </div>
+
+            {provMsg && <div style={{ background: '#dcfce7', border: '1px solid #86efac', color: '#15803d', padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 }}>{provMsg}</div>}
+            {provErr && <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#b91c1c', padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 }}>{provErr}</div>}
+
+            <div style={{ fontSize: 12, color: '#475569', marginBottom: 12, lineHeight: 1.4 }}>
+              Select additional sites to provision the DMS folder tree. Already provisioned sites will not be recreated.
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+              {sites.filter(s => s.is_available_for_provisioning).map(site => {
+                const isAlreadyProvisioned = (selectedVessel.provisioned_site_ids || []).includes(site.site_key);
+                const isChecked = targetSiteKeys.includes(site.site_key);
+
+                return (
+                  <label
+                    key={site.site_key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      background: isAlreadyProvisioned ? '#f8fafc' : isChecked ? '#eff6ff' : '#fff',
+                      border: `1px solid ${isChecked ? '#93c5fd' : '#e2e8f0'}`,
+                      cursor: isAlreadyProvisioned ? 'default' : 'pointer',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <input
+                        type="checkbox"
+                        disabled={isAlreadyProvisioned || provisioning}
+                        checked={isChecked}
+                        onChange={e => {
+                          const next = e.target.checked
+                            ? [...targetSiteKeys, site.site_key]
+                            : targetSiteKeys.filter(k => k !== site.site_key);
+                          setTargetSiteKeys(next);
+                        }}
+                        style={{ width: 16, height: 16, accentColor: '#0078d4' }}
+                      />
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{site.display_name}</div>
+                        <div style={{ fontSize: 11, color: '#64748b' }}>Key: {site.site_key}</div>
+                      </div>
+                    </div>
+
+                    {isAlreadyProvisioned ? (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: '#15803d', background: '#dcfce7', padding: '2px 8px', borderRadius: 10 }}>
+                        ✅ Provisioned
+                      </span>
+                    ) : isChecked ? (
+                      <span style={{ fontSize: 11, fontWeight: 600, color: '#1d4ed8', background: '#dbeafe', padding: '2px 8px', borderRadius: 10 }}>
+                        ➕ Will Provision
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 11, color: '#94a3b8' }}>Not provisioned</span>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+
+            {/* Results breakdown if present */}
+            {provResults && (
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 10, marginBottom: 16, fontSize: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6, color: '#0f172a' }}>Provisioning Results:</div>
+                {Object.entries(provResults).map(([sk, res]: [string, any]) => (
+                  <div key={sk} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
+                    <span>{siteNameMap[sk] || sk}:</span>
+                    <span style={{ color: res.status === 'success' ? '#15803d' : '#b91c1c', fontWeight: 600 }}>
+                      {res.status === 'success' ? '✓ Provisioned' : `✗ Failed: ${res.error || 'Error'}`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button
+                onClick={() => setSelectedVessel(null)}
+                disabled={provisioning}
+                style={{ padding: '8px 16px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', color: '#475569', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}
+              >
+                Close
+              </button>
+              <button
+                onClick={handleProvisionSites}
+                disabled={provisioning || targetSiteKeys.filter(k => !(selectedVessel.provisioned_site_ids || []).includes(k)).length === 0}
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: 6,
+                  border: 'none',
+                  background: provisioning || targetSiteKeys.filter(k => !(selectedVessel.provisioned_site_ids || []).includes(k)).length === 0 ? '#cbd5e1' : 'linear-gradient(135deg, #0d9488, #0f766e)',
+                  color: '#fff',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: provisioning ? 'wait' : 'pointer',
+                }}
+              >
+                {provisioning ? 'Provisioning Folders...' : 'Provision Missing Sites'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+

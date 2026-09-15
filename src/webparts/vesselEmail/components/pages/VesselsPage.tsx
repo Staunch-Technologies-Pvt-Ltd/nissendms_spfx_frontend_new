@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
+/* eslint-disable react/no-unescaped-entities */
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import {
@@ -671,6 +673,7 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
 // ── Unrecognised Folders Section ─────────────────────────────────────────────
 
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function renderUnrecognisedFolders(host: VesselEmail, items: FolderAnomalyItem[]): React.ReactElement {
   return (
     <div style={{ marginTop: 32, background: 'linear-gradient(135deg, #fffbeb 0%, #fff9e6 100%)', border: '2px solid #f59e0b', borderRadius: 16, padding: 24 }}>
