@@ -229,15 +229,51 @@ export function renderFolderView(
 
   const { folderPathStack, docMainFolder, vessels, folderViewSelectedFiles, textFilter, vesselFilter, docGroupFilter, catFilter } = host.state;
 
-  const resolveTargetUploadInfo = (): { currentVessel: string; subFolderPath: string; resolvedFolderId: string } => {
+  const resolveTargetUploadInfo = (): {
+    currentVessel: string;
+    subFolderPath: string;
+    resolvedFolderId: string;
+    targetSiteId?: string;
+    targetDriveId?: string;
+  } => {
+    const atSitesRoot = stackLevel >= 1 && (
+      folderPathStack[0]?.id === 'sites_root' ||
+      folderPathStack[0]?.name === 'SharePoint Sites' ||
+      folderPathStack[0]?.name === 'Sites Documents'
+    );
     const atKaizenRoot = stackLevel >= 1 && (folderPathStack[0]?.id === 'kaizen_root' || folderPathStack[0]?.name === 'Kaizen - Knowledge Bank');
     const atCommonShips = folderPathStack[1]?.id === 'common' || folderPathStack[1]?.name === 'Common for all ships' || folderPathStack[1]?.name === 'Common for all vessels';
-    const topFolderId = currentFolderNode && !/^(sf_|category_|common|vessels_root|specific_vessels|kaizen_root)/.test(currentFolderNode.id) ? currentFolderNode.id : '';
+    const topFolderId = currentFolderNode && !/^(sf_|category_|common|vessels_root|specific_vessels|kaizen_root|sites_root|site:|drive:)/.test(currentFolderNode.id) ? currentFolderNode.id : '';
     let currentVessel: string;
     let subFolderPath: string;
     let fallbackPath: string;
+    let targetSiteId: string | undefined = undefined;
+    let targetDriveId: string | undefined = undefined;
 
-    if (atKaizenRoot) {
+    if (atSitesRoot) {
+      const siteNode = folderPathStack[1];
+      const matchedSite = (host.state.documentSites || []).find(s =>
+        (siteNode?.id && s.site_id === siteNode.id.replace(/^site:/, '')) ||
+        (siteNode?.name && s.sp_site_name?.toLowerCase() === siteNode.name.toLowerCase()) ||
+        (siteNode?.name && s.site_key?.toLowerCase() === siteNode.name.toLowerCase())
+      );
+      targetSiteId = matchedSite?.site_id || (siteNode?.id || '').replace(/^site:/, '') || host.props.siteId;
+      const driveNode = folderPathStack[2];
+      targetDriveId = (driveNode?.id || '').replace(/^drive:/, '') || matchedSite?.drive_id || host.props.driveId;
+
+      const driveSegments = folderPathStack.slice(3).map(n => n.name);
+      subFolderPath = driveSegments.join(' > ');
+      fallbackPath = driveSegments.join('/');
+
+      const matchedV = (vessels || []).find(v =>
+        driveSegments.some(seg => seg.toLowerCase() === v.name.toLowerCase())
+      );
+      currentVessel = matchedV ? matchedV.name : (driveSegments[1] || driveSegments[0] || '');
+      const isDriveRoot = stackLevel <= 3;
+      const resolvedFolderId = isDriveRoot ? 'root' : (topFolderId || fallbackPath || 'root');
+
+      return { currentVessel, subFolderPath, resolvedFolderId, targetSiteId, targetDriveId };
+    } else if (atKaizenRoot) {
       currentVessel = 'Kaizen - Knowledge Bank';
       const kaizenFolders = folderPathStack.filter(n => n.id !== 'kaizen_root' && n.name !== 'Kaizen - Knowledge Bank').map(n => n.name);
       subFolderPath = ['Kaizen - Knowledge Bank', ...kaizenFolders].join(' > ');
@@ -268,7 +304,7 @@ export function renderFolderView(
       (docMainFolder ? r.group.toLowerCase().includes(docMainFolder.toLowerCase().split(' ')[0]) : true)
     );
     const resolvedFolderId = topFolderId || liveId || (matchingRow?.uploadFolderId) || fallbackPath;
-    return { currentVessel, subFolderPath, resolvedFolderId };
+    return { currentVessel, subFolderPath, resolvedFolderId, targetSiteId, targetDriveId };
   };
 
   const handleDrop = async (e: React.DragEvent): Promise<void> => {
@@ -277,8 +313,8 @@ export function renderFolderView(
     if (!e.dataTransfer) return;
     const extracted = await extractFilesFromDataTransfer(e.dataTransfer);
     if (!extracted.length) return;
-    const { currentVessel, subFolderPath, resolvedFolderId } = resolveTargetUploadInfo();
-    host._openBulkUpload(extracted, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode);
+    const { currentVessel, subFolderPath, resolvedFolderId, targetSiteId, targetDriveId } = resolveTargetUploadInfo();
+    host._openBulkUpload(extracted, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
   };
   const currentSharePointPath = resolveTargetUploadInfo().subFolderPath;
   const templateSubfolderSet = new Set((subfolderNames || []).map(name => (name || '').trim().toLowerCase()));
@@ -694,9 +730,9 @@ export function renderFolderView(
                 const filesList = Array.from(e.target.files || []);
                 if (filesList.length === 0) return;
                 e.target.value = '';
-                const { currentVessel, subFolderPath, resolvedFolderId } = resolveTargetUploadInfo();
+                const { currentVessel, subFolderPath, resolvedFolderId, targetSiteId, targetDriveId } = resolveTargetUploadInfo();
                 const bulkFiles = filesList.map(f => ({ file: f, relativePath: f.name }));
-                host._openBulkUpload(bulkFiles, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode);
+                host._openBulkUpload(bulkFiles, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
               }}
             />
             <span>⬆</span> Upload Files
@@ -716,12 +752,12 @@ export function renderFolderView(
                 const filesList = Array.from(e.target.files || []);
                 if (filesList.length === 0) return;
                 e.target.value = '';
-                const { currentVessel, subFolderPath, resolvedFolderId } = resolveTargetUploadInfo();
+                const { currentVessel, subFolderPath, resolvedFolderId, targetSiteId, targetDriveId } = resolveTargetUploadInfo();
                 const bulkFiles = filesList.map(f => ({
                   file: f,
                   relativePath: (f as any).webkitRelativePath || f.name,
                 }));
-                host._openBulkUpload(bulkFiles, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode);
+                host._openBulkUpload(bulkFiles, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
               }}
             />
             <span>📁</span> Upload Folder

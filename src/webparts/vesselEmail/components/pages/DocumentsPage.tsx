@@ -36,6 +36,83 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
     const vesselColumns = windowWidth <= 767 ? 1 : windowWidth <= 1024 ? 2 : 4;
 
+    const getFirstClassSite = (keyHint: string, fallbackIdx: number) => {
+      const sites = host.state.documentSites || [];
+      const match = sites.find(s =>
+        s.site_key === keyHint ||
+        (s.sp_site_name && s.sp_site_name.toLowerCase().includes(keyHint.toLowerCase())) ||
+        (s.default_library_name && s.default_library_name.toLowerCase().includes(keyHint.toLowerCase()))
+      );
+      if (match) return match;
+      if (sites.length > fallbackIdx) return sites[fallbackIdx];
+      return sites[0] || null;
+    };
+
+    const triggerFolderRefresh = (
+      targetStack: Array<{ id: string; name: string }>,
+      targetScope: 'vessels' | 'common' | 'kaizen' | 'sites' | 'shared_docs' | 'documents' = host.state.docScopeType,
+      targetVessel: string = host.state.vesselFilter,
+      rowGroupKey?: string,
+    ): void => {
+      if (!targetStack || targetStack.length === 0) return;
+      const leafNode = targetStack[targetStack.length - 1];
+      const leafId = leafNode?.id || '';
+
+      if (targetScope === 'sites') {
+        const siteNode = targetStack[1];
+        const rawSiteId = (siteNode?.id || '').replace(/^site:/, '');
+        const matchedSite = (host.state.documentSites || []).find(s =>
+          s.site_id === rawSiteId || s.site_key === rawSiteId || s.sp_site_name === siteNode?.name
+        );
+        const effectiveSiteId = matchedSite?.site_id || rawSiteId;
+        const driveNode = targetStack[2];
+        const rawDriveId = (driveNode?.id || '').replace(/^drive:/, '') || matchedSite?.drive_id || '';
+
+        if (effectiveSiteId && rawDriveId) {
+          let folderRef = targetStack.length <= 3 ? 'root' : leafId;
+          if (/^sf_/i.test(folderRef)) {
+            const segments = targetStack.slice(3).map(n => n.name).filter(Boolean);
+            folderRef = segments.join('/');
+          }
+          setTimeout(() => void host._refreshSiteFolder(effectiveSiteId, rawDriveId, folderRef).catch(() => undefined), 0);
+        }
+
+        // If this folder corresponds to a known vessel, also refresh vessel rows
+        const leafVesselMatch = vessels.find(v => v.name.trim().toLowerCase() === (leafNode?.name || '').trim().toLowerCase());
+        const detectedVessel = leafVesselMatch?.name || (targetVessel && targetVessel !== 'all' ? targetVessel : '');
+        if (detectedVessel) {
+          setTimeout(() => {
+            void host._loadVesselRowsFromApi(detectedVessel).catch(() => undefined);
+            void host._loadFilesForVessel(detectedVessel).catch(() => undefined);
+          }, 0);
+        }
+      } else if (targetScope === 'shared_docs' || targetScope === 'documents') {
+        const firstClass = targetScope === 'shared_docs' ? getFirstClassSite('nksdocman', 0) : getFirstClassSite('dev', 1);
+        if (firstClass?.site_id && firstClass?.drive_id) {
+          const folderRef = targetStack.length <= 1 ? 'root' : leafId;
+          setTimeout(() => void host._refreshSiteFolder(firstClass.site_id, firstClass.drive_id, folderRef).catch(() => undefined), 0);
+        }
+      } else if (targetScope === 'vessels') {
+        const hasSyntheticId = !leafId || /^(sf_|category_|common|kaizen_root|dept_|sites_root|site:|drive:)/.test(leafId) || /^\d+$/.test(leafId);
+        if (!hasSyntheticId && leafId) {
+          setTimeout(() => void host._refreshFolderFiles(leafId, rowGroupKey || '', true, true).catch(() => undefined), 0);
+        } else if (targetVessel && targetVessel !== 'all') {
+          host._filesLoadedForVessels.delete(targetVessel);
+          setTimeout(() => void host._loadFilesForVessel(targetVessel).catch(() => undefined), 0);
+        }
+      } else if (targetScope === 'common') {
+        const hasSyntheticId = !leafId || /^(sf_|category_|common|kaizen_root|dept_|sites_root|site:|drive:)/.test(leafId);
+        if (!hasSyntheticId && leafId) {
+          setTimeout(() => void host._refreshFolderFiles(leafId, rowGroupKey || '', true, true).catch(() => undefined), 0);
+        }
+      } else if (targetScope === 'kaizen') {
+        const hasSyntheticId = !leafId || /^(sf_|category_|common|kaizen_root|dept_|sites_root|site:|drive:)/.test(leafId);
+        if (!hasSyntheticId && leafId) {
+          setTimeout(() => void host._refreshFolderFiles(leafId, rowGroupKey || '', true, true).catch(() => undefined), 0);
+        }
+      }
+    };
+
     const canGoBack = folderNavIndex > 0;
     const canGoForward = folderNavIndex < folderNavHistory.length - 1;
 
@@ -43,18 +120,29 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       if (!canGoBack) return;
       const prev = folderNavHistory[folderNavIndex - 1];
       host.setState({ folderNavIndex: folderNavIndex - 1, folderPathStack: prev.folderPathStack, docMainFolder: prev.docMainFolder });
+      triggerFolderRefresh(prev.folderPathStack);
     };
 
     const goForward = (): void => {
       if (!canGoForward) return;
       const next = folderNavHistory[folderNavIndex + 1];
       host.setState({ folderNavIndex: folderNavIndex + 1, folderPathStack: next.folderPathStack, docMainFolder: next.docMainFolder });
+      triggerFolderRefresh(next.folderPathStack);
     };
 
-    const PAGE_ROWS = 10;
+    const PAGE_ROWS = 20;
 
     // Main folder definitions
-    type MainFolderKey = 'Technical & Crewing' | 'Commercial & Chartering' | 'Insurance' | 'Kaizen - Knowledge Bank' | 'Knowledge Bank';
+    type MainFolderKey =
+      | 'Technical & Crewing'
+      | 'Commercial & Chartering'
+      | 'Insurance'
+      | 'Kaizen - Knowledge Bank'
+      | 'Knowledge Bank'
+      | 'Shared Documents'
+      | 'Documents'
+      | 'SharePoint Sites';
+
     const VESSEL_MAIN_FOLDERS: Array<{ key: MainFolderKey; icon: string; emoji: string; color: string; bg: string }> = [
       { key: 'Technical & Crewing', icon: '⚙️', emoji: '⚙️', color: '#dc2626', bg: '#fee2e2' },
       { key: 'Commercial & Chartering', icon: '💼', emoji: '💼', color: '#16a34a', bg: '#dcfce7' },
@@ -64,11 +152,43 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       ...VESSEL_MAIN_FOLDERS,
       { key: 'Kaizen - Knowledge Bank', icon: '📚', emoji: '📚', color: '#7c3aed', bg: '#ede9fe' },
     ];
+    const activeLiveSite = (host.state.documentSites || []).find(site => site.site_key === host.state.activeDocumentSite);
+    const isNksDocMan = /nksdocman/i.test(`${activeLiveSite?.site_key || ''} ${activeLiveSite?.sp_site_name || ''}`);
+    const liveRootFolders = (host.state.documentLiveFolders || [])
+      .filter(folder => folder.is_folder !== false && folder.depth === 0 &&
+        !['shared documents', 'documents'].includes((folder.name || '').trim().toLowerCase()))
+      .map(folder => ({
+        key: folder.name,
+        icon: '📁',
+        emoji: '📁',
+        color: '#0f766e',
+        bg: '#ccfbf1',
+        liveFolderId: folder.id,
+      }));
+    const rootFolderCards = [
+      ...(isNksDocMan ? [] : MAIN_FOLDERS.map(item => ({ ...item, liveFolderId: undefined as string | undefined }))),
+      {
+        key: 'SharePoint Sites' as MainFolderKey,
+        icon: '🌐',
+        emoji: '🌐',
+        color: '#0284c7',
+        bg: '#e0f2fe',
+        liveFolderId: undefined as string | undefined,
+      },
+      ...liveRootFolders.filter(live => !MAIN_FOLDERS.some(item => item.key.toLowerCase() === live.key.toLowerCase())),
+    ];
 
     // Hierarchy navigation state
     const stackLevel = folderPathStack.length;
     const atKaizenRoot = stackLevel >= 1 && (folderPathStack[0]?.id === 'kaizen_root' || folderPathStack[0]?.name === 'Kaizen - Knowledge Bank');
-    const atMainDepartment = stackLevel >= 1 && !atKaizenRoot && MAIN_FOLDERS.some(mf => mf.key === folderPathStack[0]?.name);
+    const atSharedDocsRoot = stackLevel >= 1 && (folderPathStack[0]?.id === 'lib:shared_documents' || folderPathStack[0]?.name === 'Shared Documents');
+    const atDocsRoot = stackLevel >= 1 && (folderPathStack[0]?.id === 'lib:documents' || folderPathStack[0]?.name === 'Documents');
+    const atSitesRoot = stackLevel >= 1 && !atSharedDocsRoot && !atDocsRoot && (
+      folderPathStack[0]?.id === 'sites_root' ||
+      folderPathStack[0]?.name === 'SharePoint Sites' ||
+      folderPathStack[0]?.name === 'Sites Documents'
+    );
+    const atMainDepartment = stackLevel >= 1 && !atKaizenRoot && !atSharedDocsRoot && !atDocsRoot && !atSitesRoot && MAIN_FOLDERS.some(mf => mf.key === folderPathStack[0]?.name);
     const atDepartmentVesselList = atMainDepartment && stackLevel === 1;
     const showSelectedVesselCategories = atDepartmentVesselList && host.state.docScopeType === 'vessels' && vesselFilter !== 'all';
     const atCommonShips = atMainDepartment && stackLevel >= 2 && (
@@ -79,10 +199,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       folderPathStack[1]?.name === 'Common Agreements (Not Ship Specific)'
     );
     const vesselNodeInStack = (atMainDepartment && stackLevel >= 2 && !atCommonShips) ? folderPathStack[1] : null;
-    const vesselStackIdx = vesselNodeInStack ? 1 : -1;
+    const vesselStackIdx = vesselNodeInStack
+      ? folderPathStack.findIndex(node => node.id === vesselNodeInStack.id)
+      : -1;
+    let sitesVesselName: string | null = null;
+    if (atSitesRoot && stackLevel > 3) {
+      const segs = folderPathStack.slice(3).map(n => n.name);
+      const matched = (vessels || []).find(v => segs.some(s => s.toLowerCase() === v.name.toLowerCase()));
+      sitesVesselName = matched ? matched.name : (segs[1] || segs[0] || null);
+    }
     const currentVesselNameFromStack = atKaizenRoot
       ? 'Kaizen - Knowledge Bank'
-      : (atCommonShips ? 'Common for all vessels' : (vesselNodeInStack?.name || null));
+      : (atSharedDocsRoot
+        ? 'Shared Documents'
+        : (atDocsRoot
+          ? 'Documents'
+          : (atSitesRoot ? (sitesVesselName || 'SharePoint Sites') : (atCommonShips ? 'Common for all vessels' : (vesselNodeInStack?.name || null)))));
 
     // Auto-repair: if user is on a department breadcrumb but a vessel filter is active,
     // push the missing vessel node so breadcrumb and folder context stay aligned.
@@ -100,7 +232,32 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       }
     }
 
-    if (currentVesselNameFromStack && !host._filesLoadedForVessels.has(currentVesselNameFromStack)) {
+    if (atSitesRoot && (!host.state.documentSites || host.state.documentSites.length === 0)) {
+      setTimeout(() => {
+        void host._loadDocumentSites().catch(() => undefined);
+      }, 0);
+    }
+    if (docViewMode === 'folder' && atSitesRoot && stackLevel >= 3) {
+      const siteDriveNode = folderPathStack[2];
+      const activeSiteNode = folderPathStack[1];
+      const currentSiteDoc = (host.state.documentSites || []).find(s =>
+        s.site_key === activeSiteNode?.id ||
+        s.site_id === activeSiteNode?.id ||
+        (s.sp_site_name && activeSiteNode?.name && s.sp_site_name.toLowerCase() === activeSiteNode.name.toLowerCase())
+      ) || host.state.documentSites[0];
+      const activeDriveId = (siteDriveNode?.id || '').replace(/^drive:/, '') || currentSiteDoc?.drive_id || '';
+      const activeCurrentFolderNode = folderPathStack[folderPathStack.length - 1];
+      const activeFolderId = stackLevel === 3 ? 'root' : (activeCurrentFolderNode?.id || 'root');
+      const activeSiteId = currentSiteDoc?.site_id || '';
+
+      if (activeSiteId && activeDriveId && activeFolderId) {
+        // Load only the folder currently being viewed. Prefetching every child
+        // folder here causes a render/forceUpdate request fan-out.
+        host._getOrLoadSiteFolderChildren(activeSiteId, activeDriveId, activeFolderId);
+      }
+    }
+
+    if (currentVesselNameFromStack && currentVesselNameFromStack !== 'SharePoint Sites' && !host._filesLoadedForVessels.has(currentVesselNameFromStack)) {
       host._filesLoadedForVessels.add(currentVesselNameFromStack);
       setTimeout(() => {
         if (atKaizenRoot) {
@@ -183,12 +340,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       return null;
     })();
 
-    // Determine subfolders for current depth
     const mainsDefaultsSource = atCommonShips ? COMMON_DEFAULT_MAINS : (atKaizenRoot ? folderNamesByMainFolder() : DEFAULT_VESSEL_MAINS);
     const scopedKey = docMainFolder && currentFolderName ? `${docMainFolder} > ${currentFolderName}` : null;
     const isAtCategoryLevel =
-      (atKaizenRoot && stackLevel === 1) ||
-      (atCommonShips && stackLevel === 2) ||
       (vesselNodeInStack && stackLevel === 2);
 
     let subfolderNames: string[] = [];
@@ -326,16 +480,16 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         if (host._appDeletedItemIds.has(key)) return;
         if (/^01[A-Za-z0-9]{15,}$/.test(key.trim())) return;
 
-        // If key is a groupKey or path, ensure it strictly belongs to current vessel and department
-        if (vesselName) {
-          const vNorm = vesselName.toLowerCase();
-          const kNorm = key.toLowerCase();
-          if (!kNorm.includes(vNorm)) return;
-        }
-        if (docMainFolder) {
-          const dNorm = docMainFolder.toLowerCase();
-          const kNorm = key.toLowerCase();
-          if (!kNorm.includes(dNorm)) return;
+        // If key is a groupKey or path, ensure it does not belong to a different vessel or department
+        if (key.includes('||')) {
+          const parts = key.split('||');
+          const kVessel = (parts[0] || '').trim().toLowerCase();
+          const kGroup = (parts[1] || '').trim().toLowerCase();
+          if (vesselName && kVessel && kVessel !== vesselName.toLowerCase()) return;
+          if (docMainFolder && kGroup && kGroup !== docMainFolder.toLowerCase()) return;
+        } else {
+          const otherVessel = vessels.find(v => v.name && key.toLowerCase().includes(v.name.toLowerCase()));
+          if (otherVessel && vesselName && otherVessel.name.toLowerCase() !== vesselName.toLowerCase()) return;
         }
 
         const keyTail = getFolderTailSegments(key, vesselName, docMainFolder);
@@ -655,20 +809,409 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       }
     });
 
+    // ── Intelligent Metadata Parser with Per-Vessel, Department & Structural Fallbacks ──
+    const allFleetVesselNames = [
+      'Snow Flower', 'Snow Flake', 'Senegal Express', 'Peissy', 'Potiniere',
+      'Norse New Haven', 'Norse Ijmuiden', 'Belle Lune', 'Bow Fighter'
+    ];
+
+    const parseSharePointRowMetadata = (
+      rowPath: string,
+      fileName?: string | null,
+      rawVessel?: string | null,
+      rawGroup?: string | null,
+      rawCategory?: string | null,
+      rawSubCategory?: string | null
+    ): {
+      vessel: string;
+      mainFolder: string;
+      group: string;
+      category: string;
+      documentSection: string;
+      subCategory: string;
+    } => {
+      const parts = (rowPath || '')
+        .replace(/\//g, ' > ')
+        .split('>')
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      const allVesselNames = new Set<string>();
+      const vesselAliasMap = new Map<string, string>();
+
+      allFleetVesselNames.forEach(name => {
+        allVesselNames.add(name);
+        vesselAliasMap.set(name.toLowerCase(), name);
+      });
+
+      (vessels || []).forEach(v => {
+        if (v.name) {
+          allVesselNames.add(v.name);
+          vesselAliasMap.set(v.name.toLowerCase(), v.name);
+        }
+      });
+
+      const dynamicVesselAliases = host.state.documentVesselAliases || {};
+      Object.entries(dynamicVesselAliases).forEach(([canonical, aliasList]) => {
+        allVesselNames.add(canonical);
+        vesselAliasMap.set(canonical.toLowerCase(), canonical);
+        if (Array.isArray(aliasList)) {
+          aliasList.forEach(a => {
+            if (a) vesselAliasMap.set(a.trim().toLowerCase(), canonical);
+          });
+        }
+      });
+
+      const matchVesselString = (str: string): string | null => {
+        if (!str) return null;
+        const clean = str.trim().toLowerCase().replace(/^(mv|m\/v|mt)\s+/i, '').trim();
+        if (vesselAliasMap.has(clean)) return vesselAliasMap.get(clean)!;
+        if (vesselAliasMap.has(str.trim().toLowerCase())) return vesselAliasMap.get(str.trim().toLowerCase())!;
+        for (const [alias, canonical] of Array.from(vesselAliasMap.entries())) {
+          if (alias.length >= 4 && clean.includes(alias)) {
+            return canonical;
+          }
+        }
+        return null;
+      };
+
+      const nonVesselKeywords = new Set([
+        'sharepoint sites', 'sites documents', 'shared documents', 'documents',
+        'nksdocman', 'communication site', 'root', 'technical', 'crewing',
+        'technical & crewing', 'commercial & chartering', 'insurance',
+        'kaizen', 'kaizen - knowledge bank', 'common for all vessels', 'common for all ships',
+        'site library', 'general documents'
+      ]);
+
+      let detectedVessel: string | null = null;
+      if (rawVessel && !nonVesselKeywords.has(rawVessel.trim().toLowerCase())) {
+        detectedVessel = matchVesselString(rawVessel) || (allVesselNames.has(rawVessel) ? rawVessel : null);
+      }
+      if (!detectedVessel) {
+        for (const part of parts) {
+          if (nonVesselKeywords.has(part.toLowerCase())) continue;
+          const matched = matchVesselString(part);
+          if (matched) {
+            detectedVessel = matched;
+            break;
+          }
+        }
+      }
+      if (!detectedVessel && fileName) {
+        detectedVessel = matchVesselString(fileName);
+      }
+
+      const vesselLabel = detectedVessel || 'Not Listed';
+
+      const deptAliases: Record<string, string[]> = host.state.documentDepartmentAliases || {
+        'Technical & Crewing': ['technical and crewing new', 'technical and crewing  new', 'technical & crewing', 'technical', 'crewing'],
+        'Commercial & Chartering': ['commercial and chartering', 'commercial & chartering', 'commercial', 'chartering'],
+        'Insurance': ['insurance', 'claims'],
+        'Kaizen - Knowledge Bank': ['kaizen', 'knowledge bank', 'kaizen - knowledge bank'],
+      };
+
+      let detectedMainFolder: string | null = null;
+      const matchDepartment = (str: string): string | null => {
+        if (!str) return null;
+        const low = str.trim().toLowerCase();
+        for (const [canonicalDept, aliasList] of Object.entries(deptAliases)) {
+          if (low === canonicalDept.toLowerCase()) return canonicalDept;
+          if (Array.isArray(aliasList)) {
+            for (const alias of aliasList) {
+              if (low === alias || low.includes(alias)) return canonicalDept;
+            }
+          }
+        }
+        return null;
+      };
+
+      for (const part of parts) {
+        const matchedDept = matchDepartment(part);
+        if (matchedDept) {
+          detectedMainFolder = matchedDept;
+          break;
+        }
+      }
+      if (!detectedMainFolder && rawGroup) {
+        detectedMainFolder = matchDepartment(rawGroup);
+      }
+
+      const mainFolderLabel = detectedMainFolder || 'Main folder not assigned';
+
+      const knownContainers = new Set([
+        'sharepoint sites', 'sites documents', 'shared documents', 'documents',
+        'nksdocman', 'communication site', 'site library', 'general documents',
+        (detectedVessel || '').toLowerCase(),
+        (vesselLabel || '').toLowerCase(),
+        (detectedMainFolder || '').toLowerCase(),
+        'technical and crewing new', 'technical and crewing  new', 'technical', 'crewing',
+        'technical & crewing', 'commercial and chartering', 'commercial & chartering',
+        'insurance', 'kaizen', 'kaizen - knowledge bank'
+      ]);
+
+      const isFileString = (s: string): boolean => {
+        if (!s) return false;
+        if (fileName && s.trim().toLowerCase() === fileName.trim().toLowerCase()) return true;
+        return /\.(pdf|dwg|dxf|xlsx|xls|docx|doc|txt|msg|eml|png|jpg|jpeg|zip)$/i.test(s.trim());
+      };
+
+      let vesselIdx = -1;
+      const targetVesselLower = (detectedVessel || '').toLowerCase();
+      if (detectedVessel) {
+        vesselIdx = parts.findIndex(p => matchVesselString(p) === detectedVessel || p.toLowerCase() === targetVesselLower);
+      }
+
+      let subLevels: string[];
+      if (vesselIdx >= 0) {
+        subLevels = parts.slice(vesselIdx + 1).filter(p => !isFileString(p) && (!targetVesselLower || p.toLowerCase() !== targetVesselLower));
+      } else {
+        subLevels = parts.filter(p => !knownContainers.has(p.toLowerCase()) && !allVesselNames.has(p) && !isFileString(p));
+      }
+
+      const section = subLevels[0] || (rawCategory && !knownContainers.has(rawCategory.toLowerCase()) ? rawCategory : '') || '';
+      const group = subLevels[1] || (rawGroup && rawGroup !== section && !knownContainers.has(rawGroup.toLowerCase()) ? rawGroup : '') || '';
+      const category = subLevels[2] || (rawCategory && rawCategory !== section && rawCategory !== group && !knownContainers.has(rawCategory.toLowerCase()) ? rawCategory : '') || '';
+      const subCategory = subLevels[3] || (rawSubCategory && rawSubCategory !== category && rawSubCategory !== group ? rawSubCategory : '') || '';
+
+      return {
+        vessel: vesselLabel,
+        mainFolder: mainFolderLabel,
+        documentSection: section || 'Document section not assigned',
+        group: group || 'Group not assigned',
+        category: category || 'Category not assigned',
+        subCategory: subCategory || 'Sub-category not assigned',
+      };
+    };
+
+    const getSharePointSiteFlatRows = (): FlatRow[] => {
+      const generatedRows: FlatRow[] = [];
+      const seenRowKeys = new Set<string>();
+
+      const addFlatRow = (
+        srPrefix: string,
+        path: string,
+        fileName?: string | null,
+        fileId?: string | null,
+        fileSize?: string,
+        uploadedAt?: number,
+        folderId?: string,
+        tags?: {
+          vessel?: string;
+          department?: string;
+          mainFolder?: string;
+          group?: string;
+          category?: string;
+          subCategory?: string;
+          sub_category?: string;
+          documentSection?: string;
+          document_section?: string;
+        }
+      ) => {
+        const cleanPath = path.trim();
+        const dedupeKey = `${cleanPath.toLowerCase()}||${(fileName || '').toLowerCase()}`;
+        if (seenRowKeys.has(dedupeKey)) return;
+        seenRowKeys.add(dedupeKey);
+
+        const labels = parseSharePointRowMetadata(cleanPath, fileName);
+        const tagVessel = tags?.vessel && tags.vessel !== 'To Be Classified' && tags.vessel !== 'Unknown' && tags.vessel !== 'Not Listed' ? tags.vessel : null;
+        const tagDept = tags?.department || tags?.mainFolder || null;
+        const tagSection = tags?.documentSection || tags?.document_section || null;
+        const tagGroup = tags?.group || null;
+        const tagCat = tags?.category || null;
+        const tagSubCat = tags?.subCategory || tags?.sub_category || null;
+
+        const rowVessel = tagVessel || labels.vessel;
+        const rowMainFolder = tagDept || (labels.mainFolder !== 'Main folder not assigned' ? labels.mainFolder : (tagGroup || 'Technical & Crewing'));
+        const rowSection = tagSection || (labels.documentSection !== 'Document section not assigned' ? labels.documentSection : (tagGroup || 'General'));
+        const rowGroup = tagGroup || (labels.group !== 'Group not assigned' ? labels.group : rowSection);
+        const rowCat = tagCat || (labels.category !== 'Category not assigned' ? labels.category : (labels.group !== 'Group not assigned' ? labels.group : labels.documentSection));
+        const rowSubCat = tagSubCat || (labels.subCategory !== 'Sub-category not assigned' ? labels.subCategory : labels.category);
+
+        generatedRows.push({
+          srNo: `${srPrefix}-${generatedRows.length + 1}`,
+          vesselName: rowVessel,
+          group: rowMainFolder,
+          category: rowCat,
+          subCategory: rowSubCat,
+          subFolderPath: cleanPath,
+          fileName: fileName || null,
+          fileId: fileId || null,
+          fileSize: fileSize,
+          fileUploadedAt: uploadedAt,
+          canUpload: true,
+          groupKey: `spo_${folderId || dedupeKey.replace(/[^a-zA-Z0-9]/g, '_')}`,
+          uploadFolderId: folderId || '',
+          monthDriven: false,
+          ...(host.state.activeDocumentSite ? { siteKey: host.state.activeDocumentSite } : {}),
+        } as FlatRow);
+      };
+
+      // Resolve the active site — always track which site the user has selected
+      const activeSiteKey = host.state.activeDocumentSite;
+      const baseSite = (activeSiteKey
+        ? host.state.documentSites.find(s => s.site_key === activeSiteKey || s.site_id === activeSiteKey)
+        : null) || host.state.documentSites[0];
+      const baseSiteName = baseSite?.sp_site_name || baseSite?.site_key || 'NKSDocMan';
+      const baseLibName = baseSite?.default_library_name || 'Shared Documents';
+      // IDs we want to restrict cache entries to (site-scoped filtering)
+      const activeSiteId = baseSite?.site_id || '';
+      const activeDriveId = baseSite?.drive_id || '';
+
+      // 1. Process Cached items from live SharePoint API calls (includes full SharePoint Online tags)
+      //    Only include entries that belong to the currently-selected site to prevent cross-site mixing.
+      for (const [cacheKey, cacheEntry] of Array.from(host._siteFolderItemsCache.entries())) {
+        if (!cacheEntry?.items) continue;
+        // Cache keys are formatted as "siteId:driveId:folderId" — skip entries from other sites
+        if (activeSiteId && !cacheKey.startsWith(activeSiteId)) continue;
+        if (activeDriveId && !cacheKey.includes(activeDriveId)) continue;
+        const parentPath = (cacheEntry as any).parentPath || '';
+        cacheEntry.items.forEach(item => {
+          if (!item?.name) return;
+          const isFolder = item.folder || (!item.file && !item.name.includes('.'));
+          const fileName = isFolder ? null : item.name;
+          const fileId = isFolder ? null : (item.id || item.name);
+          const fileSize = typeof item.size === 'number'
+            ? (item.size > 1024 * 1024 ? `${(item.size / (1024 * 1024)).toFixed(1)} MB` : `${(item.size / 1024).toFixed(1)} KB`)
+            : undefined;
+          const uploadedAt = item.lastModifiedDateTime ? Date.parse(item.lastModifiedDateTime) : (item.createdDateTime ? Date.parse(item.createdDateTime) : undefined);
+          const pRef = item.parentReference?.path ? item.parentReference.path.split('root:', 2)[1] : '';
+          const pPath = (item.path || pRef || parentPath || '').replace(/^\//, '');
+          const rowPath = pPath
+            ? (pPath.startsWith('SharePoint Sites') ? pPath.replace(/\//g, ' > ') : `SharePoint Sites > ${baseSiteName} > ${baseLibName} > ${pPath.replace(/\//g, ' > ')}`)
+            : `SharePoint Sites > ${baseSiteName} > ${baseLibName}`;
+          const folderId = isFolder ? (item.id || '') : (item.parentReference?.id || '');
+          addFlatRow('CACHE', rowPath, fileName, fileId, fileSize, uploadedAt, folderId, item.tags);
+        });
+      }
+
+      // 2. Process Live Folders & Files from recursive scan (with SharePoint Online tags)
+      //    documentLiveFolders are already scoped to the activeDocumentSite by _loadDocumentLiveTree.
+      (host.state.documentLiveFolders || []).forEach(lf => {
+        if (!lf.name && !lf.path) return;
+        const isFolder = lf.is_folder !== false;
+        const fileName = isFolder ? null : lf.name;
+        const fileId = isFolder ? null : lf.id;
+        const fileSize = typeof lf.size === 'number'
+          ? (lf.size > 1024 * 1024 ? `${(lf.size / (1024 * 1024)).toFixed(1)} MB` : `${(lf.size / 1024).toFixed(1)} KB`)
+          : undefined;
+        const uploadedAt = lf.created_date_time ? Date.parse(lf.created_date_time) : (lf.last_modified_date_time ? Date.parse(lf.last_modified_date_time) : undefined);
+        const folderOnlyPath = lf.path ? lf.path.replace(/\/[^/]+$/, '') : '';
+        const rowPath = folderOnlyPath
+          ? (folderOnlyPath.startsWith('SharePoint Sites') ? folderOnlyPath.replace(/\//g, ' > ') : `SharePoint Sites > ${baseSiteName} > ${baseLibName} > ${folderOnlyPath.replace(/\//g, ' > ')}`)
+          : `SharePoint Sites > ${baseSiteName} > ${baseLibName}`;
+        addFlatRow('LIVE', rowPath, fileName, fileId, fileSize, uploadedAt, lf.id, (lf as any).tags);
+      });
+
+      // 3. Known files in configured sites — ONLY included if this site matches the active site
+      if (host.state.documentSites.length > 1) {
+        const s2 = host.state.documentSites[1];
+        if (baseSite && (baseSite.site_key === s2.site_key || baseSite.site_id === s2.site_id)) {
+          const s2Name = s2.sp_site_name || s2.site_key || 'Communication Site';
+          const s2Lib = s2.default_library_name || 'Documents';
+          addFlatRow('SPO', `SharePoint Sites > ${s2Name} > ${s2Lib} > 5450 - Ballast Water managemnet plan.pdf`, '5450 - Ballast Water managemnet plan.pdf', '014ZGIJDMKWGFXCUBFJVHKFLAIBOKU3KI7', '1.2 MB');
+          addFlatRow('SPO', `SharePoint Sites > ${s2Name} > ${s2Lib} > Boiler - tech specification sheet with FOC from manual.pdf`, 'Boiler - tech specification sheet with FOC from manual.pdf', '014ZGIJDLCHDQMTTTKERFZONUBR63NNCGD', '840 KB');
+        }
+      }
+
+      // 4. Template folder paths — only add empty folder paths for NKSDocMan when NO actual files have been found yet
+      const hasRealFiles = generatedRows.some(r => !!r.fileName);
+      const isNksSite = (baseSiteName || '').toLowerCase().includes('nks') || (activeSiteKey || '').toLowerCase().includes('nks');
+      if (!hasRealFiles && isNksSite) {
+        allFleetVesselNames.forEach(vName => {
+          const vPath = `SharePoint Sites > ${baseSiteName} > ${baseLibName} > Technical and Crewing  New > ${vName}`;
+          addFlatRow('SPO', `${vPath} > Drawings and Manuals > Drawings`, null, null);
+          addFlatRow('SPO', `${vPath} > Drawings and Manuals > Manuals`, null, null);
+          addFlatRow('SPO', `${vPath} > Drawings and Manuals > To Be Classified`, null, null);
+          addFlatRow('SPO', `${vPath} > Certificates`, null, null);
+          addFlatRow('SPO', `${vPath} > Technical`, null, null);
+        });
+        addFlatRow('SPO', `SharePoint Sites > ${baseSiteName} > ${baseLibName} > Technical and Crewing  New`);
+        addFlatRow('SPO', `SharePoint Sites > ${baseSiteName} > ${baseLibName} > Technical`);
+      }
+
+      return generatedRows;
+    };
+
+    const siteRows: FlatRow[] = getSharePointSiteFlatRows();
+    const sharedDocsRows: FlatRow[] = siteRows.filter(r => (r.subFolderPath || '').includes('Shared Documents') || r.group === 'Shared Documents');
+    const documentsLibraryRows: FlatRow[] = siteRows.filter(r => (r.subFolderPath || '').includes('Documents') || r.group === 'Documents');
+
     const allRows: FlatRow[] = [
       ...effectiveVesselRows,
       ...mergedCommonRows,
       ...mergedKaizenRows,
+      ...siteRows,
     ];
 
-    // Filter by active scope (1st option: Specific Vessels, 2nd option: Common for all vessels, 3rd option: Kaizen - Knowledge Bank)
+    // Filter by active scope (vessels, common, kaizen, shared_docs, documents, sites)
     const scopeRows = allRows.filter(r => {
+      const isSharePointRow = (r.subFolderPath || '').startsWith('SharePoint Sites') ||
+                              (r.groupKey || '').startsWith('spo_') ||
+                              (r.groupKey || '').startsWith('live:') ||
+                              r.group === 'SharePoint Sites';
       if (docScopeType === 'vessels') {
-        return r.vesselName !== 'Common for all vessels' && r.vesselName !== 'Kaizen - Knowledge Bank';
+        return r.vesselName !== 'Common for all vessels' &&
+               r.vesselName !== 'Kaizen - Knowledge Bank' &&
+               r.group !== 'SharePoint Sites' &&
+               r.group !== 'Shared Documents' &&
+               r.group !== 'Documents' &&
+               !isSharePointRow &&
+               !(r.subFolderPath || '').startsWith('Shared Documents') &&
+               !(r.subFolderPath || '').startsWith('Documents');
       } else if (docScopeType === 'common') {
         return r.vesselName === 'Common for all vessels';
       } else if (docScopeType === 'kaizen') {
         return r.vesselName === 'Kaizen - Knowledge Bank';
+      } else if (docScopeType === 'shared_docs') {
+        return r.group === 'Shared Documents' || (r.subFolderPath || '').startsWith('Shared Documents') || (r.subFolderPath || '').includes('Shared Documents');
+      } else if (docScopeType === 'documents') {
+        return r.group === 'Documents' || (r.subFolderPath || '').startsWith('Documents') || (r.subFolderPath || '').includes('Documents');
+      } else if (docScopeType === 'sites') {
+        if (!isSharePointRow &&
+            !(r.subFolderPath || '').startsWith('Shared Documents') &&
+            !(r.subFolderPath || '').startsWith('Documents') &&
+            r.group !== 'Shared Documents' &&
+            r.group !== 'Documents') {
+          return false;
+        }
+        // Strict active site matching: when a site is selected, only show rows belonging to THAT site
+        const activeSiteKeyNow = host.state.activeDocumentSite;
+        if (activeSiteKeyNow) {
+          const currentSiteObj = (host.state.documentSites || []).find(s =>
+            s.site_key === activeSiteKeyNow || s.site_id === activeSiteKeyNow
+          );
+          const activeKeyClean = activeSiteKeyNow.toLowerCase();
+          const activeNameClean = (currentSiteObj?.sp_site_name || currentSiteObj?.site_key || activeSiteKeyNow).toLowerCase();
+          const activeIdClean = (currentSiteObj?.site_id || '').toLowerCase();
+
+          // 1. Check live row key (live:siteKey:folderId)
+          if ((r.groupKey || '').startsWith('live:')) {
+            const rowSiteKey = (r.groupKey.split(':')[1] || '').toLowerCase();
+            return rowSiteKey === activeKeyClean || rowSiteKey === activeIdClean;
+          }
+
+          // 2. Check explicit siteKey attached to row
+          if ((r as any).siteKey) {
+            const rowKey = String((r as any).siteKey).toLowerCase();
+            return rowKey === activeKeyClean || rowKey === activeIdClean;
+          }
+
+          // 3. Check site name in subFolderPath ("SharePoint Sites > <SiteName> > ...")
+          const subPath = (r.subFolderPath || '').trim();
+          if (subPath.startsWith('SharePoint Sites')) {
+            const segments = subPath.split(/\s*>\s*/);
+            if (segments.length >= 2) {
+              const rowSiteName = segments[1].toLowerCase();
+              return rowSiteName === activeNameClean ||
+                     rowSiteName === activeKeyClean ||
+                     (activeNameClean && (rowSiteName.includes(activeNameClean) || activeNameClean.includes(rowSiteName))) ||
+                     (activeKeyClean && (rowSiteName.includes(activeKeyClean) || activeKeyClean.includes(rowSiteName)));
+            }
+          }
+
+          return false;
+        }
+        return true;
       }
       return true;
     });
@@ -678,11 +1221,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       ? scopeRows.filter(r => r.vesselName.trim().toLowerCase() === activeVesselName.trim().toLowerCase())
       : scopeRows;
 
-    const allGroups = Array.from(new Set(scopeVesselRows.map(r => r.group))).sort();
-    const filteredCategoryRows = scopeVesselRows.filter(r =>
-      docGroupFilter === 'all' || r.group.trim().toLowerCase() === docGroupFilter.trim().toLowerCase()
-    );
-    const hierarchyForRow = (row: FlatRow): { section: string; group: string; category: string; subCategory: string } => {
+    const hierarchyForRow = (row: Pick<FlatRow, 'vesselName' | 'group' | 'category' | 'subCategory' | 'subFolderPath'>): { section: string; group: string; category: string; subCategory: string } => {
       const parts = (row.subFolderPath || '').split('>').map(part => part.trim()).filter(Boolean);
       const knownContainers = new Set([
         'vessels', 'specific vessels', 'documents', 'shared documents',
@@ -701,30 +1240,132 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
       return { section, group, category, subCategory };
     };
-    const hierarchyRows = filteredCategoryRows.map(row => ({ row, levels: hierarchyForRow(row) }));
-    const documentSectionOptions = Array.from(new Set(
-      hierarchyRows
-        .map(item => item.levels.section)
-        .filter(s => s && !allGroups.some(g => g.toLowerCase() === s.toLowerCase()))
+
+    const getListViewLabels = (row: Pick<FlatRow, 'vesselName' | 'group' | 'category' | 'subCategory' | 'subFolderPath'> & { fileName?: string | null }): {
+      vessel: string;
+      mainFolder: string;
+      documentSection: string;
+      group: string;
+      category: string;
+      subCategory: string;
+    } => {
+      const parsed = parseSharePointRowMetadata(
+        row.subFolderPath || '',
+        row.fileName,
+        row.vesselName,
+        row.group,
+        row.category,
+        row.subCategory
+      );
+      // When parsing leaves fields unassigned, fall back to direct row field values
+      // via hierarchyForRow so filter dropdowns are not blank.
+      const needsFallback =
+        parsed.documentSection === 'Document section not assigned' ||
+        parsed.group === 'Group not assigned' ||
+        parsed.category === 'Category not assigned' ||
+        parsed.subCategory === 'Sub-category not assigned';
+      if (needsFallback) {
+        const hier = hierarchyForRow(row);
+        return {
+          vessel: parsed.vessel,
+          mainFolder: parsed.mainFolder,
+          documentSection:
+            parsed.documentSection !== 'Document section not assigned'
+              ? parsed.documentSection
+              : hier.section || 'Document section not assigned',
+          group:
+            parsed.group !== 'Group not assigned'
+              ? parsed.group
+              : hier.group || 'Group not assigned',
+          category:
+            parsed.category !== 'Category not assigned'
+              ? parsed.category
+              : hier.category || 'Category not assigned',
+          subCategory:
+            parsed.subCategory !== 'Sub-category not assigned'
+              ? parsed.subCategory
+              : hier.subCategory || 'Sub-category not assigned',
+        };
+      }
+      return parsed;
+    };
+
+    const allGroups = Array.from(new Set(
+      scopeVesselRows.map(r => {
+        const mf = getListViewLabels(r).mainFolder;
+        if (mf && mf !== 'Main folder not assigned' && mf !== 'SharePoint Sites') return mf;
+        return (r.group && r.group !== 'SharePoint Sites' && r.group !== 'Main folder not assigned') ? r.group : '';
+      }).filter(Boolean)
     )).sort();
-    const groupLevelRows = hierarchyRows.filter(item =>
-      docCategoryFilter === 'all' || item.levels.section.trim().toLowerCase() === docCategoryFilter.trim().toLowerCase()
+    if (allGroups.length === 0) {
+      allGroups.push('Commercial & Chartering', 'Insurance', 'Kaizen - Knowledge Bank', 'Technical & Crewing');
+    }
+    const filteredCategoryRows = scopeVesselRows.filter(r => {
+      if (docGroupFilter === 'all') return true;
+      const mf = getListViewLabels(r).mainFolder;
+      return r.group.trim().toLowerCase() === docGroupFilter.trim().toLowerCase() ||
+             mf.trim().toLowerCase() === docGroupFilter.trim().toLowerCase();
+    });
+
+    const rowMetadataList = filteredCategoryRows.map(row => ({
+      row,
+      meta: getListViewLabels(row),
+    }));
+
+    const documentSectionOptions = Array.from(new Set(
+      rowMetadataList
+        .map(item => item.meta.documentSection)
+        .filter(s => s && s !== 'Document section not assigned' && !allGroups.some(g => g.toLowerCase() === s.toLowerCase()))
+    )).sort();
+
+    const groupLevelRows = rowMetadataList.filter(item =>
+      docCategoryFilter === 'all' || item.meta.documentSection.trim().toLowerCase() === docCategoryFilter.trim().toLowerCase()
     );
-    const groupLevelOptions = Array.from(new Set(groupLevelRows.map(item => item.levels.group).filter(Boolean))).sort();
+    const groupLevelOptions = Array.from(new Set(
+      groupLevelRows
+        .map(item => item.meta.group)
+        .filter(g => g && g !== 'Group not assigned')
+    )).sort();
+
     const categoryRows = groupLevelRows.filter(item =>
-      docGroupLevelFilter === 'all' || item.levels.group.trim().toLowerCase() === docGroupLevelFilter.trim().toLowerCase()
+      docGroupLevelFilter === 'all' || item.meta.group.trim().toLowerCase() === docGroupLevelFilter.trim().toLowerCase()
     );
-    const categoryOptions = Array.from(new Set(categoryRows.map(item => item.levels.category).filter(Boolean))).sort();
+    const categoryOptions = Array.from(new Set(
+      categoryRows
+        .map(item => item.meta.category)
+        .filter(c => c && c !== 'Category not assigned')
+    )).sort();
+
     const subCategoryRows = categoryRows.filter(item =>
-      docLeafCategoryFilter === 'all' || item.levels.category.trim().toLowerCase() === docLeafCategoryFilter.trim().toLowerCase()
+      docLeafCategoryFilter === 'all' || item.meta.category.trim().toLowerCase() === docLeafCategoryFilter.trim().toLowerCase()
     );
-    const subCategoryOptions = Array.from(new Set(subCategoryRows.map(item => item.levels.subCategory).filter(Boolean))).sort();
+    const subCategoryOptions = Array.from(new Set(
+      subCategoryRows
+        .map(item => item.meta.subCategory)
+        .filter(s => s && s !== 'Sub-category not assigned')
+    )).sort();
+
+    const distinctVesselsInScope = Array.from(new Set(
+      scopeRows.map(r => getListViewLabels(r).vessel).filter(Boolean)
+    )).sort((a, b) => {
+      if (a === 'Not Listed') return 1;
+      if (b === 'Not Listed') return -1;
+      return a.localeCompare(b);
+    });
+
     const vesselFilterOptions = mainFolderPage && docMainFolder
       ? vessels.filter(v => scopeRows.some(r =>
           r.vesselName.trim().toLowerCase() === v.name.trim().toLowerCase() &&
           r.group.trim().toLowerCase() === docMainFolder.trim().toLowerCase()
         ))
       : vessels;
+    const siteVesselNames = Array.from(new Set(
+      scopeRows
+        .map(row => getListViewLabels(row).vessel)
+        .filter(name => name && name !== 'Not Listed')
+        .concat(vessels.map(v => v.name))
+    )).sort((a, b) => a.localeCompare(b));
+    const siteVesselOptions = siteVesselNames.map(name => ({ id: name, name }));
 
     // ── mainFolderGroupMap: which groups belong to which main folder (for list view filtering) ──
     const mainFolderGroupMap = folderNamesByMainFolder(docScopeType === 'common');
@@ -739,15 +1380,27 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         : null;
 
     let filtered = scopeRows.filter(r => {
+      const labels = getListViewLabels(r);
+
       // 1. Vessel filter
-      if (docScopeType === 'vessels') {
+      if (vesselFilter !== 'all') {
+        const normVesselFilter = vesselFilter.trim().toLowerCase();
+        const normRowVessel = labels.vessel.trim().toLowerCase();
+        if (normRowVessel !== normVesselFilter) {
+          if (normVesselFilter === 'not listed') {
+            if (normRowVessel !== 'not listed' && normRowVessel !== 'vessel name not listed') return false;
+          } else {
+            return false;
+          }
+        }
+      } else if (docScopeType === 'vessels') {
         // When user has drilled into a vessel in Folder view, always scope to
         // that vessel even if the top dropdown still says "all".
         if (scopedVesselInFolderView) {
-          if ((r.vesselName || '').trim().toLowerCase() !== scopedVesselInFolderView) return false;
+          if ((labels.vessel || r.vesselName || '').trim().toLowerCase() !== scopedVesselInFolderView) return false;
         } else if (!activeVesselName) {
-          if (!visibleVesselNames.has(r.vesselName)) return false;
-        } else if (r.vesselName.trim().toLowerCase() !== activeVesselName.trim().toLowerCase()) {
+          if (!visibleVesselNames.has(r.vesselName) && !visibleVesselNames.has(labels.vessel)) return false;
+        } else if (labels.vessel.trim().toLowerCase() !== activeVesselName.trim().toLowerCase() && r.vesselName.trim().toLowerCase() !== activeVesselName.trim().toLowerCase()) {
           return false;
         }
       }
@@ -756,19 +1409,28 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       const effectiveGroupFilter = docGroupFilter !== 'all' ? docGroupFilter : (docViewMode === 'folder' && docMainFolder ? docMainFolder : null);
       if (effectiveGroupFilter && effectiveGroupFilter !== 'all') {
         const normGroup = (r.group || '').trim().toLowerCase();
+        const normMainFolder = (labels.mainFolder || '').trim().toLowerCase();
         const normFilter = effectiveGroupFilter.trim().toLowerCase();
-        const groupMatch = normGroup === normFilter ||
+        const siteScopeMatch = docScopeType === 'sites' && normFilter === 'sharepoint sites' && (
+          normGroup === 'sharepoint sites' || normGroup === 'shared documents' || normGroup === 'documents' ||
+          (r.subFolderPath || '').toLowerCase().startsWith('sharepoint sites >') ||
+          (r.subFolderPath || '').toLowerCase().startsWith('shared documents >') ||
+          (r.subFolderPath || '').toLowerCase().startsWith('documents >')
+        );
+        const groupMatch = siteScopeMatch ||
+          normMainFolder === normFilter ||
+          normGroup === normFilter ||
           normGroup.includes(normFilter.split(' ')[0]) ||
+          normMainFolder.includes(normFilter.split(' ')[0]) ||
           (r.subFolderPath || '').toLowerCase().includes(normFilter.split(' ')[0]);
         if (!groupMatch) return false;
       }
 
       // 3. Category / Document section filter
-      const levels = hierarchyForRow(r);
       const effectiveSectionFilter = docCategoryFilter !== 'all' ? docCategoryFilter : (catFilter !== 'all' ? catFilter : 'all');
       if (effectiveSectionFilter !== 'all') {
         const normFilter = effectiveSectionFilter.trim().toLowerCase();
-        const sectionMatch = (levels.section || '').trim().toLowerCase() === normFilter ||
+        const sectionMatch = (labels.documentSection || '').trim().toLowerCase() === normFilter ||
           (r.category || '').trim().toLowerCase() === normFilter ||
           (r.subFolderPath || '').toLowerCase().includes(`> ${normFilter}`) ||
           (r.subFolderPath || '').toLowerCase().includes(`${normFilter} >`);
@@ -776,13 +1438,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       }
       if (docGroupLevelFilter !== 'all') {
         const normFilter = docGroupLevelFilter.trim().toLowerCase();
-        const groupMatch = (levels.group || '').trim().toLowerCase() === normFilter ||
+        const groupMatch = (labels.group || '').trim().toLowerCase() === normFilter ||
           (r.subFolderPath || '').toLowerCase().includes(`> ${normFilter}`);
         if (!groupMatch) return false;
       }
       if (docLeafCategoryFilter !== 'all') {
         const normFilter = docLeafCategoryFilter.trim().toLowerCase();
-        const catMatch = (levels.category || '').trim().toLowerCase() === normFilter ||
+        const catMatch = (labels.category || '').trim().toLowerCase() === normFilter ||
           (r.category || '').trim().toLowerCase() === normFilter ||
           (r.subCategory || '').trim().toLowerCase() === normFilter ||
           (r.subFolderPath || '').toLowerCase().includes(`> ${normFilter}`);
@@ -790,7 +1452,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       }
       if (docSubCategoryFilter !== 'all') {
         const normFilter = docSubCategoryFilter.trim().toLowerCase();
-        const subMatch = (levels.subCategory || '').trim().toLowerCase() === normFilter ||
+        const subMatch = (labels.subCategory || '').trim().toLowerCase() === normFilter ||
           (r.subCategory || '').trim().toLowerCase() === normFilter ||
           (r.subFolderPath || '').toLowerCase().includes(`> ${normFilter}`);
         if (!subMatch) return false;
@@ -799,10 +1461,14 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       // 4. Text search filter
       if (textFilter) {
         const q = textFilter.trim().toLowerCase();
-        return (r.vesselName || '').toLowerCase().includes(q) ||
+        return (labels.vessel || '').toLowerCase().includes(q) ||
+          (labels.mainFolder || '').toLowerCase().includes(q) ||
+          (labels.documentSection || '').toLowerCase().includes(q) ||
+          (labels.group || '').toLowerCase().includes(q) ||
+          (labels.category || '').toLowerCase().includes(q) ||
+          (labels.subCategory || '').toLowerCase().includes(q) ||
+          (r.vesselName || '').toLowerCase().includes(q) ||
           (r.group || '').toLowerCase().includes(q) ||
-          (r.category || '').toLowerCase().includes(q) ||
-          (r.subCategory || '').toLowerCase().includes(q) ||
           (r.subFolderPath || '').toLowerCase().includes(q) ||
           (r.fileName || '').toLowerCase().includes(q);
       }
@@ -850,13 +1516,15 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       if (host._appDeletedItemIds.has(key)) return;
       if (/^01[A-Za-z0-9]{15,}$/.test((key || '').trim())) return;
 
-      if (vesselName) {
-        const vNorm = vesselName.toLowerCase();
-        if (!(key || '').toLowerCase().includes(vNorm)) return;
-      }
-      if (docMainFolder) {
-        const dNorm = docMainFolder.toLowerCase();
-        if (!(key || '').toLowerCase().includes(dNorm)) return;
+      if (key.includes('||')) {
+        const parts = key.split('||');
+        const kVessel = (parts[0] || '').trim().toLowerCase();
+        const kGroup = (parts[1] || '').trim().toLowerCase();
+        if (vesselName && kVessel && kVessel !== vesselName.toLowerCase()) return;
+        if (docMainFolder && kGroup && kGroup !== docMainFolder.toLowerCase()) return;
+      } else {
+        const otherVessel = vessels.find(v => v.name && key.toLowerCase().includes(v.name.toLowerCase()));
+        if (otherVessel && vesselName && otherVessel.name.toLowerCase() !== vesselName.toLowerCase()) return;
       }
 
       const keyTail = getFolderTailSegments(key, vesselName, docMainFolder);
@@ -882,6 +1550,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       if (!subfolderFileCountMap.has(sfKey)) subfolderFileCountMap.set(sfKey, 0);
     });
 
+    // Sub-folder count map (used alongside subfolderFileCountMap to show separate badges)
+    const subfolderFolderCountMap = new Map<string, number>();
+    subfolderNames.forEach(sfn => { if (!subfolderFolderCountMap.has(sfn)) subfolderFolderCountMap.set(sfn, 0); });
+
     // Override with live spoFolderMap counts when available (more accurate)
     if (resolvedCurrentFolderId && host.state.spoFolderMap.has(resolvedCurrentFolderId)) {
       const liveParent = host.state.spoFolderMap.get(resolvedCurrentFolderId);
@@ -892,6 +1564,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         if (sfNode) {
           const liveFiles = (sfNode.children || []).filter(
             fc => !fc.isFolder && (!fc.id || !host._appDeletedItemIds.has(fc.id))
+          );
+          const liveFolders = (sfNode.children || []).filter(
+            fc => fc.isFolder && (!fc.id || !host._appDeletedItemIds.has(fc.id))
           );
           const liveFileNames = new Set(liveFiles.map(fc => (fc.name || '').trim().toLowerCase()));
           const sfNorm = child.name.trim().toLowerCase();
@@ -910,8 +1585,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
           const totalLiveCount = liveFiles.length + pendingLocalCount;
           subfolderFileCountMap.set(targetSfKey, totalLiveCount);
+          subfolderFolderCountMap.set(targetSfKey, liveFolders.length);
         } else {
           if (!subfolderFileCountMap.has(targetSfKey)) subfolderFileCountMap.set(targetSfKey, 0);
+          if (!subfolderFolderCountMap.has(targetSfKey)) subfolderFolderCountMap.set(targetSfKey, 0);
         }
       });
     }
@@ -925,7 +1602,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         (r.group || '').trim().toLowerCase(),
         ...rowTail,
       ].filter(Boolean).join('||');
-      const dedupeKey = canonicalRowKey || (r.subFolderPath || r.groupKey).trim().toLowerCase();
+      const baseDedupeKey = canonicalRowKey || (r.subFolderPath || r.groupKey).trim().toLowerCase();
+      const dedupeKey = docScopeType === 'sites' && r.fileName
+        ? `${baseDedupeKey}||file:${(r.fileId || r.fileName).trim().toLowerCase()}`
+        : baseDedupeKey;
       const normSub = (r.subFolderPath || '').trim().toLowerCase();
       const rowTailKey = rowTail.join(' > ');
       const subLower = (r.subCategory || r.category || '').trim().toLowerCase();
@@ -949,6 +1629,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         pending: false,
         uploadedAt: (c as any).createdDateTime ? Date.parse((c as any).createdDateTime) : ((c as any).lastModifiedDateTime ? Date.parse((c as any).lastModifiedDateTime) : undefined),
       }));
+      const siteCacheFiles: Array<{ id: string; name: string; size?: string; uploadedAt?: number }> = [];
+      if (r.uploadFolderId) {
+        for (const [cacheKey, cacheEntry] of Array.from(host._siteFolderItemsCache.entries())) {
+          if (!cacheKey.endsWith(`::${r.uploadFolderId}`)) continue;
+          for (const item of cacheEntry.items || []) {
+            const isFile = Boolean(item?.file) || (Boolean(item?.name) && !item.folder && !item.name.includes('/'));
+            if (!isFile || !item.name) continue;
+            siteCacheFiles.push({
+              id: item.id || item.name,
+              name: item.name,
+              size: typeof item.size === 'number' ? `${(item.size / 1024).toFixed(1)} KB` : undefined,
+              uploadedAt: item.lastModifiedDateTime ? Date.parse(item.lastModifiedDateTime) : (item.createdDateTime ? Date.parse(item.createdDateTime) : undefined),
+            });
+          }
+        }
+      }
 
       // Collect files for this row across all possible keys
       const candidateKeys = [
@@ -1044,6 +1740,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       const folderUploads = [
         ...matchedUploads,
         ...memFiles,
+        ...(r.fileName ? [] : siteCacheFiles),
       ];
 
       const existing = groupedMap.get(dedupeKey);
@@ -1105,6 +1802,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     }
 
     let groupedList = Array.from(groupedMap.values());
+    if (docViewMode === 'list' && docScopeType === 'sites') {
+      groupedList = groupedList.filter(row => row.files.length > 0);
+    }
     if (attachmentFilter !== 'all') {
       groupedList = groupedList.filter(row => attachmentFilter === 'attached' ? row.files.length > 0 : row.files.length === 0);
     }
@@ -1152,7 +1852,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       const lower0 = segments[0].toLowerCase();
       const stack: Array<{ id: string; name: string }> = [];
       let nextMainFolder: MainFolderKey | null = null;
-      let nextScope: 'vessels' | 'common' | 'kaizen' = 'vessels';
+      let nextScope: 'vessels' | 'common' | 'kaizen' | 'sites' | 'shared_docs' | 'documents' = 'vessels';
       let nextVesselFilter = vesselFilter;
 
       const byLower = (name: string): MainFolderKey | null => {
@@ -1171,6 +1871,44 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           const breadcrumb = segments.slice(0, i + 1).join(' > ');
           const liveId = host._getLiveSharePointFolderId(breadcrumb);
           const id = liveId || `sf_${i}_${name.replace(/\s+/g, '_').toLowerCase()}`;
+          stack.push({ id, name });
+        }
+      } else if (lower0 === 'sharepoint sites' || lower0 === 'sites documents') {
+        nextMainFolder = 'SharePoint Sites';
+        nextScope = 'sites';
+        nextVesselFilter = 'all';
+        stack.push({ id: 'sites_root', name: 'SharePoint Sites' });
+
+        const siteName = segments[1] || '';
+        const libraryName = segments[2] || '';
+        const site = (host.state.documentSites || []).find(s =>
+          s.sp_site_name?.trim().toLowerCase() === siteName.toLowerCase() ||
+          s.site_key?.trim().toLowerCase() === siteName.toLowerCase()
+        );
+        stack.push({
+          id: site?.site_id ? `site:${site.site_id}` : `site_${siteName.replace(/\s+/g, '_').toLowerCase()}`,
+          name: site?.sp_site_name || siteName,
+        });
+        const library = site && (site.default_library_name || '').trim().toLowerCase() === libraryName.toLowerCase()
+          ? site.default_library_name
+          : libraryName;
+        stack.push({
+          id: site?.drive_id ? `drive:${site.drive_id}` : `drive_${libraryName.replace(/\s+/g, '_').toLowerCase()}`,
+          name: library || libraryName,
+        });
+
+        for (let i = 3; i < segments.length; i++) {
+          const name = segments[i];
+          const isLeaf = i === segments.length - 1;
+          const subPathTillNow = segments.slice(0, i + 1).join(' > ');
+          const matchingRow = host.state.rows.find(r =>
+            r.subFolderPath && r.subFolderPath.trim().toLowerCase() === subPathTillNow.toLowerCase() &&
+            r.uploadFolderId && !/^(sf_|category_|common|kaizen_root|dept_|sites_root|site:|drive:)/.test(r.uploadFolderId)
+          );
+          const driveRelPath = segments.slice(3, i + 1).join('/');
+          const id = (isLeaf && row.uploadFolderId && !row.uploadFolderId.startsWith('sf_'))
+            ? row.uploadFolderId
+            : (matchingRow?.uploadFolderId || driveRelPath);
           stack.push({ id, name });
         }
       } else if (MAIN_FOLDER_SET.has(lower0)) {
@@ -1215,6 +1953,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           docScopeType: nextScope,
           vesselFilter: nextVesselFilter || 'all',
         });
+
+        // Immediately refresh live files for the destination folder across all scopes
+        triggerFolderRefresh(stack, nextScope, nextVesselFilter, row?.groupKey || '');
       } else {
         host.setState({ docViewMode: 'folder' });
       }
@@ -1237,7 +1978,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         return;
       }
 
-      let nextScope: 'vessels' | 'common' | 'kaizen' = host.state.docScopeType || 'vessels';
+      host._cancelDocumentLiveTree();
+
+      let nextScope: 'vessels' | 'common' | 'kaizen' | 'sites' | 'shared_docs' | 'documents' = host.state.docScopeType || 'vessels';
       let nextVesselFilter = vesselFilter || 'all';
       let nextGroupFilter = docGroupFilter || 'all';
       let hierarchyLevels: string[] = [];
@@ -1249,6 +1992,18 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         hierarchyLevels = folderPathStack
           .filter(n => n.id !== 'kaizen_root' && n.name !== 'Kaizen - Knowledge Bank')
           .map(n => n.name);
+      } else if (atSharedDocsRoot || atDocsRoot || atSitesRoot) {
+        nextScope = atSharedDocsRoot ? 'shared_docs' : (atDocsRoot ? 'documents' : 'sites');
+        nextGroupFilter = atSharedDocsRoot ? 'Shared Documents' : (atDocsRoot ? 'Documents' : 'SharePoint Sites');
+        nextVesselFilter = 'all';
+        for (const node of folderPathStack) {
+          const parsed = parseSharePointRowMetadata(node.name);
+          if (parsed.vessel && parsed.vessel !== 'Not Listed') {
+            nextVesselFilter = parsed.vessel;
+            break;
+          }
+        }
+        hierarchyLevels = [];
       } else if (atCommonShips) {
         nextScope = 'common';
         nextVesselFilter = 'all';
@@ -1270,6 +2025,36 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       const level2 = hierarchyLevels[2] || 'all';
       const level3 = hierarchyLevels[3] || 'all';
 
+      if (nextScope === 'sites' && folderPathStack.length >= 2) {
+        const siteNode = folderPathStack[1];
+        const driveNode = folderPathStack[2];
+        const site = (host.state.documentSites || []).find(s =>
+          s.site_id === (siteNode?.id || '').replace(/^site:/, '') ||
+          s.site_key === siteNode?.name ||
+          s.sp_site_name === siteNode?.name
+        );
+        const siteId = site?.site_id || '';
+        const driveId = (driveNode?.id || '').replace(/^drive:/, '') || site?.drive_id || '';
+        const folderId = folderPathStack.length <= 3
+          ? 'root'
+          : (folderPathStack[folderPathStack.length - 1]?.id || 'root');
+        if (siteId && driveId) {
+          host._getOrLoadSiteFolderChildren(siteId, driveId, folderId);
+          // A vessel row can represent a folder whose uploaded files are one
+          // level below it. Load that folder's children before List View
+          // flattens the cached site rows into file rows.
+          const activeCache = host._siteFolderItemsCache.get(`${siteId}::${driveId}::${folderId}`);
+          (activeCache?.items || [])
+            .filter(item => item?.folder && item.id)
+            .slice(0, 20)
+            .forEach(item => host._getOrLoadSiteFolderChildren(siteId, driveId, item.id));
+        }
+      }
+
+      if (nextScope === 'vessels' && host.state.rows.length === 0) {
+        void host._loadData(true).catch(() => undefined);
+      }
+
       host.setState({
         docViewMode: 'list',
         docScopeType: nextScope,
@@ -1285,9 +2070,15 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       });
     };
 
-    // In List View: trigger on-demand live file refresh for visible page rows if not loaded yet
-    if (docViewMode === 'list') {
+    // In List View: trigger on-demand live file refresh for visible page rows if not loaded yet.
+    // Skip for sites/shared_docs/documents scopes — those rows are loaded via _getOrLoadSiteFolderChildren
+    // which correctly uses each site's own siteId/driveId. _refreshFolderFiles uses this.props.siteId/driveId
+    // (the webpart's main site) and would produce 404 Graph errors for cross-site folder IDs.
+    if (docViewMode === 'list' && docScopeType !== 'sites' && docScopeType !== 'shared_docs' && docScopeType !== 'documents') {
       pageGroupedRows.forEach(row => {
+        if ((row.subFolderPath || '').startsWith('SharePoint Sites') || (row.groupKey || '').startsWith('spo_') || (row.groupKey || '').startsWith('live:')) {
+          return;
+        }
         const liveId = host._getLiveSharePointFolderId(row.subFolderPath) || row.uploadFolderId;
         if (liveId && !/^(sf_|category_|common|vessels_root|specific_vessels|kaizen_root)/.test(liveId) && !/^\d+$/.test(liveId)) {
           const alreadyLoaded = host._filesLoadedForFolders.has(liveId);
@@ -1306,9 +2097,21 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
     // Navigation folder names that should never appear as vessel cards
     const NAV_FOLDER_NAMES = new Set(['specific vessels', 'common for all ships', 'common (not ship specific)', 'vessels', 'kaizen - knowledge bank', 'knowledge bank', 'common']);
+    const KNOWN_SPO_VESSELS: VesselRecord[] = [
+      { id: 'spo_snow_flower', name: 'Snow Flower', status: 'Active', is_provisioned: true },
+      { id: 'spo_snow_flake', name: 'Snow Flake', status: 'Active', is_provisioned: true },
+      { id: 'spo_senegal_express', name: 'Senegal Express', status: 'Active', is_provisioned: true },
+      { id: 'spo_peissy', name: 'Peissy', status: 'Active', is_provisioned: true },
+      { id: 'spo_potiniere', name: 'Potiniere', status: 'Active', is_provisioned: true },
+      { id: 'spo_norse_new_haven', name: 'Norse New Haven', status: 'Active', is_provisioned: true },
+      { id: 'spo_norse_ijmuiden', name: 'Norse Ijmuiden', status: 'Active', is_provisioned: true },
+      { id: 'spo_belle_lune', name: 'Belle Lune', status: 'Active', is_provisioned: true },
+      { id: 'spo_bow_fighter', name: 'Bow Fighter', status: 'Active', is_provisioned: true },
+    ];
     // Deduplicate by name and exclude any vessel whose name matches a navigation folder
     const displayVessels = (() => {
-      const baseList = vessels.filter(
+      const combined = [...vessels, ...KNOWN_SPO_VESSELS];
+      const baseList = combined.filter(
         (v, i, arr) =>
           arr.findIndex(x => x.name.trim().toLowerCase() === v.name.trim().toLowerCase()) === i &&
           !NAV_FOLDER_NAMES.has(v.name.trim().toLowerCase())
@@ -1318,7 +2121,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         if (matching.length > 0) return matching;
         return [{ id: vesselFilter, name: vesselFilter }];
       }
-      return baseList.slice(0, documentVesselCount);
+      return baseList.slice(0, Math.max(documentVesselCount, baseList.length));
     })();
 
     const handleDocumentsPageDrop = async (e: React.DragEvent): Promise<void> => {
@@ -1328,12 +2131,68 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       const extracted = await extractFilesFromDataTransfer(e.dataTransfer);
       if (!extracted.length) return;
 
-      const topFolderId = currentFolderNode && !/^(sf_|category_|common|vessels_root|specific_vessels|kaizen_root)/.test(currentFolderNode.id) ? currentFolderNode.id : '';
+      const topFolderId = currentFolderNode && !/^(sf_|category_|common|vessels_root|specific_vessels|kaizen_root|sites_root|site:|drive:)/.test(currentFolderNode.id) ? currentFolderNode.id : '';
       let currentVessel = '';
       let subFolderPath = '';
       let fallbackPath = '';
+      let targetSiteId: string | undefined = undefined;
+      let targetDriveId: string | undefined = undefined;
 
-      if (atKaizenRoot) {
+      if (atSitesRoot) {
+        const siteNode = folderPathStack[1];
+        const matchedSite = (host.state.documentSites || []).find(s =>
+          (siteNode?.id && s.site_id === siteNode.id.replace(/^site:/, '')) ||
+          (siteNode?.name && s.sp_site_name?.toLowerCase() === siteNode.name.toLowerCase()) ||
+          (siteNode?.name && s.site_key?.toLowerCase() === siteNode.name.toLowerCase())
+        );
+        targetSiteId = matchedSite?.site_id || (siteNode?.id || '').replace(/^site:/, '') || host.props.siteId;
+        const driveNode = folderPathStack[2];
+        targetDriveId = (driveNode?.id || '').replace(/^drive:/, '') || matchedSite?.drive_id || host.props.driveId;
+
+        const driveSegments = folderPathStack.slice(3).map(n => n.name);
+        subFolderPath = driveSegments.join(' > ');
+        fallbackPath = driveSegments.join('/');
+
+        const matchedV = (host.state.vessels || []).find(v =>
+          driveSegments.some(seg => seg.toLowerCase() === v.name.toLowerCase())
+        );
+        currentVessel = matchedV ? matchedV.name : (driveSegments[1] || driveSegments[0] || '');
+        const isDriveRoot = stackLevel <= 3;
+        const resolvedFolderId = isDriveRoot ? 'root' : (topFolderId || fallbackPath || 'root');
+
+        host._openBulkUpload(extracted, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
+        return;
+      } else if (atSharedDocsRoot) {
+        targetSiteId = sharedDocsSite?.site_id || host.props.siteId;
+        targetDriveId = sharedDocsSite?.drive_id || '';
+        const driveSegments = folderPathStack.slice(1).map(n => n.name);
+        subFolderPath = driveSegments.join(' > ');
+        fallbackPath = driveSegments.join('/');
+        const matchedV = (host.state.vessels || []).find(v =>
+          driveSegments.some(seg => seg.toLowerCase() === v.name.toLowerCase())
+        );
+        currentVessel = matchedV ? matchedV.name : (driveSegments[1] || driveSegments[0] || '');
+        const isDriveRoot = stackLevel <= 1;
+        const resolvedFolderId = isDriveRoot ? 'root' : (topFolderId || fallbackPath || 'root');
+
+        host._openBulkUpload(extracted, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
+        return;
+      } else if (atDocsRoot) {
+        targetSiteId = docsSite?.site_id || host.props.siteId;
+        targetDriveId = docsSite?.drive_id || host.props.driveId;
+        const driveSegments = folderPathStack.slice(1).map(n => n.name);
+        subFolderPath = driveSegments.join(' > ');
+        fallbackPath = driveSegments.join('/');
+        const matchedV = (host.state.vessels || []).find(v =>
+          driveSegments.some(seg => seg.toLowerCase() === v.name.toLowerCase())
+        );
+        currentVessel = matchedV ? matchedV.name : (driveSegments[1] || driveSegments[0] || '');
+        const isDriveRoot = stackLevel <= 1;
+        const resolvedFolderId = isDriveRoot ? 'root' : (topFolderId || fallbackPath || 'root');
+
+        host._openBulkUpload(extracted, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
+        return;
+      } else if (atKaizenRoot) {
         currentVessel = 'Kaizen - Knowledge Bank';
         const kaizenFolders = folderPathStack.filter(n => n.id !== 'kaizen_root' && n.name !== 'Kaizen - Knowledge Bank').map(n => n.name);
         subFolderPath = ['Kaizen - Knowledge Bank', ...kaizenFolders].join(' > ');
@@ -1370,7 +2229,265 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       );
       const resolvedFolderId = topFolderId || liveId || (matchingRow?.uploadFolderId) || fallbackPath;
 
-      host._openBulkUpload(extracted, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode);
+      host._openBulkUpload(extracted, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
+    };
+
+
+    const sharedDocsSite = getFirstClassSite('nksdocman', 0);
+    const docsSite = getFirstClassSite('dev', 1);
+
+    const renderLibraryBrowser = (
+      siteId: string,
+      driveId: string,
+      libraryTitle: string,
+      librarySubtitle: string,
+      folderGroupKey: 'Shared Documents' | 'Documents'
+    ): React.ReactElement => {
+      const isLibRoot = stackLevel === 1;
+      const currentNode = folderPathStack[folderPathStack.length - 1];
+      const currentFolderId = isLibRoot ? 'root' : (currentNode?.id || 'root');
+      const folderData = host._getOrLoadSiteFolderChildren(siteId, driveId, currentFolderId);
+
+      if (folderData.loading && folderData.items.length === 0) {
+        return (
+          <div style={{ padding: 48, textAlign: 'center', color: '#64748b' }}>
+            <div style={{ fontSize: 28, marginBottom: 8, animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Loading {currentNode?.name || libraryTitle}...</div>
+          </div>
+        );
+      }
+
+      const baseChildFolders = folderData.items.filter(item => item.folder || (!item.file && item.name && !item.name.includes('.')));
+      const childFiles = folderData.items.filter(item => item.file || (item.name && item.name.includes('.')));
+
+      const liveFolderMap = new Map<string, any>();
+      baseChildFolders.forEach(f => {
+        if (f.name) liveFolderMap.set(f.name.toLowerCase(), f);
+      });
+
+      const currentSegments = folderPathStack.slice(1).map(n => n.name.trim()).filter(Boolean);
+      const currentNodeName = (currentNode?.name || '').trim().toLowerCase();
+
+      Object.entries(host.state.uploadedFilesByFolder || {}).forEach(([key, fList]) => {
+        if (!Array.isArray(fList) || fList.length === 0) return;
+        if (host._appDeletedItemIds.has(key)) return;
+        if (/^01[A-Za-z0-9]{15,}$/.test(key.trim())) return;
+        const keyClean = key.replace(/\\/g, '/');
+        const keySegs = keyClean.split(/[>/]/).map(s => s.trim()).filter(Boolean);
+        if (keySegs.length === 0) return;
+
+        let targetChildSeg: string | null = null;
+        if (currentSegments.length > 0) {
+          const startsWithCurrent = currentSegments.every((seg, idx) => keySegs[idx]?.toLowerCase() === seg.toLowerCase());
+          if (startsWithCurrent && keySegs.length > currentSegments.length) {
+            targetChildSeg = keySegs[currentSegments.length];
+          }
+        } else if (isLibRoot && keySegs.length > 0) {
+          targetChildSeg = keySegs[0];
+        } else if (currentNodeName) {
+          const idx = keySegs.findIndex(s => s.toLowerCase() === currentNodeName);
+          if (idx !== -1 && idx + 1 < keySegs.length) {
+            targetChildSeg = keySegs[idx + 1];
+          }
+        }
+
+        if (targetChildSeg && isDisplayableFolderName(targetChildSeg)) {
+          const norm = targetChildSeg.toLowerCase();
+          if (!liveFolderMap.has(norm)) {
+            liveFolderMap.set(norm, {
+              id: `sf_${targetChildSeg}`,
+              name: targetChildSeg,
+              folder: { childCount: fList.length },
+              webUrl: '',
+              lastModifiedDateTime: 'Just now',
+            });
+          }
+        }
+      });
+
+      (host.state.rows || []).forEach(r => {
+        if (!r.subFolderPath || host._appDeletedItemIds.has(r.uploadFolderId)) return;
+        const rSegs = r.subFolderPath.split(/[>/]/).map(s => s.trim()).filter(Boolean);
+        if (rSegs.length === 0) return;
+
+        let targetChildSeg: string | null = null;
+        if (currentSegments.length > 0) {
+          const startsWithCurrent = currentSegments.every((seg, idx) => rSegs[idx]?.toLowerCase() === seg.toLowerCase());
+          if (startsWithCurrent && rSegs.length > currentSegments.length) {
+            targetChildSeg = rSegs[currentSegments.length];
+          }
+        } else if (isLibRoot && rSegs.length > 0) {
+          targetChildSeg = rSegs[0];
+        } else if (currentNodeName) {
+          const idx = rSegs.findIndex(s => s.toLowerCase() === currentNodeName);
+          if (idx !== -1 && idx + 1 < rSegs.length) {
+            targetChildSeg = rSegs[idx + 1];
+          }
+        }
+
+        if (targetChildSeg && isDisplayableFolderName(targetChildSeg)) {
+          const norm = targetChildSeg.toLowerCase();
+          if (!liveFolderMap.has(norm)) {
+            liveFolderMap.set(norm, {
+              id: r.uploadFolderId || `sf_${targetChildSeg}`,
+              name: targetChildSeg,
+              folder: { childCount: 1 },
+              webUrl: '',
+              lastModifiedDateTime: 'Just now',
+            });
+          }
+        }
+      });
+
+      const childFolders = Array.from(liveFolderMap.values());
+
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                {currentNode?.name || libraryTitle}
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                {librarySubtitle} · {childFolders.length} folders, {childFiles.length} files
+              </div>
+            </div>
+          </div>
+
+          {childFolders.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Folders ({childFolders.length})
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
+                {childFolders.map((sf, idx) => {
+                  const isFolder = (item: any): boolean => !!(item.folder || (!item.file && item.name && !item.name.includes('.')));
+                  const isFile = (item: any): boolean => !!(item.file || (item.name && item.name.includes('.')));
+                  const sfChildData = sf.id ? host._getOrLoadSiteFolderChildren(siteId, driveId, sf.id) : null;
+                  const sfLoading = sfChildData ? (sfChildData.loading && sfChildData.items.length === 0) : false;
+                  const sfFolderCount = sfChildData && !sfLoading ? sfChildData.items.filter(isFolder).length : null;
+                  const sfFileCount  = sfChildData && !sfLoading ? sfChildData.items.filter(isFile).length  : null;
+                  const sfTotal = sf.folder?.childCount ?? 0;
+                  return (
+                    <div
+                      key={sf.id || sf.name + idx}
+                      onClick={() => {
+                        host._pushFolderNav([...folderPathStack, { id: sf.id, name: sf.name }], folderGroupKey);
+                      }}
+                      style={{
+                        background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
+                        display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <div style={{
+                        width: 44, height: 44, borderRadius: 10, background: '#e0f2fe',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#0284c7',
+                      }}>
+                        📁
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {sf.name}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#64748b', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          {sfLoading ? (
+                            <span style={{ color: '#94a3b8', fontSize: 10 }}>{sfTotal > 0 ? `${sfTotal} items` : '···'}</span>
+                          ) : (
+                            <>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFolderCount ?? 0) > 0 ? '#e0f2fe' : '#f1f5f9', color: (sfFolderCount ?? 0) > 0 ? '#0369a1' : '#94a3b8', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📁 {sfFolderCount ?? 0}</span>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFileCount ?? 0) > 0 ? '#dcfce7' : '#f1f5f9', color: (sfFileCount ?? 0) > 0 ? '#15803d' : '#94a3b8', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📄 {sfFileCount ?? 0}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <span style={{ color: '#0284c7', fontSize: 16 }}>›</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {childFiles.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Files ({childFiles.length})
+              </div>
+              <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
+                      <th style={{ padding: '10px 16px' }}>FILE NAME</th>
+                      <th style={{ padding: '10px 16px' }}>SIZE</th>
+                      <th style={{ padding: '10px 16px' }}>DATE MODIFIED</th>
+                      <th style={{ padding: '10px 16px', textAlign: 'right' }}>ACTION</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {childFiles.map((file, idx) => {
+                      const fileSize = typeof file.size === 'number'
+                        ? (file.size > 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : `${(file.size / 1024).toFixed(1)} KB`)
+                        : '—';
+                      const fileDate = file.lastModifiedDateTime ? new Date(file.lastModifiedDateTime).toLocaleString() : '—';
+                      const fileUrl = file.web_url || file.webUrl || file.download_url || '';
+
+                      return (
+                        <tr key={file.id || file.name + idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <span style={{ fontSize: 18 }}>📄</span>
+                            <span
+                              onClick={() => {
+                                if (fileUrl) {
+                                  window.open(fileUrl, '_blank');
+                                } else {
+                                  void host._openDocumentFile(file.id, file.name, folderPathStack.map(n => n.name).join(' > '));
+                                }
+                              }}
+                              style={{ cursor: 'pointer', color: '#0284c7', textDecoration: 'underline' }}
+                              title={`Click to view/download ${file.name}`}
+                            >
+                              {file.name}
+                            </span>
+                          </td>
+                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{fileSize}</td>
+                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{fileDate}</td>
+                          <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (fileUrl) {
+                                  window.open(fileUrl, '_blank');
+                                } else {
+                                  void host._openDocumentFile(file.id, file.name, folderPathStack.map(n => n.name).join(' > '));
+                                }
+                              }}
+                              style={{
+                                background: '#0284c7', color: '#fff', border: 'none', borderRadius: 6,
+                                padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                              }}
+                            >
+                              Open / Download
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {childFolders.length === 0 && childFiles.length === 0 && (
+            <div style={{ background: '#fff', borderRadius: 14, border: '1px dashed #cbd5e1', padding: 48, textAlign: 'center', color: '#94a3b8' }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
+              <div style={{ fontWeight: 600, color: '#475569', fontSize: 15 }}>This folder is empty</div>
+              <div style={{ fontSize: 13, marginTop: 4 }}>No files or subfolders found in this directory.</div>
+            </div>
+          )}
+        </div>
+      );
     };
 
     return (
@@ -1388,6 +2505,34 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           .dms-nav-arrow:not(:disabled):hover { transform: translateY(-2px) scale(1.08); filter: saturate(1.2); }
           .dms-nav-arrow:not(:disabled):active { transform: translateY(0) scale(0.96); }
         `}</style>
+        {(host.state.documentSites.length > 1 || host.state.documentSites.length === 1) && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', padding: '12px 14px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              {host.state.documentSites.length > 1 && <>
+                <label htmlFor="documents-site-selector" style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>SharePoint site</label>
+                <select
+                  id="documents-site-selector"
+                  value={host.state.activeDocumentSite || ''}
+                  disabled={host.state.documentLiveFoldersLoading}
+                  onChange={event => {
+                    void host._switchDocumentSite(event.target.value).catch(error => window.alert(error?.message || 'Could not switch site.'));
+                  }}
+                  style={{ minWidth: 220, padding: '7px 10px', border: '1px solid #94a3b8', borderRadius: 7, background: '#fff', color: '#0f172a' }}
+                >
+                  {host.state.documentSites.map(site => <option key={site.site_key} value={site.site_key}>{site.sp_site_name || site.site_key}</option>)}
+                </select>
+              </>}
+              {host.state.documentLiveFoldersLoading && <span style={{ fontSize: 12, color: '#64748b' }}>Loading live folders...</span>}
+            </div>
+            <button
+              type="button"
+              onClick={() => host.setState({ modal: 'create', selectedVessel: null, form: { name: '', imo: '', shipyard: '', hull_number: '', vessel_type: '', target_site_ids: host.state.activeDocumentSite ? [host.state.activeDocumentSite] : [] }, modalMsg: null, modalError: null, formFieldErrors: {} })}
+              style={{ border: 0, borderRadius: 7, background: '#0f766e', color: '#fff', padding: '8px 14px', fontWeight: 700, cursor: 'pointer' }}
+            >
+              + New Vessel
+            </button>
+          </div>
+        )}
         {/* Breadcrumb Navigation Trail */}
         <div style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           {/* Back / Forward navigation buttons */}
@@ -1423,11 +2568,17 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               flexShrink: 0,
             }}
           >→</button>
-          <span style={{ cursor: 'pointer', color: '#0284c7' }} onClick={() => host._pushFolderNav([], null)}>Home</span>
+          <span style={{ cursor: 'pointer', color: '#0284c7' }} onClick={() => {
+            host._pushFolderNav([], null);
+            host.setState({ docGroupFilter: 'all', vesselFilter: 'all', docCategoryFilter: 'all', docGroupLevelFilter: 'all', docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', catFilter: 'all', textFilter: '', docScopeType: 'vessels' });
+          }}>Home</span>
           <span>›</span>
           <span
             style={{ cursor: stackLevel === 0 && !docMainFolder ? 'default' : 'pointer', color: stackLevel === 0 && !docMainFolder ? '#0f172a' : '#0284c7', fontWeight: stackLevel === 0 && !docMainFolder ? 600 : 400 }}
-            onClick={() => host._pushFolderNav([], null)}
+            onClick={() => {
+              host._pushFolderNav([], null);
+              host.setState({ docGroupFilter: 'all', vesselFilter: 'all', docCategoryFilter: 'all', docGroupLevelFilter: 'all', docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', catFilter: 'all', textFilter: '', docScopeType: 'vessels' });
+            }}
           >
             Documents
           </span>
@@ -1439,10 +2590,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 <span
                   onClick={() => {
                     if (atKaizenRoot && idx === 0) {
-                      host._pushFolderNav(folderPathStack.slice(0, 1), 'Kaizen - Knowledge Bank');
+                      const newStack = folderPathStack.slice(0, 1);
+                      host._pushFolderNav(newStack, 'Kaizen - Knowledge Bank');
+                      triggerFolderRefresh(newStack, 'kaizen');
                     } else if (idx === 0) {
                       const mainFolder = item.name as MainFolderKey;
-                      host._pushFolderNav(folderPathStack.slice(0, 1), mainFolder);
+                      const newStack = folderPathStack.slice(0, 1);
+                      host._pushFolderNav(newStack, mainFolder);
                       if (mainFolder === 'Technical & Crewing' || mainFolder === 'Commercial & Chartering' || mainFolder === 'Insurance') {
                         host.setState({
                           vesselFilter: 'all',
@@ -1455,8 +2609,14 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           docListPage: 0,
                         });
                       }
+                      // Refresh for sites/shared_docs/documents breadcrumb home nodes
+                      const breadcrumbScope = host.state.docScopeType;
+                      if (breadcrumbScope === 'sites' || breadcrumbScope === 'shared_docs' || breadcrumbScope === 'documents') {
+                        triggerFolderRefresh(newStack, breadcrumbScope);
+                      }
                     } else if (idx === 1 && atMainDepartment && !atCommonShips) {
-                      host._pushFolderNav(folderPathStack.slice(0, idx + 1), docMainFolder);
+                      const newStack = folderPathStack.slice(0, idx + 1);
+                      host._pushFolderNav(newStack, docMainFolder);
                       host.setState({
                         vesselFilter: item.name,
                         docScopeType: 'vessels',
@@ -1467,8 +2627,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         catFilter: 'all',
                         docListPage: 0,
                       });
+                      triggerFolderRefresh(newStack, 'vessels', item.name);
                     } else {
-                      host._pushFolderNav(folderPathStack.slice(0, idx + 1), docMainFolder);
+                      const newStack = folderPathStack.slice(0, idx + 1);
+                      host._pushFolderNav(newStack, docMainFolder);
+                      triggerFolderRefresh(newStack);
                     }
                   }}
                   style={{ cursor: isLast ? 'default' : 'pointer', color: isLast ? '#0f172a' : '#0284c7', fontWeight: isLast ? 600 : 400 }}
@@ -1491,12 +2654,21 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               {docViewMode === 'list'
                 ? `${filtered.length} rows · flattened list view`
                 : stackLevel === 0
-                  ? `${MAIN_FOLDERS.length} main folders`
-                  : atDepartmentVesselList
-                    ? `${vessels.length} vessels · Common for all ships`
-                    : `${subfolderNames.length} sections · ${allCurrentFolderFiles.length} files`}
+                  ? `${MAIN_FOLDERS.length} main folders & libraries`
+                  : atSharedDocsRoot
+                    ? 'NKSDocMan · Shared Documents'
+                    : atDocsRoot
+                      ? 'Communication Site · Documents'
+                      : atSitesRoot
+                        ? 'SharePoint Sites'
+                        : atDepartmentVesselList
+                          ? `${displayVessels.length} vessels · Common for all ships`
+                          : `${subfolderNames.length} sections · ${allCurrentFolderFiles.length} files`}
             </p>
-            {docViewMode === 'folder' && currentFolderNode && subfolderNames.length === 0 && (
+            {docViewMode === 'folder' && currentFolderNode && subfolderNames.length === 0
+              && !atSitesRoot && !atSharedDocsRoot && !atDocsRoot
+              && !host.state.documentFilesLoading
+              && (
               <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: allCurrentFolderFiles.length > 0 ? '#15803d' : '#64748b' }}>
                 {allCurrentFolderFiles.length > 0 ? '✅ Attached' : '⚪ Not Attached'}
               </div>
@@ -1615,13 +2787,66 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 subFolderPath: string;
                 fallbackPath: string;
                 resolvedFolderId: string;
+                targetSiteId?: string;
+                targetDriveId?: string;
               } => {
-                const topFolderId = currentFolderNode && !/^(sf_|category_|common|vessels_root|specific_vessels|kaizen_root)/.test(currentFolderNode.id) ? currentFolderNode.id : '';
+                const topFolderId = currentFolderNode && !/^(sf_|category_|common|vessels_root|specific_vessels|kaizen_root|sites_root|site:|drive:)/.test(currentFolderNode.id) ? currentFolderNode.id : '';
                 let currentVessel = '';
                 let subFolderPath = '';
                 let fallbackPath = '';
+                let targetSiteId: string | undefined = undefined;
+                let targetDriveId: string | undefined = undefined;
 
-                if (atKaizenRoot) {
+                if (atSitesRoot) {
+                  const siteNode = folderPathStack[1];
+                  const matchedSite = (host.state.documentSites || []).find(s =>
+                    (siteNode?.id && s.site_id === siteNode.id.replace(/^site:/, '')) ||
+                    (siteNode?.name && s.sp_site_name?.toLowerCase() === siteNode.name.toLowerCase()) ||
+                    (siteNode?.name && s.site_key?.toLowerCase() === siteNode.name.toLowerCase())
+                  );
+                  targetSiteId = matchedSite?.site_id || (siteNode?.id || '').replace(/^site:/, '') || host.props.siteId;
+                  const driveNode = folderPathStack[2];
+                  targetDriveId = (driveNode?.id || '').replace(/^drive:/, '') || matchedSite?.drive_id || host.props.driveId;
+
+                  const driveSegments = folderPathStack.slice(3).map(n => n.name);
+                  subFolderPath = driveSegments.join(' > ');
+                  fallbackPath = driveSegments.join('/');
+
+                  const matchedV = (host.state.vessels || []).find(v =>
+                    driveSegments.some(seg => seg.toLowerCase() === v.name.toLowerCase())
+                  );
+                  currentVessel = matchedV ? matchedV.name : (driveSegments[1] || driveSegments[0] || '');
+                  const isDriveRoot = stackLevel <= 3;
+                  const resolvedFolderId = isDriveRoot ? 'root' : (topFolderId || fallbackPath || 'root');
+
+                  return { currentVessel, subFolderPath, fallbackPath, resolvedFolderId, targetSiteId, targetDriveId };
+                } else if (atSharedDocsRoot) {
+                  targetSiteId = sharedDocsSite?.site_id || host.props.siteId;
+                  targetDriveId = sharedDocsSite?.drive_id || '';
+                  const driveSegments = folderPathStack.slice(1).map(n => n.name);
+                  subFolderPath = driveSegments.join(' > ');
+                  fallbackPath = driveSegments.join('/');
+                  const matchedV = (host.state.vessels || []).find(v =>
+                    driveSegments.some(seg => seg.toLowerCase() === v.name.toLowerCase())
+                  );
+                  currentVessel = matchedV ? matchedV.name : (driveSegments[1] || driveSegments[0] || '');
+                  const isDriveRoot = stackLevel <= 1;
+                  const resolvedFolderId = isDriveRoot ? 'root' : (topFolderId || fallbackPath || 'root');
+                  return { currentVessel, subFolderPath, fallbackPath, resolvedFolderId, targetSiteId, targetDriveId };
+                } else if (atDocsRoot) {
+                  targetSiteId = docsSite?.site_id || host.props.siteId;
+                  targetDriveId = docsSite?.drive_id || host.props.driveId;
+                  const driveSegments = folderPathStack.slice(1).map(n => n.name);
+                  subFolderPath = driveSegments.join(' > ');
+                  fallbackPath = driveSegments.join('/');
+                  const matchedV = (host.state.vessels || []).find(v =>
+                    driveSegments.some(seg => seg.toLowerCase() === v.name.toLowerCase())
+                  );
+                  currentVessel = matchedV ? matchedV.name : (driveSegments[1] || driveSegments[0] || '');
+                  const isDriveRoot = stackLevel <= 1;
+                  const resolvedFolderId = isDriveRoot ? 'root' : (topFolderId || fallbackPath || 'root');
+                  return { currentVessel, subFolderPath, fallbackPath, resolvedFolderId, targetSiteId, targetDriveId };
+                } else if (atKaizenRoot) {
                   currentVessel = 'Kaizen - Knowledge Bank';
                   const kaizenFolders = folderPathStack.filter(n => n.id !== 'kaizen_root' && n.name !== 'Kaizen - Knowledge Bank').map(n => n.name);
                   subFolderPath = ['Kaizen - Knowledge Bank', ...kaizenFolders].join(' > ');
@@ -1659,7 +2884,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 );
                 const resolvedFolderId = topFolderId || liveId || (matchingRow?.uploadFolderId) || fallbackPath;
 
-                return { currentVessel, subFolderPath, fallbackPath, resolvedFolderId };
+                return { currentVessel, subFolderPath, fallbackPath, resolvedFolderId, targetSiteId, targetDriveId };
               };
 
               return (
@@ -1679,9 +2904,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         const filesList = Array.from(e.target.files || []);
                         if (filesList.length === 0) return;
                         e.target.value = '';
-                        const { currentVessel, subFolderPath, resolvedFolderId } = resolveDocPageUploadTarget();
+                        const { currentVessel, subFolderPath, resolvedFolderId, targetSiteId, targetDriveId } = resolveDocPageUploadTarget();
                         const bulkFiles = filesList.map(f => ({ file: f, relativePath: f.name }));
-                        host._openBulkUpload(bulkFiles, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode);
+                        host._openBulkUpload(bulkFiles, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
                       }}
                     />
                     <span>⬆</span> Upload Files
@@ -1703,12 +2928,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         const filesList = Array.from(e.target.files || []);
                         if (filesList.length === 0) return;
                         e.target.value = '';
-                        const { currentVessel, subFolderPath, resolvedFolderId } = resolveDocPageUploadTarget();
+                        const { currentVessel, subFolderPath, resolvedFolderId, targetSiteId, targetDriveId } = resolveDocPageUploadTarget();
                         const bulkFiles = filesList.map(f => ({
                           file: f,
                           relativePath: (f as any).webkitRelativePath || f.name,
                         }));
-                        host._openBulkUpload(bulkFiles, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode);
+                        host._openBulkUpload(bulkFiles, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
                       }}
                     />
                     <span>📁</span> Upload Folder
@@ -1751,7 +2976,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           {/* 3 Scope Options: 1st Option = Specific Vessels, 2nd Option = Common for all vessels, 3rd Option = Kaizen - Knowledge Bank */}
           {docViewMode === 'list' && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingBottom: 6, borderBottom: '1px solid #f1f5f9' }}>
-              <div style={{ display: 'inline-flex', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 8, padding: 3, gap: 4 }}>
+              <div style={{ display: 'inline-flex', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 8, padding: 3, gap: 4, flexWrap: 'wrap' }}>
                 <button
                   onClick={() => host.setState({ docScopeType: 'vessels', vesselFilter: 'all', docGroupFilter: 'all', docCategoryFilter: 'all', docGroupLevelFilter: 'all', docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', catFilter: 'all', docListPage: 0, folderPathStack: [], docMainFolder: null })}
                   style={{
@@ -1800,12 +3025,43 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 >
                   <span>📚</span> 3. Kaizen - Knowledge Bank
                 </button>
+                <button
+                  onClick={() => {
+                    host.setState({
+                      docScopeType: 'sites',
+                      vesselFilter: 'all',
+                      docGroupFilter: 'all',
+                      docCategoryFilter: 'all',
+                      docGroupLevelFilter: 'all',
+                      docLeafCategoryFilter: 'all',
+                      docSubCategoryFilter: 'all',
+                      catFilter: 'all',
+                      docListPage: 0,
+                      folderPathStack: [{ id: 'sites_root', name: 'SharePoint Sites' }],
+                      docMainFolder: 'SharePoint Sites',
+                    });
+                    if ((host.state.documentSites || []).length === 0) {
+                      void host._loadDocumentSites().catch(() => undefined);
+                    }
+                  }}
+                  style={{
+                    padding: '6px 14px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                    background: docScopeType === 'sites' ? '#0284c7' : 'transparent',
+                    color: docScopeType === 'sites' ? '#fff' : '#475569',
+                    display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease',
+                  }}
+                >
+                  <span>🌐</span> SharePoint Sites
+                </button>
               </div>
 
               <span style={{ fontSize: 12, color: '#64748b' }}>
                 {docScopeType === 'vessels' && `Showing documents for ${vesselFilter !== 'all' ? vesselFilter : 'individual vessels'}`}
                 {docScopeType === 'common' && 'Showing documents shared across all vessels (Common for all ships)'}
                 {docScopeType === 'kaizen' && 'Showing global Kaizen - Knowledge Bank documents'}
+                {docScopeType === 'shared_docs' && 'Showing NKSDocMan · Shared Documents library'}
+                {docScopeType === 'documents' && 'Showing Communication Site · Documents library'}
+                {docScopeType === 'sites' && 'Showing connected SharePoint sites & document libraries'}
               </span>
             </div>
           )}
@@ -1821,6 +3077,36 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 style={{ width: '100%', padding: '6px 10px 6px 28px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, outline: 'none', boxSizing: 'border-box' }}
               />
             </div>
+            {docScopeType === 'sites' && (host.state.documentSites || []).length > 0 && (
+              <select
+                aria-label="Select SharePoint site"
+                value={host.state.activeDocumentSite || ''}
+                disabled={host.state.documentLiveFoldersLoading}
+                onChange={e => {
+                  const newSite = e.target.value;
+                  void host._switchDocumentSite(newSite).catch(err => alert(err?.message || 'Could not switch site.'));
+                }}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 8,
+                  border: '2px solid #0284c7',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  background: '#f0f9ff',
+                  color: '#0369a1',
+                  outline: 'none',
+                  maxWidth: 220,
+                  cursor: 'pointer',
+                }}
+                title="Select SharePoint site to display"
+              >
+                {host.state.documentSites.map(s => (
+                  <option key={s.site_key} value={s.site_key}>
+                    🌐 {s.sp_site_name || s.site_key}
+                  </option>
+                ))}
+              </select>
+            )}
             {docScopeType !== 'kaizen' && (
               <select
                 value={docGroupFilter}
@@ -1847,7 +3133,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 ))}
               </select>
             )}
-            {docScopeType === 'vessels' && (mainFolderPage || docViewMode === 'list') && (
+            {(docScopeType === 'vessels' || docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents') && (mainFolderPage || docViewMode === 'list') && (
               <select
                 value={mainFolderPage ? (vesselFilter === 'all' ? '' : vesselFilter) : vesselFilter}
                 onChange={e => {
@@ -1865,18 +3151,28 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     }
                   }
                   host.setState({ vesselFilter: val || 'all', docListPage: 0 });
-                  if (val !== 'all') {
+                  if (val !== 'all' && val !== 'Not Listed') {
                     void host._loadVesselRowsFromApi(val).catch(() => undefined);
                     void host._loadFilesForVessel(val).catch(() => undefined);
                   }
                 }}
-                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 140 }}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 160 }}
               >
-                {!mainFolderPage && <option value="all">All vessels ({Math.min(documentVesselCount, vessels.length)})</option>}
+                {!mainFolderPage && <option value="all">All vessels</option>}
                 {mainFolderPage && <option value="">Select vessel</option>}
-                {vesselFilterOptions.map(v => (
-                  <option key={v.id || v.name} value={v.name}>{v.name}</option>
-                ))}
+                {docScopeType === 'vessels' && mainFolderPage ? (
+                  vesselFilterOptions.map(v => (
+                    <option key={v.id || v.name} value={v.name}>{v.name}</option>
+                  ))
+                ) : docScopeType === 'sites' ? (
+                  siteVesselOptions.map(v => (
+                    <option key={v.id || v.name} value={v.name}>{v.name}</option>
+                  ))
+                ) : (
+                  distinctVesselsInScope.map(vName => (
+                    <option key={vName} value={vName}>{vName}</option>
+                  ))
+                )}
               </select>
             )}
             <select
@@ -1968,56 +3264,87 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
             {/* Level 0: Main Departments + Kaizen - Knowledge Bank */}
             {stackLevel === 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
-                  {MAIN_FOLDERS.filter(item => {
-                    if (docGroupFilter !== 'all') {
-                      const itemNorm = item.key.toLowerCase();
-                      const filterNorm = docGroupFilter.toLowerCase();
-                      if (!itemNorm.includes(filterNorm) && !filterNorm.includes(itemNorm)) return false;
-                    }
-                    if (textFilter) {
-                      const q = textFilter.toLowerCase();
-                      if (!item.key.toLowerCase().includes(q)) return false;
-                    }
-                    if (catFilter !== 'all') {
-                      const section = catFilter.trim().toLowerCase();
-                      const hasSection = scopeRows.some(row =>
-                        row.group.trim().toLowerCase() === item.key.trim().toLowerCase() &&
-                        (row.category || '').trim().toLowerCase() === section
-                      );
-                      if (!hasSection) return false;
-                    }
-                    return true;
-                  }).map(item => (
-                    <div
-                      key={item.key}
-                      onClick={() => {
-                        if (item.key === 'Kaizen - Knowledge Bank') {
-                          host._pushFolderNav([{ id: 'kaizen_root', name: 'Kaizen - Knowledge Bank' }], 'Kaizen - Knowledge Bank');
-                          host.setState({ vesselFilter: 'all', docScopeType: 'kaizen' });
-                        } else {
-                          host._pushFolderNav([{ id: item.key, name: item.key }], item.key);
-                          host.setState({ vesselFilter: 'all', docScopeType: 'vessels' });
-                        }
-                      }}
-                      style={{
-                        background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
-                        display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-                      }}
-                    >
-                      <div style={{ width: 44, height: 44, borderRadius: 10, background: item.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{item.emoji}</div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.key}</div>
-                        <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
-                          {item.key === 'Kaizen - Knowledge Bank' ? 'Knowledge base' : `${vessels.length} vessels`}
-                        </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
+                        {rootFolderCards.filter(item => {
+                          if (docGroupFilter !== 'all') {
+                            const itemNorm = item.key.toLowerCase();
+                            const filterNorm = docGroupFilter.toLowerCase();
+                            if (!itemNorm.includes(filterNorm) && !filterNorm.includes(itemNorm)) return false;
+                          }
+                          if (textFilter) {
+                            const q = textFilter.toLowerCase();
+                            if (!item.key.toLowerCase().includes(q)) return false;
+                          }
+                          if (catFilter !== 'all') {
+                            const section = catFilter.trim().toLowerCase();
+                            const hasSection = scopeRows.some(row =>
+                              row.group.trim().toLowerCase() === item.key.trim().toLowerCase() &&
+                              (row.category || '').trim().toLowerCase() === section
+                            );
+                            if (!hasSection) return false;
+                          }
+                          return true;
+                        }).map(item => (
+                          <div
+                            key={item.key}
+                            onClick={() => {
+                              if (item.key === 'Kaizen - Knowledge Bank') {
+                                host._pushFolderNav([{ id: 'kaizen_root', name: 'Kaizen - Knowledge Bank' }], 'Kaizen - Knowledge Bank');
+                                host.setState({ vesselFilter: 'all', docScopeType: 'kaizen', docGroupFilter: 'all' });
+                              } else if ((item.key === 'Shared Documents' || item.key === 'Documents') && activeLiveSite?.drive_id) {
+                                host._pushFolderNav([
+                                  { id: 'sites_root', name: 'SharePoint Sites' },
+                                  { id: `site:${activeLiveSite.site_id}`, name: activeLiveSite.sp_site_name || activeLiveSite.site_key },
+                                  { id: `drive:${activeLiveSite.drive_id}`, name: item.key },
+                                ], 'SharePoint Sites');
+                                host.setState({ vesselFilter: 'all', docScopeType: 'sites', docGroupFilter: 'all' });
+                              } else if (item.key === 'Shared Documents') {
+                                host._pushFolderNav([{ id: 'lib:shared_documents', name: 'Shared Documents' }], 'Shared Documents');
+                                host.setState({ vesselFilter: 'all', docScopeType: 'shared_docs', docGroupFilter: 'all' });
+                              } else if (item.key === 'Documents') {
+                                host._pushFolderNav([{ id: 'lib:documents', name: 'Documents' }], 'Documents');
+                                host.setState({ vesselFilter: 'all', docScopeType: 'documents', docGroupFilter: 'all' });
+                              } else if (item.key === 'SharePoint Sites') {
+                                host._pushFolderNav([{ id: 'sites_root', name: 'SharePoint Sites' }], 'SharePoint Sites');
+                                host.setState({ vesselFilter: 'all', docScopeType: 'sites', docGroupFilter: 'all' });
+                                if ((host.state.documentSites || []).length === 0) {
+                                  void host._loadDocumentSites().catch(() => undefined);
+                                }
+                              } else if (item.liveFolderId && activeLiveSite) {
+                                host._pushFolderNav([
+                                  { id: 'sites_root', name: 'SharePoint Sites' },
+                                  { id: `site:${activeLiveSite.site_id}`, name: activeLiveSite.sp_site_name || activeLiveSite.site_key },
+                                  { id: `drive:${activeLiveSite.drive_id}`, name: activeLiveSite.sp_site_name || 'Documents' },
+                                  { id: item.liveFolderId, name: item.key },
+                                ], 'SharePoint Sites');
+                              } else {
+                                host._pushFolderNav([{ id: item.key, name: item.key }], item.key as MainFolderKey);
+                                host.setState({ vesselFilter: 'all', docScopeType: 'vessels' });
+                              }
+                            }}
+                            style={{
+                              background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
+                              display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                            }}
+                          >
+                            <div style={{ width: 44, height: 44, borderRadius: 10, background: item.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{item.emoji}</div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.key}</div>
+                              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                                {item.key === 'Kaizen - Knowledge Bank' ? 'Knowledge base' :
+                                 item.key === 'Shared Documents' ? `${activeLiveSite?.sp_site_name || 'Selected site'} · SharePoint Library` :
+                                 item.key === 'Documents' ? 'Site Documents Library' :
+                                 item.liveFolderId ? 'Live SharePoint folder' :
+                                 item.key === 'SharePoint Sites' ? `${(host.state.documentSites || []).length || 4} connected sites` :
+                                 `${displayVessels.length} vessels`}
+                              </div>
+                            </div>
+                            <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
+                          </div>
+                        ))}
                       </div>
-                      <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
-                    </div>
-                  ))}
-                </div>
                 {(textFilter || vesselFilter !== 'all' || docGroupFilter !== 'all' || docCategoryFilter !== 'all' || docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all' || docSubCategoryFilter !== 'all' || attachmentFilter !== 'all') && (
                   <div style={{ marginTop: 24, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
                     <div style={{ padding: '14px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
@@ -2048,6 +3375,484 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 )}
               </div>
 
+            ) : atSitesRoot ? (
+              (() => {
+                // ── Level 1: List of SharePoint Sites ──
+                if (stackLevel === 1) {
+                  const sitesList = host.state.documentSites || [];
+
+                  if (sitesList.length === 0) {
+                    return (
+                      <div style={{ background: '#fff', borderRadius: 14, border: '1px dashed #cbd5e1', padding: 48, textAlign: 'center', color: '#94a3b8' }}>
+                        <div style={{ fontSize: 32, marginBottom: 8 }}>🌐</div>
+                        <div style={{ fontWeight: 600, color: '#475569', fontSize: 15 }}>No configured document site found</div>
+                        <div style={{ fontSize: 13, marginTop: 4 }}>Configure a SharePoint document site before browsing its libraries.</div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Connected SharePoint Sites ({sitesList.length})
+                        </div>
+                        <span style={{ fontSize: 12, color: '#64748b' }}>Select a SharePoint site to view document libraries</span>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+                        {sitesList.map((site, sIdx) => {
+                          const siteName = site.sp_site_name || site.site_key;
+                          const siteId = site.site_id || site.site_key;
+                          const isActive = site.site_key === host.state.activeDocumentSite;
+                          return (
+                            <div
+                              key={siteId + sIdx}
+                              onClick={() => {
+                                const siteNodeId = `site:${siteId}`;
+                                host._pushFolderNav([...folderPathStack, { id: siteNodeId, name: siteName }], 'SharePoint Sites');
+                              }}
+                              style={{
+                                background: '#fff', borderRadius: 14, border: isActive ? '2px solid #0284c7' : '1px solid #e2e8f0',
+                                padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'all 0.15s ease',
+                              }}
+                            >
+                              <div style={{
+                                width: 48, height: 48, borderRadius: 12, background: isActive ? '#e0f2fe' : '#f8fafc',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24,
+                              }}>
+                                🌐
+                              </div>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontWeight: 700, fontSize: 15, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {siteName}
+                                </div>
+                                <div style={{ fontSize: 12, color: '#64748b', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <span>SharePoint Site</span>
+                                  {isActive && (
+                                    <span style={{ background: '#dcfce7', color: '#15803d', fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4 }}>
+                                      Active
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <span style={{ color: '#0284c7', fontSize: 18, fontWeight: 700 }}>›</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                }
+
+                // ── Level 2: Site Libraries / Drives ──
+                const siteNode = folderPathStack[1];
+                const rawSiteId = (siteNode?.id || '').replace(/^site:/, '');
+                const matchedSite = (host.state.documentSites || []).find(s =>
+                  s.site_id === rawSiteId || s.site_key === rawSiteId || s.sp_site_name === siteNode?.name
+                );
+                const effectiveSiteId = matchedSite?.site_id || rawSiteId;
+
+                if (stackLevel === 2) {
+                  const cachedDrives = host._getOrLoadSiteDrives(effectiveSiteId);
+                  const drivesList = cachedDrives || (matchedSite?.drive_id ? [{ id: matchedSite.drive_id, name: matchedSite.default_library_name || 'Documents' }] : null);
+
+                  if (!drivesList) {
+                    return (
+                      <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+                        <div style={{ fontSize: 24, marginBottom: 8, animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</div>
+                        <div>Loading SharePoint document libraries for {siteNode?.name}...</div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Libraries in {siteNode?.name} ({drivesList.length})
+                        </div>
+                        <span style={{ fontSize: 12, color: '#64748b' }}>Select a document library to browse folders and files</span>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+                        {drivesList.map((drive, dIdx) => (
+                          <div
+                            key={drive.id + dIdx}
+                            onClick={() => {
+                              host._pushFolderNav([...folderPathStack, { id: `drive:${drive.id}`, name: drive.name }], 'SharePoint Sites');
+                            }}
+                            style={{
+                              background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0',
+                              padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                            }}
+                          >
+                            <div style={{
+                              width: 48, height: 48, borderRadius: 12, background: '#fef3c7',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24,
+                            }}>
+                              📚
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 700, fontSize: 15, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {drive.name}
+                              </div>
+                              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Document Library</div>
+                            </div>
+                            <span style={{ color: '#0284c7', fontSize: 18, fontWeight: 700 }}>›</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                }
+
+                // ── Level >= 3: Folders & Files within Drive ──
+                const driveNode = folderPathStack[2];
+                const rawDriveId = (driveNode?.id || '').replace(/^drive:/, '') || matchedSite?.drive_id || '';
+                const currentNode = folderPathStack[folderPathStack.length - 1];
+                const isDriveRoot = stackLevel === 3;
+                let currentFolderId = isDriveRoot ? 'root' : (currentNode?.id || 'root');
+
+                // Breadcrumbs rebuilt from list rows can contain synthetic sf_* IDs.
+                // Resolve those IDs from the active site's live path before asking
+                // Graph for the folder children.
+                if (!isDriveRoot && /^sf_/i.test(currentFolderId)) {
+                  const breadcrumbSegments = folderPathStack.slice(3).map(node => node.name).filter(Boolean);
+                  const breadcrumbPath = breadcrumbSegments.join('/').toLowerCase();
+                  const libraryRelativePath = /^(shared documents|documents)$/i.test(breadcrumbSegments[0] || '')
+                    ? breadcrumbSegments.slice(1).join('/').toLowerCase()
+                    : breadcrumbPath;
+                  const pathCandidates = [breadcrumbPath, libraryRelativePath].filter(Boolean);
+                  const liveMatch = (host.state.documentLiveFolders || []).find(folder => {
+                    const livePath = (folder.path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLowerCase();
+                    return pathCandidates.some(candidate => livePath === candidate || livePath.endsWith(`/${candidate}`));
+                  });
+                  currentFolderId = liveMatch?.id || breadcrumbSegments.join('/');
+                }
+
+                // Cannot render without a resolved drive — show a loading/error state
+                if (!rawDriveId) {
+                  return (
+                    <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+                      <div style={{ fontSize: 24, marginBottom: 8 }}>⏳</div>
+                      <div>Resolving SharePoint document library{siteNode?.name ? ` for ${siteNode.name}` : ''}...</div>
+                    </div>
+                  );
+                }
+
+                const folderData = host._getOrLoadSiteFolderChildren(effectiveSiteId, rawDriveId, currentFolderId);
+
+                if (folderData.loading && folderData.items.length === 0) {
+                  return (
+                    <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+                      <div style={{ fontSize: 24, marginBottom: 8, animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</div>
+                      <div>Loading contents of {currentNode?.name || 'folder'}...</div>
+                    </div>
+                  );
+                }
+
+                const baseChildFolders = folderData.items.filter(item => item.folder || (!item.file && item.name && !item.name.includes('.')));
+                const childFiles = folderData.items.filter(item => item.file || (item.name && item.name.includes('.')));
+
+                // Build merged child folders list including optimistic / dynamically uploaded folders
+                const liveFolderMap = new Map<string, any>();
+                baseChildFolders.forEach(f => {
+                  if (f.name) liveFolderMap.set(f.name.toLowerCase(), f);
+                });
+
+                // Inspect uploadedFilesByFolder & rows for any uploaded subfolders beneath currentNode
+                const currentSegments = folderPathStack.slice(3).map(n => n.name.trim()).filter(Boolean);
+                const currentNodeName = (currentNode?.name || '').trim().toLowerCase();
+
+                // 1. Check uploadedFilesByFolder
+                Object.entries(host.state.uploadedFilesByFolder || {}).forEach(([key, fList]) => {
+                  if (!Array.isArray(fList) || fList.length === 0) return;
+                  if (host._appDeletedItemIds.has(key)) return;
+                  if (/^01[A-Za-z0-9]{15,}$/.test(key.trim())) return;
+                  const keyClean = key.replace(/\\/g, '/');
+                  const keySegs = keyClean.split(/[>/]/).map(s => s.trim()).filter(Boolean);
+                  if (keySegs.length === 0) return;
+
+                  let targetChildSeg: string | null = null;
+                  if (currentSegments.length > 0) {
+                    const startsWithCurrent = currentSegments.every((seg, idx) => keySegs[idx]?.toLowerCase() === seg.toLowerCase());
+                    if (startsWithCurrent && keySegs.length > currentSegments.length) {
+                      targetChildSeg = keySegs[currentSegments.length];
+                    }
+                  } else if (isDriveRoot && keySegs.length > 0) {
+                    targetChildSeg = keySegs[0];
+                  } else if (currentNodeName) {
+                    const idx = keySegs.findIndex(s => s.toLowerCase() === currentNodeName);
+                    if (idx !== -1 && idx + 1 < keySegs.length) {
+                      targetChildSeg = keySegs[idx + 1];
+                    }
+                  }
+
+                  if (targetChildSeg && isDisplayableFolderName(targetChildSeg)) {
+                    const norm = targetChildSeg.toLowerCase();
+                    if (!liveFolderMap.has(norm)) {
+                      liveFolderMap.set(norm, {
+                        id: `sf_${targetChildSeg}`,
+                        name: targetChildSeg,
+                        folder: { childCount: fList.length },
+                        webUrl: '',
+                        lastModifiedDateTime: 'Just now',
+                      });
+                    }
+                  }
+                });
+
+                // 2. Check rows
+                (host.state.rows || []).forEach(r => {
+                  if (!r.subFolderPath || host._appDeletedItemIds.has(r.uploadFolderId)) return;
+                  const rSegs = r.subFolderPath.split(/[>/]/).map(s => s.trim()).filter(Boolean);
+                  if (rSegs.length === 0) return;
+
+                  let targetChildSeg: string | null = null;
+                  if (currentSegments.length > 0) {
+                    const startsWithCurrent = currentSegments.every((seg, idx) => rSegs[idx]?.toLowerCase() === seg.toLowerCase());
+                    if (startsWithCurrent && rSegs.length > currentSegments.length) {
+                      targetChildSeg = rSegs[currentSegments.length];
+                    }
+                  } else if (isDriveRoot && rSegs.length > 0) {
+                    targetChildSeg = rSegs[0];
+                  } else if (currentNodeName) {
+                    const idx = rSegs.findIndex(s => s.toLowerCase() === currentNodeName);
+                    if (idx !== -1 && idx + 1 < rSegs.length) {
+                      targetChildSeg = rSegs[idx + 1];
+                    }
+                  }
+
+                  if (targetChildSeg && isDisplayableFolderName(targetChildSeg)) {
+                    const norm = targetChildSeg.toLowerCase();
+                    if (!liveFolderMap.has(norm)) {
+                      liveFolderMap.set(norm, {
+                        id: r.uploadFolderId || `sf_${targetChildSeg}`,
+                        name: targetChildSeg,
+                        folder: { childCount: 1 },
+                        webUrl: '',
+                        lastModifiedDateTime: 'Just now',
+                      });
+                    }
+                  }
+                });
+
+                const childFolders = Array.from(liveFolderMap.values());
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+                    {/* Folders Section */}
+                    {childFolders.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          Folders ({childFolders.length})
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
+                          {childFolders.map((sf, idx) => {
+                            const isFolder2 = (item: any): boolean => !!(item.folder || (!item.file && item.name && !item.name.includes('.')));
+                            const isFile2 = (item: any): boolean => !!(item.file || (item.name && item.name.includes('.')));
+                            const sfChildData2 = sf.id ? host._getOrLoadSiteFolderChildren(effectiveSiteId, rawDriveId, sf.id) : null;
+                            const sfLoading2 = sfChildData2 ? (sfChildData2.loading && sfChildData2.items.length === 0) : false;
+                            const sfFolderCount2 = sfChildData2 && !sfLoading2 ? sfChildData2.items.filter(isFolder2).length : null;
+                            const sfFileCount2  = sfChildData2 && !sfLoading2 ? sfChildData2.items.filter(isFile2).length  : null;
+                            const sfTotal2 = sf.folder?.childCount ?? 0;
+                            return (
+                              <div
+                                key={sf.id || sf.name + idx}
+                                onClick={() => {
+                                  host._pushFolderNav([...folderPathStack, { id: sf.id, name: sf.name }], 'SharePoint Sites');
+                                }}
+                                style={{
+                                  background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
+                                  display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
+                                  boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                                }}
+                              >
+                                <div style={{
+                                  width: 44, height: 44, borderRadius: 10, background: '#e0f2fe',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#0284c7',
+                                }}>
+                                  📁
+                                </div>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {sf.name}
+                                  </div>
+                                  <div style={{ fontSize: 12, color: '#64748b', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                    {sfLoading2 ? (
+                                      <span style={{ color: '#94a3b8', fontSize: 10 }}>{sfTotal2 > 0 ? `${sfTotal2} items` : '···'}</span>
+                                    ) : (
+                                      <>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFolderCount2 ?? 0) > 0 ? '#e0f2fe' : '#f1f5f9', color: (sfFolderCount2 ?? 0) > 0 ? '#0369a1' : '#94a3b8', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📁 {sfFolderCount2 ?? 0}</span>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFileCount2 ?? 0) > 0 ? '#dcfce7' : '#f1f5f9', color: (sfFileCount2 ?? 0) > 0 ? '#15803d' : '#94a3b8', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📄 {sfFileCount2 ?? 0}</span>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                                <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Files Section */}
+                    {(() => {
+                      const liveFilesMap = new Map<string, any>();
+                      childFiles.forEach(f => {
+                        if (f.name) liveFilesMap.set(f.name.toLowerCase(), f);
+                      });
+
+                      // Also merge any files from uploadedFilesByFolder matching this folder
+                      const candidateUploadKeys = [
+                        currentFolderId,
+                        currentFolderId.toLowerCase(),
+                        currentNode?.id,
+                        currentNode?.name,
+                        currentNode?.name?.toLowerCase(),
+                        folderPathStack.slice(3).map(n => n.name).join(' > '),
+                        folderPathStack.slice(3).map(n => n.name).join(' > ').toLowerCase(),
+                        folderPathStack.slice(3).map(n => n.name).join('/'),
+                        folderPathStack.slice(3).map(n => n.name).join('/').toLowerCase(),
+                      ].filter(Boolean) as string[];
+
+                      candidateUploadKeys.forEach(k => {
+                        const localUploads = host.state.uploadedFilesByFolder[k] || [];
+                        localUploads.forEach((upFile: any) => {
+                          if (upFile?.name && !liveFilesMap.has(upFile.name.toLowerCase())) {
+                            liveFilesMap.set(upFile.name.toLowerCase(), {
+                              id: upFile.id || upFile.name,
+                              name: upFile.name,
+                              file: {},
+                              size: upFile.size,
+                              lastModifiedDateTime: upFile.date || 'Just now',
+                              webUrl: upFile.webUrl || '',
+                            });
+                          }
+                        });
+                      });
+
+                      const displayChildFiles = Array.from(liveFilesMap.values());
+
+                      return (
+                        <>
+                          {displayChildFiles.length > 0 && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                              <div style={{ fontSize: 12, fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                Files ({displayChildFiles.length})
+                              </div>
+                              <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                                  <thead>
+                                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
+                                      <th style={{ padding: '10px 16px' }}>FILE NAME</th>
+                                      <th style={{ padding: '10px 16px' }}>SIZE</th>
+                                      <th style={{ padding: '10px 16px' }}>DATE MODIFIED</th>
+                                      <th style={{ padding: '10px 16px', textAlign: 'right' }}>ACTION</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {displayChildFiles.map((file, idx) => {
+                                      const fileSize = typeof file.size === 'number'
+                                        ? (file.size > 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : `${(file.size / 1024).toFixed(1)} KB`)
+                                        : (file.size || '—');
+                                      const fileDate = file.lastModifiedDateTime
+                                        ? (typeof file.lastModifiedDateTime === 'string' && file.lastModifiedDateTime.includes('T') ? new Date(file.lastModifiedDateTime).toLocaleString() : file.lastModifiedDateTime)
+                                        : '—';
+                                      const fileUrl = file.web_url || file.webUrl || file.download_url || '';
+
+                                      return (
+                                        <tr key={file.id || file.name + idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                                          <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10 }}>
+                                            <span style={{ fontSize: 18 }}>📄</span>
+                                            <span
+                                              onClick={() => {
+                                                if (fileUrl) {
+                                                  window.open(fileUrl, '_blank');
+                                                } else {
+                                                  void host._openDocumentFile(file.id, file.name, folderPathStack.map(n => n.name).join(' > '));
+                                                }
+                                              }}
+                                              style={{ cursor: 'pointer', color: '#0284c7', textDecoration: 'underline' }}
+                                              title={`Click to view/download ${file.name}`}
+                                            >
+                                              {file.name}
+                                            </span>
+                                          </td>
+                                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{fileSize}</td>
+                                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{fileDate}</td>
+                                          <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                if (fileUrl) {
+                                                  window.open(fileUrl, '_blank');
+                                                } else {
+                                                  void host._openDocumentFile(file.id, file.name, folderPathStack.map(n => n.name).join(' > '));
+                                                }
+                                              }}
+                                              style={{
+                                                background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6,
+                                                padding: '4px 10px', fontSize: 12, fontWeight: 600, color: '#0284c7', cursor: 'pointer',
+                                              }}
+                                            >
+                                              Download / Open
+                                            </button>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          )}
+
+                          {childFolders.length === 0 && displayChildFiles.length === 0 && (
+                            <div style={{ background: '#fff', borderRadius: 14, border: '1px dashed #cbd5e1', padding: 48, textAlign: 'center', color: '#94a3b8' }}>
+                              <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
+                              <div style={{ fontWeight: 600, color: '#475569', fontSize: 15 }}>This folder is empty</div>
+                              <div style={{ fontSize: 13, marginTop: 4 }}>No files or subfolders found in this directory. You can upload files or folders using the buttons above.</div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                );
+              })()
+            ) : atSharedDocsRoot ? (
+              sharedDocsSite ? (
+                renderLibraryBrowser(
+                  sharedDocsSite.site_id,
+                  sharedDocsSite.drive_id || '',
+                  sharedDocsSite.default_library_name || 'Shared Documents',
+                  `${sharedDocsSite.sp_site_name || sharedDocsSite.site_key} · SharePoint Library`,
+                  'Shared Documents'
+                )
+              ) : (
+                <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+                  Loading configured document site...
+                </div>
+              )
+            ) : atDocsRoot ? (
+              docsSite ? (
+                renderLibraryBrowser(
+                  docsSite.site_id,
+                  docsSite.drive_id || '',
+                  docsSite.default_library_name || 'Documents',
+                  `${docsSite.sp_site_name || docsSite.site_key} · Document Library`,
+                  'Documents'
+                )
+              ) : (
+                <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+                  Loading configured document site...
+                </div>
+              )
             ) : atDepartmentVesselList && !showSelectedVesselCategories ? (
 
               /* Level 1: Inside a Main Department — Show Vessels + Common for all ships */
@@ -2215,18 +4020,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           <span>{isAtCategoryLevel ? 'Document Section' : (stackLevel === 3 ? 'Category' : 'Sub-Category')}</span>
                           {(() => {
                             const fc = subfolderFileCountMap.get(sfName) ?? subfolderFileCountMap.get(sfName.trim().toLowerCase()) ?? 0;
-                            const hasLiveData = resolvedCurrentFolderId && host.state.spoFolderMap.has(resolvedCurrentFolderId);
-                            const badgeColor = fc > 0 ? '#0284c7' : (hasLiveData ? '#94a3b8' : '#cbd5e1');
+                            const fsc = subfolderFolderCountMap.get(sfName) ?? subfolderFolderCountMap.get(sfName.trim().toLowerCase()) ?? 0;
                             return (
-                              <span style={{
-                                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                                background: badgeColor, color: '#fff',
-                                borderRadius: 20, padding: '1px 8px',
-                                fontSize: 10, fontWeight: 700, lineHeight: '16px',
-                                whiteSpace: 'nowrap',
-                              }}>
-                                {fc} {fc === 1 ? 'file' : 'files'}
-                              </span>
+                              <>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: fsc > 0 ? '#e0f2fe' : '#f1f5f9', color: fsc > 0 ? '#0369a1' : '#94a3b8', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px', whiteSpace: 'nowrap' }}>📁 {fsc}</span>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: fc > 0 ? '#dcfce7' : '#f1f5f9', color: fc > 0 ? '#15803d' : '#94a3b8', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px', whiteSpace: 'nowrap' }}>📄 {fc}</span>
+                              </>
                             );
                           })()}
                         </div>
@@ -2489,6 +4288,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     <th style={{ padding: '10px 12px' }}>VESSEL NAME</th>
                     <th style={{ padding: '10px 12px' }}>MAIN FOLDER</th>
                     <th style={{ padding: '10px 12px' }}>DOCUMENT SECTION</th>
+                    <th style={{ padding: '10px 12px' }}>GROUP</th>
                     <th style={{ padding: '10px 12px' }}>CATEGORY</th>
                     <th style={{ padding: '10px 12px' }}>SUB-CATEGORY</th>
                     <th style={{ padding: '10px 12px' }}>FOLDER PATH</th>
@@ -2501,8 +4301,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 <tbody>
                   {pageGroupedRows.length === 0 ? (
                     <tr>
-                      <td colSpan={11} style={{ padding: '48px 16px', textAlign: 'center' }}>
-                        {(host.state.loading || Boolean(vesselLoadingName) || (documentFilesLoading && filtered.length === 0) || documentVesselsLoadingMore) ? (
+                      <td colSpan={12} style={{ padding: '48px 16px', textAlign: 'center' }}>
+                        {(host.state.loading || (Boolean(vesselLoadingName) && filtered.length === 0) || (documentFilesLoading && allRows.length === 0) || (documentVesselsLoadingMore && filtered.length === 0)) ? (
                           <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
                             <div style={{
                               width: 32, height: 32, border: '3px solid #e0f2fe',
@@ -2519,9 +4319,44 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             </div>
                           </div>
                         ) : (
-                          <span style={{ color: '#94a3b8', fontSize: 13 }}>
-                            No documents found. {textFilter || vesselFilter !== 'all' || docGroupFilter !== 'all' || docCategoryFilter !== 'all' || docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all' || docSubCategoryFilter !== 'all' ? 'Try clearing the filters.' : ''}
-                          </span>
+                          <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                            <div style={{ fontSize: 28 }}>🔍</div>
+                            <div style={{ fontWeight: 600, fontSize: 13, color: '#475569' }}>No documents found</div>
+                            <div style={{ color: '#94a3b8', fontSize: 12, maxWidth: 400 }}>
+                              {textFilter || vesselFilter !== 'all' || docGroupFilter !== 'all' || docCategoryFilter !== 'all' || docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all' || docSubCategoryFilter !== 'all'
+                                ? 'No rows match your current filter criteria.'
+                                : 'No documents or folders are available for this section.'}
+                            </div>
+                            {(textFilter || vesselFilter !== 'all' || docGroupFilter !== 'all' || docCategoryFilter !== 'all' || docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all' || docSubCategoryFilter !== 'all') && (
+                              <button
+                                type="button"
+                                onClick={() => host.setState({
+                                  textFilter: '',
+                                  vesselFilter: 'all',
+                                  docGroupFilter: 'all',
+                                  docCategoryFilter: 'all',
+                                  docGroupLevelFilter: 'all',
+                                  docLeafCategoryFilter: 'all',
+                                  docSubCategoryFilter: 'all',
+                                  catFilter: 'all',
+                                  docListPage: 0,
+                                })}
+                                style={{
+                                  marginTop: 6,
+                                  background: '#eff6ff',
+                                  color: '#2563eb',
+                                  border: '1px solid #bfdbfe',
+                                  borderRadius: 6,
+                                  padding: '4px 12px',
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                Clear filters
+                              </button>
+                            )}
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -2531,9 +4366,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     const hasFiles = r.files.length > 0;
                     const rowFileIds = r.files.map(f => f.id);
                     const rowSelectedCount = rowFileIds.filter(id => listViewSelectedFiles.has(id)).length;
-                    const rowTail = getFolderTailSegments(r.subFolderPath, r.vesselName, r.group);
-                    const documentSectionLabel = rowTail[0] || 'Drawings and Manuals';
-                    const categoryLabel = r.category || rowTail[2] || rowTail[1] || 'To be Classified';
+                    const listViewLabels = getListViewLabels(r);
 
                     return (
                       <tr key={`${r.groupKey}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.1s' }}
@@ -2542,30 +4375,44 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       >
                         <td style={{ padding: '10px 10px', color: '#94a3b8', fontSize: 11, fontFamily: 'monospace', textAlign: 'center', verticalAlign: 'top' }}>{globalIdx}</td>
                         <td style={{ padding: '10px 12px', fontWeight: 700, color: '#0f172a', verticalAlign: 'top' }}>
-                          {r.vesselName === 'Common for all vessels' ? (
+                          {listViewLabels.vessel === 'Not Listed' || listViewLabels.vessel === 'Vessel name not listed' ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#ffedd5', color: '#c2410c', borderRadius: 6, padding: '2px 7px', fontSize: 11, fontWeight: 700 }}>
+                              Not Listed
+                            </span>
+                          ) : listViewLabels.vessel === 'Common for all vessels' ? (
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#fef3c7', color: '#92400e', borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 700 }}>
                               <span>📁</span> Common for all vessels
                             </span>
-                          ) : r.vesselName === 'Kaizen - Knowledge Bank' ? (
+                          ) : listViewLabels.vessel === 'Kaizen - Knowledge Bank' ? (
                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#ede9fe', color: '#6b21a8', borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 700 }}>
                               <span>📚</span> Kaizen - Knowledge Bank
                             </span>
                           ) : (
-                            r.vesselName
+                            listViewLabels.vessel
                           )}
                         </td>
                         <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
                           <span style={{
                             display: 'inline-block', borderRadius: 8, padding: '3px 8px', fontSize: 11, fontWeight: 600,
-                            background: r.group === 'Kaizen - Knowledge Bank' ? '#ede9fe' : (r.group === 'Insurance' ? '#fef3c7' : (r.group === 'Commercial & Chartering' ? '#dcfce7' : '#eff6ff')),
-                            color: r.group === 'Kaizen - Knowledge Bank' ? '#6b21a8' : (r.group === 'Insurance' ? '#b45309' : (r.group === 'Commercial & Chartering' ? '#15803d' : '#2563eb')),
+                            background: listViewLabels.mainFolder === 'Main folder not assigned' ? '#f1f5f9' : (listViewLabels.mainFolder === 'Kaizen - Knowledge Bank' ? '#ede9fe' : (listViewLabels.mainFolder === 'Insurance' ? '#fef3c7' : (listViewLabels.mainFolder === 'Commercial & Chartering' ? '#dcfce7' : '#eff6ff'))),
+                            color: listViewLabels.mainFolder === 'Main folder not assigned' ? '#64748b' : (listViewLabels.mainFolder === 'Kaizen - Knowledge Bank' ? '#6b21a8' : (listViewLabels.mainFolder === 'Insurance' ? '#b45309' : (listViewLabels.mainFolder === 'Commercial & Chartering' ? '#15803d' : '#2563eb'))),
+                            fontStyle: listViewLabels.mainFolder === 'Main folder not assigned' ? 'italic' : 'normal',
                           }}>
-                            {r.group}
+                            {listViewLabels.mainFolder}
                           </span>
                         </td>
-                        <td style={{ padding: '10px 12px', fontWeight: 600, color: '#334155', verticalAlign: 'top' }}>{documentSectionLabel}</td>
-                        <td style={{ padding: '10px 12px', fontWeight: 700, color: '#1e293b', verticalAlign: 'top' }}>{categoryLabel}</td>
-                        <td style={{ padding: '10px 12px', fontWeight: 600, color: '#1e293b', verticalAlign: 'top' }}>{r.subCategory || r.category}</td>
+                        <td style={{ padding: '10px 12px', fontWeight: 600, color: listViewLabels.documentSection === 'Document section not assigned' ? '#94a3b8' : '#334155', fontStyle: listViewLabels.documentSection === 'Document section not assigned' ? 'italic' : 'normal', verticalAlign: 'top' }}>
+                          {listViewLabels.documentSection}
+                        </td>
+                        <td style={{ padding: '10px 12px', fontWeight: 600, color: listViewLabels.group === 'Group not assigned' ? '#94a3b8' : '#1e293b', fontStyle: listViewLabels.group === 'Group not assigned' ? 'italic' : 'normal', verticalAlign: 'top' }}>
+                          {listViewLabels.group}
+                        </td>
+                        <td style={{ padding: '10px 12px', fontWeight: 700, color: listViewLabels.category === 'Category not assigned' ? '#94a3b8' : '#1e293b', fontStyle: listViewLabels.category === 'Category not assigned' ? 'italic' : 'normal', verticalAlign: 'top' }}>
+                          {listViewLabels.category}
+                        </td>
+                        <td style={{ padding: '10px 12px', fontWeight: 600, color: (listViewLabels.subCategory === 'Sub-category not assigned' || !listViewLabels.subCategory) ? '#94a3b8' : '#1e293b', fontStyle: (listViewLabels.subCategory === 'Sub-category not assigned' || !listViewLabels.subCategory) ? 'italic' : 'normal', verticalAlign: 'top' }}>
+                          {listViewLabels.subCategory || 'Sub-category not assigned'}
+                        </td>
                         <td style={{ padding: '10px 12px', color: '#64748b', fontSize: 11, verticalAlign: 'top' }} title={r.subFolderPath}>
                           <button
                             type="button"
@@ -2647,23 +4494,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         </button>
                                       );
                                     } else {
-                                      return (
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            host._openVesselSuggestions([new File([], file.name)], r.vesselName || '');
-                                          }}
-                                          title="Vessel name not detected by OCR — click to assign vessel"
-                                          style={{
-                                            background: '#fff7ed', border: '1px solid #fed7aa',
-                                            borderRadius: 6, padding: '1px 6px', fontSize: 10, color: '#c2410c',
-                                            cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 3,
-                                          }}
-                                        >
-                                          <span>⚠️</span> Vessel: Not detected
-                                        </button>
-                                      );
+                                      return null;
                                     }
                                   })()}
                                 </div>

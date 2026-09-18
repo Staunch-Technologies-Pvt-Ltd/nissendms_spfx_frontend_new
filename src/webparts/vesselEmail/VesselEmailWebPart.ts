@@ -198,7 +198,7 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
       /(?:debugManifestsFile|localhost:4321)/i.test(window.location.href);
     if ((this.context.isServedFromLocalhost || hostedFromLocalDev) &&
         (!configured || configured === 'https://nk-dms-dev.sg-nissenkaiun.com')) {
-      return 'http://localhost:8000';
+      return 'http://127.0.0.1:8000';
     }
     return configured || 'https://nk-dms-dev.sg-nissenkaiun.com';
   }

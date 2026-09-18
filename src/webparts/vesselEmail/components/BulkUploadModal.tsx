@@ -29,6 +29,8 @@ export interface BulkUploadModalProps {
   subFolderPath: string;
   vesselName: string;
   currentFolderNode: { id: string; name: string } | null;
+  targetSiteId?: string;
+  targetDriveId?: string;
   onClose: () => void;
 }
 
@@ -43,7 +45,7 @@ function fmtSize(bytes: number): string {
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function BulkUploadModal({
-  host, files, folderId, subFolderPath, vesselName, currentFolderNode, onClose,
+  host, files, folderId, subFolderPath, vesselName, currentFolderNode, targetSiteId, targetDriveId, onClose,
 }: BulkUploadModalProps): React.ReactElement {
   const isMobile = isMobileWidth(host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
 
@@ -126,7 +128,11 @@ export function BulkUploadModal({
             folderId,
             targetSubFolderPath,
             vesselName,
-            file
+            file,
+            false,
+            targetSiteId,
+            targetDriveId,
+            subFolderPath
           );
 
           host._replaceUploadingFilePlaceholder(optimisticKeys, optimisticId, file, {
@@ -135,16 +141,6 @@ export function BulkUploadModal({
             date: result.statusPending ? 'Queued for approval' : 'Just now',
             uploadedAt: Date.now(),
           });
-
-          // Queue file into unified OCR staging pipeline (fire-and-forget)
-          host._triggerOcrStaging(
-            result.fileId,
-            file,
-            result.folderId || folderId,
-            targetSubFolderPath,
-            vesselName,
-            'folder'
-          );
 
           const fileId = result.fileId || `file_${Date.now()}_${i}`;
           const newUpload = {
@@ -229,7 +225,6 @@ export function BulkUploadModal({
             }
 
             // Also update matching row in rows array
-            let updatedRows = baseRows;
             const targetParts = (targetSubFolderPath || '').split('>').map(s => s.trim()).filter(Boolean);
             const targetLeaf = targetParts[targetParts.length - 1] || (currentFolderNode?.name || 'Uploaded Files');
             const targetCategory = targetParts.length > 1 ? targetParts[targetParts.length - 2] : targetLeaf;
@@ -240,38 +235,62 @@ export function BulkUploadModal({
               : `bulk||${targetCategory}||${targetLeaf}||${targetSubFolderPath}`;
             const targetUploadFolderId = result.folderId || refRow?.uploadFolderId || folderId;
 
-            const existingRowIdx = baseRows.findIndex(r =>
+            const effectiveRefRow: FlatRow = refRow || {
+              srNo: String(baseRows.length + 1),
+              vesselName: vesselName || '',
+              group: (host.state.docMainFolder || 'Technical & Crewing'),
+              category: targetCategory,
+              subCategory: targetLeaf,
+              subFolderPath: targetSubFolderPath,
+              fileName: null,
+              fileId: null,
+              filePending: false,
+              fileUploadedAt: undefined,
+              groupKey: targetGroupKey,
+              uploadFolderId: targetUploadFolderId,
+            };
+
+            let updatedRows = [...baseRows];
+
+            // Ensure folder row exists for this targetSubFolderPath (fileName: null)
+            const hasFolderRow = updatedRows.some(r =>
+              (r.subFolderPath || '').toLowerCase() === targetNorm && !r.fileName
+            );
+            if (!hasFolderRow) {
+              const nextSrBase = String(updatedRows.length + 1);
+              const folderRow: FlatRow = {
+                ...effectiveRefRow,
+                srNo: nextSrBase,
+                category: targetCategory,
+                subCategory: targetLeaf,
+                subFolderPath: targetSubFolderPath,
+                fileName: null,
+                fileId: null,
+                filePending: false,
+                fileUploadedAt: undefined,
+                groupKey: targetGroupKey,
+                uploadFolderId: targetUploadFolderId,
+              };
+              updatedRows.push(folderRow);
+            }
+
+            // Check if file row already exists for this file
+            const existingFileIdx = updatedRows.findIndex(r =>
               ((r.subFolderPath || '').toLowerCase() === targetNorm || (r.groupKey || '').toLowerCase() === targetGroupKey.toLowerCase()) &&
-              !r.fileName
+              r.fileName?.toLowerCase() === file.name.toLowerCase()
             );
 
-            if (existingRowIdx !== -1) {
-              updatedRows = baseRows.map((r, idx) =>
-                idx === existingRowIdx
+            if (existingFileIdx !== -1) {
+              updatedRows = updatedRows.map((r, idx) =>
+                idx === existingFileIdx
                   ? { ...r, fileName: file.name, fileId, filePending: result.statusPending, fileUploadedAt: newUpload.uploadedAt }
                   : r
               );
-            } else if (refRow) {
-              const alreadyHasFolderRow = baseRows.some(r => (r.subFolderPath || '').toLowerCase() === targetNorm);
-              const nextSrBase = String(baseRows.length + 1);
-              const folderRow = alreadyHasFolderRow
-                ? null
-                : {
-                    ...refRow,
-                    srNo: nextSrBase,
-                    category: targetCategory,
-                    subCategory: targetLeaf,
-                    subFolderPath: targetSubFolderPath,
-                    fileName: null,
-                    fileId: null,
-                    filePending: false,
-                    fileUploadedAt: undefined,
-                    groupKey: targetGroupKey,
-                    uploadFolderId: targetUploadFolderId,
-                  };
-              const newRow = {
-                ...refRow,
-                srNo: `${nextSrBase}.1`,
+            } else {
+              const nextFileSr = `${updatedRows.length + 1}.1`;
+              const fileRow: FlatRow = {
+                ...effectiveRefRow,
+                srNo: nextFileSr,
                 category: targetCategory,
                 subCategory: targetLeaf,
                 subFolderPath: targetSubFolderPath,
@@ -282,8 +301,33 @@ export function BulkUploadModal({
                 filePending: result.statusPending,
                 fileUploadedAt: newUpload.uploadedAt,
               };
-              updatedRows = [...baseRows, newRow];
-              if (folderRow) updatedRows = [...updatedRows, folderRow];
+              updatedRows.push(fileRow);
+            }
+
+            // Optimistically update site folder cache for parent folder in SharePoint Sites view
+            if (targetSiteId && targetDriveId && relativePath && relativePath.includes('/')) {
+              const topFolderSeg = relativePath.split('/')[0];
+              const pKeys = [
+                currentFolderNode?.id ? `${targetSiteId}::${targetDriveId}::${currentFolderNode.id}` : '',
+                folderId ? `${targetSiteId}::${targetDriveId}::${folderId}` : '',
+              ].filter(Boolean);
+              const folderItem = {
+                id: result.folderId || `folder_${topFolderSeg}`,
+                name: topFolderSeg,
+                folder: { childCount: 1 },
+                webUrl: '',
+                lastModifiedDateTime: new Date().toISOString(),
+              };
+              pKeys.forEach(pKey => {
+                const pCache = host._siteFolderItemsCache.get(pKey);
+                if (pCache) {
+                  if (!pCache.items.some((it: any) => (it.name || '').toLowerCase() === topFolderSeg.toLowerCase())) {
+                    pCache.items = [folderItem, ...pCache.items];
+                  }
+                } else {
+                  host._siteFolderItemsCache.set(pKey, { items: [folderItem], loading: false, parentPath: '' });
+                }
+              });
             }
 
             return { uploadedFilesByFolder, rows: updatedRows };
@@ -306,15 +350,12 @@ export function BulkUploadModal({
       setDone(true);
       setAutoCloseSeconds(10);
       void host._syncScheduler?.triggerNow().catch(() => undefined);
-
-      // ── Vessel Suggestions: trigger after bulk upload completes ──
-      // successFilesList is built synchronously inside the loop above, so no closure issue
-      const filesToAnalyse = successFilesList.length > 0 ? successFilesList : files.map(f => f.file);
-      if (filesToAnalyse.length > 0) {
-        // Small delay so the bulk-upload completion UI is visible before the suggestion wizard opens
-        window.setTimeout(() => {
-          host._openVesselSuggestions(filesToAnalyse, vesselName || undefined, successUploadEntries);
-        }, 800);
+      if (targetSiteId && targetDriveId) {
+        const refreshTargetId = currentFolderNode?.id || folderId || 'root';
+        void host._refreshSiteFolder(targetSiteId, targetDriveId, refreshTargetId);
+        if (folderId && folderId !== refreshTargetId) {
+          void host._refreshSiteFolder(targetSiteId, targetDriveId, folderId);
+        }
       }
     })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

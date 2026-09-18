@@ -16,6 +16,9 @@ export interface FlatRow {
   groupKey: string;
   uploadFolderId: string;
   monthDriven: boolean;
+  documentSection?: string;
+  groupTag?: string;
+  tags?: any;
 }
 
 
@@ -30,7 +33,10 @@ export interface GroupedRow {
   uploadFolderId: string;
   monthDriven: boolean;
   canUpload: boolean;
-  files: Array<{ id: string; name: string; size?: string; uploadedAt?: number }>;
+  documentSection?: string;
+  groupTag?: string;
+  tags?: any;
+  files: Array<{ id: string; name: string; size?: string; uploadedAt?: number; tags?: any }>;
 }
 
 export interface VesselRecord {

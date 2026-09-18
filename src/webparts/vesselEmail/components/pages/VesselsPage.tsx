@@ -22,19 +22,129 @@ import { retryUntilComplete } from '../graphFolderService';
 import { isMobileWidth } from '../responsive';
 
 
-function getSpoVesselFolderUrl(siteUrlProp?: string, vesselName?: string): string {
+function getSpoVesselFolderUrl(
+  hostOrSiteUrl?: VesselEmail | string,
+  vesselOrName?: VesselRecord | string,
+  siteUrlProp?: string
+): string {
+  let host: VesselEmail | undefined;
+  let siteUrl = '';
+  let vesselName = '';
+  let vesselObj: VesselRecord | undefined;
+
+  if (hostOrSiteUrl && typeof hostOrSiteUrl === 'object' && 'state' in hostOrSiteUrl) {
+    host = hostOrSiteUrl as VesselEmail;
+    if (vesselOrName && typeof vesselOrName === 'object' && 'name' in vesselOrName) {
+      vesselObj = vesselOrName as VesselRecord;
+      vesselName = vesselObj.name || '';
+    } else if (typeof vesselOrName === 'string') {
+      vesselName = vesselOrName;
+    }
+    siteUrl = siteUrlProp || (vesselObj ? getVesselSharePointSiteUrl(host, vesselObj) : (host.state.documentSites.find(s => s.site_key === host?.state.activeDocumentSite)?.web_url || host.props.siteUrl || ''));
+  } else {
+    siteUrl = typeof hostOrSiteUrl === 'string' ? hostOrSiteUrl : '';
+    if (vesselOrName && typeof vesselOrName === 'object' && 'name' in vesselOrName) {
+      vesselName = (vesselOrName as VesselRecord).name || '';
+    } else if (typeof vesselOrName === 'string') {
+      vesselName = vesselOrName;
+    }
+  }
+
+  // 1. If host and live folder data are available, check for an exact match in documentLiveFolders
+  if (host && vesselName) {
+    const cleanVessel = vesselName.trim().toLowerCase();
+    const liveMatch = (host.state.documentLiveFolders || []).find(f =>
+      f.is_folder !== false && f.name.trim().toLowerCase() === cleanVessel
+    );
+    if (liveMatch?.web_url) {
+      return liveMatch.web_url;
+    }
+  }
+
   const fallbackSite = 'https://nissenkaiunsingapore.sharepoint.com';
-  const site = (siteUrlProp && siteUrlProp !== '#') ? siteUrlProp : fallbackSite;
+  const effectiveSite = (siteUrl && siteUrl !== '#') ? siteUrl.trim() : fallbackSite;
+
   try {
-    const urlObj = new URL(site);
+    const urlObj = new URL(effectiveSite);
     const basePath = urlObj.pathname.replace(/\/$/, '');
-    const folderPath = vesselName
-      ? `${basePath}/Shared Documents/Technical & Crewing/${vesselName}`
-      : `${basePath}/Shared Documents`;
-    return `${urlObj.origin}${basePath}/Shared Documents/Forms/AllItems.aspx?id=${encodeURIComponent(folderPath)}`;
+
+    // Determine library name (default 'Shared Documents')
+    let libName = 'Shared Documents';
+    if (host) {
+      const activeKey = host.state.activeDocumentSite;
+      const matchedSite = host.state.documentSites.find(s => s.site_key === activeKey || s.web_url === effectiveSite);
+      if (matchedSite?.default_library_name) {
+        libName = matchedSite.default_library_name;
+      }
+    }
+
+    const encodedLib = encodeURIComponent(libName);
+
+    if (!vesselName) {
+      return `${urlObj.origin}${basePath}/${encodedLib}`;
+    }
+
+    // Determine department folder (check live folders or default to 'Technical & Crewing')
+    let deptName = 'Technical & Crewing';
+    if (host) {
+      const liveDept = (host.state.documentLiveFolders || []).find(f =>
+        f.depth === 0 && /technical/i.test(f.name)
+      );
+      if (liveDept?.name) {
+        deptName = liveDept.name;
+      }
+    }
+
+    const encodedDept = encodeURIComponent(deptName);
+    const encodedVessel = encodeURIComponent(vesselName.trim());
+
+    // Clean direct SharePoint Online folder URL:
+    // e.g. https://nissenkaiunsingapore.sharepoint.com/sites/NKSDocMan/Shared%20Documents/Technical%20%26%20Crewing/mv%20test%204
+    return `${urlObj.origin}${basePath}/${encodedLib}/${encodedDept}/${encodedVessel}`;
   } catch {
     return '#';
   }
+}
+
+function getVesselSharePointSiteUrl(host: VesselEmail, vessel: VesselRecord): string {
+  const provisionedSiteIds = vessel.provisioned_site_ids || [];
+
+  // 1. Try matching with known document sites
+  const targetSite = host.state.documentSites.find(site =>
+    provisionedSiteIds.some(id => {
+      const idStr = String(id).toLowerCase();
+      return (
+        idStr === site.site_key.toLowerCase() ||
+        (!!site.site_id && idStr === site.site_id.toLowerCase()) ||
+        (!!site.sp_site_name && idStr === site.sp_site_name.toLowerCase())
+      );
+    })
+  ) || (host.state.activeDocumentSite ? host.state.documentSites.find(s => s.site_key === host.state.activeDocumentSite) : null);
+
+  if (targetSite?.web_url) {
+    let url = targetSite.web_url.trim();
+    // If target site is NKSDocMan but web_url was set without /sites/, fix it
+    if ((targetSite.site_key.toLowerCase().includes('nks') || targetSite.sp_site_name.toLowerCase().includes('nks')) && !url.includes('/sites/')) {
+      url = 'https://nissenkaiunsingapore.sharepoint.com/sites/NKSDocMan';
+    }
+    return url;
+  }
+
+  // 2. Fallback heuristic from provisionedSiteIds or activeDocumentSite
+  const hasNks = provisionedSiteIds.some(id => {
+    const s = String(id).toLowerCase();
+    return s.includes('nks') || s.includes('docman') || s === 'local';
+  });
+  if (hasNks || (host.state.activeDocumentSite && (host.state.activeDocumentSite.toLowerCase().includes('nks') || host.state.activeDocumentSite.toLowerCase() === 'local'))) {
+    return 'https://nissenkaiunsingapore.sharepoint.com/sites/NKSDocMan';
+  }
+
+  const hasExternal = provisionedSiteIds.some(id => String(id).toLowerCase().includes('external'));
+  if (hasExternal || (host.state.activeDocumentSite && host.state.activeDocumentSite.toLowerCase().includes('external'))) {
+    return 'https://nissenkaiunsingapore.sharepoint.com/sites/NissenKaiunExternal';
+  }
+
+  return host.props.siteUrl || 'https://nissenkaiunsingapore.sharepoint.com';
 }
 
 // ── Dismiss Confirm Dialog ────────────────────────────────────────────────────
@@ -732,7 +842,17 @@ function renderUnrecognisedFolders(host: VesselEmail, items: FolderAnomalyItem[]
 
               {/* Open in SPO */}
               <a
-                href={getSpoVesselFolderUrl(host.props.siteUrl, item.name)}
+                href={getSpoVesselFolderUrl(
+                  (() => {
+                    const matchedVessel = item.vessel_name
+                      ? host.state.vessels.find(v => v.name.toLowerCase() === item.vessel_name!.toLowerCase())
+                      : undefined;
+                    return matchedVessel
+                      ? getVesselSharePointSiteUrl(host, matchedVessel)
+                      : (host.state.documentSites.find(s => s.site_key === host.state.activeDocumentSite)?.web_url || host.props.siteUrl || '');
+                  })(),
+                  item.name
+                )}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
@@ -1011,7 +1131,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
     }
 
    if (isDone) {
-      const spoUrl = getSpoVesselFolderUrl(host.props.siteUrl, vessel.name);
+      const spoUrl = getSpoVesselFolderUrl(host, vessel);
       const failedFolders = (host.state.folderCreationResults || []).filter(r => r.status === 'failed');
       const hasFailures = failedFolders.length > 0;
       return (
@@ -1150,7 +1270,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
             </button>
             {host.props.siteUrl && (
               <a
-                href={getSpoVesselFolderUrl(host.props.siteUrl, vessel.name)}
+                href={getSpoVesselFolderUrl(host, vessel)}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
@@ -1858,24 +1978,40 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
             <button onClick={() => host.setState({ folderCreationError: null })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#a4262c', fontWeight: 700 }}>✕</button>
           </div>
         )}
-        {folderCreationResults && !folderCreationError && (
-          <div style={{ marginBottom: 12, background: '#dff6dd', border: '1px solid #86efac', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#107c10', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <span>✅ SharePoint folders provisioned — {folderCreationResults.filter(r => r.status === 'created').length} created, {folderCreationResults.filter(r => r.status === 'existed').length} already existed.</span>
-              {host.props.siteUrl && (
-                <a
-                  href={getSpoVesselFolderUrl(host.props.siteUrl)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: '#0078d4', fontWeight: 600, textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: 3 }}
-                >
-                  Open SharePoint Folder ↗
-                </a>
-              )}
+        {folderCreationResults && folderCreationResults.length > 0 && !folderCreationError && (() => {
+          const createdCount = folderCreationResults.filter(r => r.status === 'created').length;
+          const existedCount = folderCreationResults.filter(r => r.status === 'existed').length;
+          if (createdCount === 0 && existedCount === 0) return null;
+
+          // Determine the vessel that was just provisioned for correct link generation
+          const provisionedVessel = selectedVessel ||
+            vessels.find(v => v.id === host.state.folderProvisioningVesselId) ||
+            vessels.find(v => (v.provisioned_site_ids || []).includes(host.state.activeDocumentSite || ''));
+          const bannerSiteUrl = provisionedVessel
+            ? getVesselSharePointSiteUrl(host, provisionedVessel)
+            : (host.state.activeDocumentSite
+                ? (host.state.documentSites.find(s => s.site_key === host.state.activeDocumentSite)?.web_url || host.props.siteUrl)
+                : host.props.siteUrl);
+          const bannerHref = getSpoVesselFolderUrl(host, provisionedVessel, bannerSiteUrl);
+          return (
+            <div style={{ marginBottom: 12, background: '#dff6dd', border: '1px solid #86efac', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#107c10', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <span>✅ SharePoint folders provisioned — {createdCount} created, {existedCount} already existed.</span>
+                {bannerHref && bannerHref !== '#' && (
+                  <a
+                    href={bannerHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: '#0078d4', fontWeight: 600, textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                  >
+                    Open SharePoint Folder ↗
+                  </a>
+                )}
+              </div>
+              <button onClick={() => host.setState({ folderCreationResults: null })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#107c10', fontWeight: 700 }}>✕</button>
             </div>
-            <button onClick={() => host.setState({ folderCreationResults: null })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#107c10', fontWeight: 700 }}>✕</button>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ── Loading State ── */}
         {isLoading ? (
@@ -2078,7 +2214,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                         );
                       })()}
                       <a
-                        href={getSpoVesselFolderUrl(host.props.siteUrl, vessel.name)}
+                        href={getSpoVesselFolderUrl(host, vessel)}
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={e => e.stopPropagation()}

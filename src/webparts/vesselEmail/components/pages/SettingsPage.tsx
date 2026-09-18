@@ -238,84 +238,153 @@ function SiteIntegrationInfo({ host }: { host: VesselEmail }): React.ReactElemen
   const [isAdmin, setIsAdmin] = React.useState<boolean>(false);
   const [showSwitchDialog, setShowSwitchDialog] = React.useState<boolean>(false);
   const [selectedNewSite, setSelectedNewSite] = React.useState<string>('');
+  // Site visibility toggle state
+  const [showHiddenSites, setShowHiddenSites] = React.useState<boolean>(false);
+  const [togglingSiteKey, setTogglingSiteKey] = React.useState<string | null>(null);
+  const [visibilityMsg, setVisibilityMsg] = React.useState<string | null>(null);
+  // Add-site state
+  const [showAddSite, setShowAddSite] = React.useState<boolean>(false);
+  const [addSiteTenantSites, setAddSiteTenantSites] = React.useState<any[]>([]);
+  const [addSiteTenantLoading, setAddSiteTenantLoading] = React.useState<boolean>(false);
+  const [addSiteSearch, setAddSiteSearch] = React.useState<string>('');
+  const [addSiteSelected, setAddSiteSelected] = React.useState<any>(null);
+  const [addSiteDrives, setAddSiteDrives] = React.useState<any[]>([]);
+  const [addSiteDrivesLoading, setAddSiteDrivesLoading] = React.useState<boolean>(false);
+  const [addSiteSelDrive, setAddSiteSelDrive] = React.useState<any>(null);
+  const [addSiteDisplayName, setAddSiteDisplayName] = React.useState<string>('');
+  const [addSiteKey, setAddSiteKey] = React.useState<string>('');
+  const [addSiteSaving, setAddSiteSaving] = React.useState<boolean>(false);
+  const [addSiteMsg, setAddSiteMsg] = React.useState<string | null>(null);
   const [switchReason, setSwitchReason] = React.useState<string>('');
   const [switching, setSwitching] = React.useState<boolean>(false);
   const [switchMsg, setSwitchMsg] = React.useState<string | null>(null);
   const [switchSuccess, setSwitchSuccess] = React.useState<boolean>(false);
   const [siteChanges, setSiteChanges] = React.useState<any[]>([]);
   const [showChanges, setShowChanges] = React.useState<boolean>(false);
-  const [discoveringSites, setDiscoveringSites] = React.useState<boolean>(false);
-  const [discoveredSites, setDiscoveredSites] = React.useState<any[]>([]);
+
+  // Tenant-site discovery
+  const [tenantSites, setTenantSites] = React.useState<any[]>([]);
+  const [tenantSitesLoading, setTenantSitesLoading] = React.useState<boolean>(false);
+  const [tenantSitesError, setTenantSitesError] = React.useState<string | null>(null);
   const [siteSearch, setSiteSearch] = React.useState<string>('');
-  const [selectedDiscoveredSite, setSelectedDiscoveredSite] = React.useState<any>(null);
-  const [siteDrives, setSiteDrives] = React.useState<any[]>([]);
-  const [loadingDrives, setLoadingDrives] = React.useState<boolean>(false);
+
+  // Drive picker for unregistered tenant sites
+  const [pendingSite, setPendingSite] = React.useState<any>(null); // the tenant site object
+  const [pendingDrives, setPendingDrives] = React.useState<any[]>([]);
+  const [pendingDrivesLoading, setPendingDrivesLoading] = React.useState<boolean>(false);
   const [selectedDrive, setSelectedDrive] = React.useState<any>(null);
-  const [discoverMsg, setDiscoverMsg] = React.useState<string | null>(null);
+
+  const loadTenantSites = React.useCallback(async (base: string, headers: any) => {
+    setTenantSitesLoading(true);
+    setTenantSitesError(null);
+    try {
+      const r = await fetch(`${base}/api/admin/discover-sites`, { headers });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'Unable to load tenant sites');
+      setTenantSites(d.sites || []);
+    } catch (e: any) {
+      setTenantSitesError(e?.message || 'Could not load tenant sites');
+    } finally {
+      setTenantSitesLoading(false);
+    }
+  }, []);
+
+  const loadAdminConfig = React.useCallback(async (includeHidden: boolean = false) => {
+    const base = host._base();
+    try {
+      const r = await fetch(`${base}/api/admin/site-configuration?include_hidden=${includeHidden}`, { headers: host._headers() });
+      if (r.status === 403) { setIsAdmin(false); return; }
+      const d = await r.json();
+      if (d) {
+        setAdminConfig(d);
+        setIsAdmin(true);
+      }
+    } catch {
+      // ignore
+    }
+  }, [host]);
+
+  const handleToggleVisibility = async (siteKey: string, currentIsHidden: boolean) => {
+    setTogglingSiteKey(siteKey);
+    setVisibilityMsg(null);
+    try {
+      const r = await fetch(`${host._base()}/api/admin/site-configurations/${encodeURIComponent(siteKey)}/visibility`, {
+        method: 'PATCH',
+        headers: { ...host._headers(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_hidden: !currentIsHidden }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'Failed to update visibility');
+      await loadAdminConfig(showHiddenSites);
+    } catch (e: any) {
+      setVisibilityMsg(`⚠️ ${e?.message || 'Failed to update visibility'}`);
+      setTimeout(() => setVisibilityMsg(null), 4000);
+    } finally {
+      setTogglingSiteKey(null);
+    }
+  };
 
   React.useEffect(() => {
     const base = host._base();
     const userEmail = host.props.userEmail;
-    
-    // Fetch basic site info
-    fetch(`${base}/api/config/site-info`)
-      .then(r => r.json())
-      .then(d => {
-        setInfo(d);
-      })
-      .catch((e: any) => {
-        setErr(e?.message || 'Failed to load site information');
-      });
 
-    // Fetch admin site configuration if user is admin
+    // Fetch basic site info
+    fetch(`${base}/api/config/site-info`, { headers: host._headers() })
+      .then(r => r.json())
+      .then(d => setInfo(d))
+      .catch((e: any) => setErr(e?.message || 'Failed to load site information'));
+
     if (userEmail) {
-      fetch(`${base}/api/admin/site-configuration`, {
-        headers: host._headers(),
-      })
+      fetch(`${base}/api/admin/site-configuration?include_hidden=false`, { headers: host._headers() })
         .then(r => {
-          if (r.status === 403) {
-            setIsAdmin(false);
-            setLoading(false);
-            return null;
-          }
+          if (r.status === 403) { setIsAdmin(false); setLoading(false); return null; }
           return r.json();
         })
         .then(d => {
           if (d) {
-            const applySites = (sites: any[]) => {
-              setAdminConfig({ ...d, available_sites: sites });
-              setIsAdmin(true);
-              setSelectedNewSite(d.current_site);
-            };
+            setAdminConfig(d);
+            setIsAdmin(true);
+            setSelectedNewSite(d.current_site);
 
-            if (Array.isArray(d.available_sites) && d.available_sites.length > 0) {
-              applySites(d.available_sites);
-            } else {
-              // Support the existing session endpoint if the backend is on an older build.
-              fetch(`${base}/api/config/available-sites`, { headers: host._headers() })
-                .then(r => r.ok ? r.json() : Promise.reject(new Error('Failed to load available sites')))
-                .then(sitesResponse => applySites(sitesResponse.sites || []))
-                .catch(() => applySites(d.available_sites || []));
-            }
-            
-            // Fetch site changes for audit log
-            fetch(`${base}/api/admin/site-changes?limit=10`, {
-              headers: host._headers(),
-            })
+            fetch(`${base}/api/admin/site-changes?limit=10`, { headers: host._headers() })
               .then(r => r.json())
-              .then(changes => setSiteChanges(changes.changes || []))
-              .catch(e => console.log('Failed to load changes:', e));
+              .then(ch => setSiteChanges(ch.changes || []))
+              .catch(() => undefined);
+
+            // Auto-load all tenant sites for the dropdown
+            void loadTenantSites(base, host._headers());
           }
           setLoading(false);
         })
-        .catch((e: any) => {
-          setIsAdmin(false);
-          setLoading(false);
-        });
+        .catch(() => { setIsAdmin(false); setLoading(false); });
     } else {
       setLoading(false);
     }
-  }, [host, host.props.userEmail]);
+  }, [host, host.props.userEmail, loadTenantSites]);
+
+  // When a site key is selected from the dropdown
+  const handleSiteSelected = async (siteKey: string) => {
+    setSelectedNewSite(siteKey);
+    setPendingSite(null);
+    setPendingDrives([]);
+    setSelectedDrive(null);
+
+    // Check if this is an unregistered tenant site (site_key starts with "tenant:")
+    if (siteKey.startsWith('tenant:')) {
+      const tenantId = siteKey.replace('tenant:', '');
+      const tenantSiteObj = tenantSites.find(s => s.id === tenantId);
+      if (!tenantSiteObj) return;
+      setPendingSite(tenantSiteObj);
+      setPendingDrivesLoading(true);
+      try {
+        const r = await fetch(`${host._base()}/api/admin/discover-sites/${encodeURIComponent(tenantSiteObj.id)}/drives`, { headers: host._headers() });
+        const d = await r.json();
+        setPendingDrives(r.ok ? (d.drives || []) : []);
+        if (r.ok && (d.drives || []).length === 1) setSelectedDrive(d.drives[0]); // auto-pick if only one
+      } catch { setPendingDrives([]); }
+      finally { setPendingDrivesLoading(false); }
+    }
+  };
 
   const handleSwitchSite = async () => {
     if (!selectedNewSite || selectedNewSite === adminConfig?.current_site) {
@@ -323,89 +392,84 @@ function SiteIntegrationInfo({ host }: { host: VesselEmail }): React.ReactElemen
       setTimeout(() => setSwitchMsg(null), 2000);
       return;
     }
-
     setSwitching(true);
     setSwitchMsg(null);
     setSwitchSuccess(false);
 
     try {
       const base = host._base();
-      const response = await fetch(`${base}/api/admin/switch-site`, {
-        method: 'POST',
-        headers: {
-          ...host._headers(),
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          site_name: selectedNewSite,
-          reason: switchReason || undefined,
-        }),
-      });
+      let response: Response;
+      let data: any;
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || 'Failed to switch site');
+      if (selectedNewSite.startsWith('tenant:') && pendingSite && selectedDrive) {
+        // Auto-register + switch for an undiscovered tenant site
+        response = await fetch(`${base}/api/admin/switch-site-auto`, {
+          method: 'POST',
+          headers: { ...host._headers(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            site_id: pendingSite.id,
+            site_name: pendingSite.name,
+            drive_id: selectedDrive.id,
+            display_name: pendingSite.name,
+            web_url: pendingSite.web_url || '',
+            reason: switchReason || undefined,
+          }),
+        });
+        data = await response.json();
+      } else {
+        // Normal configured-site switch
+        response = await fetch(`${base}/api/admin/switch-site`, {
+          method: 'POST',
+          headers: { ...host._headers(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ site_name: selectedNewSite, reason: switchReason || undefined }),
+        });
+        data = await response.json();
       }
 
+      if (!response.ok) throw new Error(data.detail || 'Failed to switch site');
+
       setSwitchSuccess(true);
-      setSwitchMsg(`✓ Successfully switched to ${data.new_site_name}. Reloading page...`);
+      setSwitchMsg(`✅ Successfully switched to ${data.new_site_name}.`);
+      setInfo((prev: any) => ({ ...(prev || {}), active_site: data.new_site, site_name: data.new_site_name }));
+      setAdminConfig((prev: any) => prev ? { ...prev, current_site: data.new_site, current_site_name: data.new_site_name } : prev);
       setShowSwitchDialog(false);
       setSwitchReason('');
+      setPendingSite(null);
+      setPendingDrives([]);
+      setSelectedDrive(null);
+      setSwitching(false);
 
-      // Reload the page after 2 seconds
-      setTimeout(() => {
-        window.location.reload();
-      }, 2000);
+      void Promise.all([host._loadDocumentSites(), host._loadData()]).catch(() => {
+        setSwitchMsg(`✅ Switched to ${data.new_site_name}, but view refresh failed — please reload.`);
+      });
     } catch (e: any) {
       setSwitchMsg(`⚠️ ${e?.message || 'Failed to switch site'}`);
       setSwitching(false);
     }
   };
 
-  const discoverSites = async () => {
-    setDiscoveringSites(true);
-    setDiscoverMsg(null);
-    try {
-      const response = await fetch(`${host._base()}/api/admin/discover-sites`, { headers: host._headers() });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || 'Unable to discover SharePoint sites');
-      setDiscoveredSites(data.sites || []);
-      if (!(data.sites || []).length) setDiscoverMsg('No SharePoint sites were found for this app registration. Check site access and admin consent.');
-    } catch (e: any) {
-      setDiscoverMsg(e?.message || 'Unable to discover SharePoint sites');
-      setDiscoveredSites([]);
-    } finally {
-      setDiscoveringSites(false);
-    }
-  };
+  const copyResolvedValue = (value: string) => { if (value) navigator.clipboard?.writeText(value); };
 
-  const selectDiscoveredSite = async (site: any) => {
-    setSelectedDiscoveredSite(site);
-    setSelectedDrive(null);
-    setSiteDrives([]);
-    setLoadingDrives(true);
-    setDiscoverMsg(null);
-    try {
-      const response = await fetch(`${host._base()}/api/admin/discover-sites/${encodeURIComponent(site.id)}/drives`, { headers: host._headers() });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || 'Unable to load document libraries');
-      setSiteDrives(data.drives || []);
-      if (!(data.drives || []).length) setDiscoverMsg('No document libraries were found on this site.');
-    } catch (e: any) {
-      setDiscoverMsg(e?.message || 'Unable to load document libraries');
-    } finally {
-      setLoadingDrives(false);
-    }
-  };
+  // Build dropdown options: configured sites + unregistered tenant sites
+  const configuredSiteKeys = new Set((adminConfig?.available_sites || []).map((s: any) => s.name));
+  const filteredTenantSites = tenantSites.filter(ts => {
+    const q = siteSearch.toLowerCase();
+    return !q || `${ts.name} ${ts.web_url}`.toLowerCase().includes(q);
+  });
+  const filteredConfiguredSites = (adminConfig?.available_sites || []).filter((s: any) => {
+    const q = siteSearch.toLowerCase();
+    return !q || `${s.display_name} ${s.name}`.toLowerCase().includes(q);
+  });
 
-  const copyResolvedValue = (value: string) => {
-    if (value) navigator.clipboard?.writeText(value);
-  };
+  // Resolve toSiteConfig for the confirm dialog
+  const toSiteConfig = selectedNewSite.startsWith('tenant:') && selectedDrive
+    ? { display_name: pendingSite?.name, drive_id: selectedDrive?.id }
+    : adminConfig?.available_sites?.find((s: any) => s.name === selectedNewSite);
 
-  const filteredDiscoveredSites = discoveredSites.filter(site =>
-    `${site.name} ${site.web_url}`.toLowerCase().includes(siteSearch.toLowerCase())
-  );
+  const canSwitch = selectedNewSite
+    && selectedNewSite !== adminConfig?.current_site
+    && !switching
+    && (!selectedNewSite.startsWith('tenant:') || (pendingSite && selectedDrive));
 
   if (loading) return <div style={{ color: '#64748b', fontSize: 13 }}>Loading site configuration...</div>;
 
@@ -442,121 +506,342 @@ function SiteIntegrationInfo({ host }: { host: VesselEmail }): React.ReactElemen
       {isAdmin && adminConfig && (
         <>
           <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#166534', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span>👤</span> Admin: Switch Active Site
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#166534', marginBottom: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>👤 Admin: Switch Active Site</span>
+              <button
+                onClick={() => loadTenantSites(host._base(), host._headers())}
+                disabled={tenantSitesLoading}
+                title="Refresh all tenant sites"
+                style={{ padding: '4px 10px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: tenantSitesLoading ? 'wait' : 'pointer' }}
+              >
+                {tenantSitesLoading ? '⏳ Loading…' : '🔄 Refresh Sites'}
+              </button>
             </div>
-            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#166534', lineHeight: 1.5 }}>
-              Select a different SharePoint site to make it the active site for all users. This affects which site's documents and folders are displayed in the application.
+            <p style={{ margin: '0 0 10px', fontSize: 12, color: '#166534', lineHeight: 1.5 }}>
+              Select any configured site or any SharePoint site visible to this app from the dropdown below.
             </p>
 
-            <div style={{ borderTop: '1px solid #bbf7d0', paddingTop: 12, marginBottom: 16 }}>
-              <button
-                onClick={discoverSites}
-                disabled={discoveringSites}
-                style={{ padding: '8px 12px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: discoveringSites ? 'wait' : 'pointer' }}
-              >
-                {discoveringSites ? 'Discovering...' : 'Discover Sites'}
-              </button>
-              <span style={{ marginLeft: 10, fontSize: 11, color: '#166534' }}>Browse sites and document libraries available to this app.</span>
+            {/* Search filter */}
+            <input
+              value={siteSearch}
+              onChange={e => setSiteSearch(e.target.value)}
+              placeholder="🔍 Search site by name or URL…"
+              style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid #bbf7d0', borderRadius: 6, fontSize: 12, marginBottom: 8, outline: 'none' }}
+            />
 
-              {(discoveredSites.length > 0 || discoveringSites) && (
-                <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <div>
-                    <input
-                      value={siteSearch}
-                      onChange={e => setSiteSearch(e.target.value)}
-                      placeholder="Filter sites by name or URL"
-                      style={{ width: '100%', boxSizing: 'border-box', padding: '8px 10px', border: '1px solid #bbf7d0', borderRadius: 6, fontSize: 11 }}
-                    />
-                    <div style={{ marginTop: 6, maxHeight: 170, overflowY: 'auto', background: '#fff', border: '1px solid #dcfce7', borderRadius: 6 }}>
-                      {filteredDiscoveredSites.map(site => (
+            {visibilityMsg && (
+              <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 6, padding: '6px 10px', fontSize: 12, marginBottom: 8 }}>
+                {visibilityMsg}
+              </div>
+            )}
+
+            {/* ── Configured Sites card list ── */}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <label style={{ fontSize: 12, fontWeight: 600, color: '#166534' }}>Configured Sites:</label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#166534', cursor: 'pointer', userSelect: 'none' }}>
+                  <input
+                    type="checkbox"
+                    checked={showHiddenSites}
+                    onChange={e => {
+                      const checked = e.target.checked;
+                      setShowHiddenSites(checked);
+                      void loadAdminConfig(checked);
+                    }}
+                    style={{ accentColor: '#16a34a', cursor: 'pointer' }}
+                  />
+                  <span>Show hidden sites</span>
+                </label>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {filteredConfiguredSites.map((site: any) => {
+                  const isCurrent = site.name === adminConfig.current_site;
+                  const isHidden = !!site.is_hidden;
+                  const isToggling = togglingSiteKey === site.name;
+                  return (
+                    <div
+                      key={`cfg-${site.name}`}
+                      style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '8px 12px', borderRadius: 8,
+                        border: `1px solid ${isCurrent ? '#86efac' : isHidden ? '#cbd5e1' : '#d1fae5'}`,
+                        background: isCurrent ? '#dcfce7' : isHidden ? '#f8fafc' : '#f0fdf4',
+                        opacity: isHidden && !isCurrent ? 0.75 : 1,
+                        transition: 'all 0.15s',
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: isHidden ? '#64748b' : '#166534' }}>
+                            {site.display_name || site.name}
+                          </span>
+                          {isCurrent && (
+                            <span style={{ fontSize: 10, fontWeight: 700, background: '#16a34a', color: '#fff', padding: '1px 6px', borderRadius: 8 }}>
+                              ACTIVE
+                            </span>
+                          )}
+                          {isHidden && (
+                            <span style={{ fontSize: 10, fontWeight: 700, background: '#e2e8f0', color: '#475569', padding: '1px 6px', borderRadius: 8 }}>
+                              HIDDEN
+                            </span>
+                          )}
+                        </div>
+                        <span style={{ display: 'block', fontSize: 10, color: '#64748b', fontFamily: 'monospace', marginTop: 2 }}>
+                          {site.name}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        {/* Switch button */}
+                        {!isCurrent && !isHidden && (
+                          <button
+                            onClick={() => { setSelectedNewSite(site.name); setPendingSite(null); setSelectedDrive(null); setShowSwitchDialog(true); }}
+                            disabled={switching || isToggling}
+                            style={{ padding: '4px 10px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                          >
+                            🔄 Switch
+                          </button>
+                        )}
+                        {/* Hide / Show Toggle button */}
                         <button
-                          key={site.id}
-                          onClick={() => selectDiscoveredSite(site)}
-                          style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px', border: 'none', borderBottom: '1px solid #f0fdf4', background: selectedDiscoveredSite?.id === site.id ? '#dcfce7' : '#fff', cursor: 'pointer' }}
+                          onClick={() => handleToggleVisibility(site.name, isHidden)}
+                          disabled={isCurrent || isToggling}
+                          title={isCurrent ? 'Cannot hide the currently active site. Switch to a different site first.' : isHidden ? 'Make this site visible in pickers' : 'Hide this site from pickers'}
+                          style={{
+                            padding: '4px 10px',
+                            background: isCurrent ? '#f1f5f9' : isHidden ? '#eff6ff' : '#fff',
+                            color: isCurrent ? '#94a3b8' : isHidden ? '#1d4ed8' : '#475569',
+                            border: `1px solid ${isCurrent ? '#e2e8f0' : isHidden ? '#bfdbfe' : '#cbd5e1'}`,
+                            borderRadius: 5,
+                            fontSize: 11,
+                            fontWeight: 600,
+                            cursor: isCurrent ? 'not-allowed' : isToggling ? 'wait' : 'pointer',
+                          }}
                         >
-                          <strong style={{ display: 'block', fontSize: 11, color: '#166534' }}>{site.name}</strong>
-                          <span style={{ display: 'block', fontSize: 10, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{site.web_url || 'No URL returned'}</span>
+                          {isToggling ? '⏳…' : isHidden ? '👁 Show' : '🙈 Hide'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {filteredConfiguredSites.length === 0 && (
+                  <div style={{ fontSize: 12, color: '#64748b', padding: '8px 0' }}>
+                    {showHiddenSites ? 'No configured sites match your search.' : 'No configured sites match your search. (Try checking "Show hidden sites" above)'}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ── Add New Site section ── */}
+            <div style={{ marginBottom: 12, border: '1px solid #d1fae5', borderRadius: 8, overflow: 'hidden' }}>
+              <button
+                onClick={async () => {
+                  const next = !showAddSite;
+                  setShowAddSite(next);
+                  if (next && addSiteTenantSites.length === 0) {
+                    setAddSiteTenantLoading(true);
+                    try {
+                      const r = await fetch(`${host._base()}/api/admin/discover-sites`, { headers: host._headers() });
+                      const d = await r.json();
+                      setAddSiteTenantSites(d.sites || []);
+                    } catch { /* ignore */ } finally { setAddSiteTenantLoading(false); }
+                  }
+                }}
+                style={{ width: '100%', padding: '9px 14px', background: '#f0fdf4', border: 'none', color: '#166534', fontSize: 12, fontWeight: 700, cursor: 'pointer', textAlign: 'left' }}
+              >
+                {showAddSite ? '✕ Cancel Add Site' : '➕ Add New Site'}
+              </button>
+              {showAddSite && (
+                <div style={{ padding: 14, background: '#fff' }}>
+                  <div style={{ fontSize: 12, color: '#475569', marginBottom: 10 }}>Search and select a SharePoint site to register as a new configured site.</div>
+                  <input
+                    value={addSiteSearch}
+                    onChange={e => setAddSiteSearch(e.target.value)}
+                    placeholder="🔍 Search tenant sites…"
+                    style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, fontSize: 12, marginBottom: 8, outline: 'none' }}
+                  />
+                  {addSiteTenantLoading && <div style={{ fontSize: 12, color: '#64748b', marginBottom: 8 }}>⏳ Loading tenant sites…</div>}
+                  <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 6, marginBottom: 10 }}>
+                    {addSiteTenantSites
+                      .filter(s => !addSiteSearch || `${s.name} ${s.web_url}`.toLowerCase().includes(addSiteSearch.toLowerCase()))
+                      .map(ts => (
+                        <button
+                          key={ts.id}
+                          onClick={async () => {
+                            setAddSiteSelected(ts);
+                            setAddSiteSelDrive(null);
+                            setAddSiteDrives([]);
+                            setAddSiteDisplayName(ts.name || '');
+                            const rawKey = (ts.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+                            setAddSiteKey(rawKey);
+                            setAddSiteDrivesLoading(true);
+                            try {
+                              const r = await fetch(`${host._base()}/api/admin/discover-sites/${encodeURIComponent(ts.id)}/drives`, { headers: host._headers() });
+                              const d = await r.json();
+                              const drives = r.ok ? (d.drives || []) : [];
+                              setAddSiteDrives(drives);
+                              if (drives.length === 1) setAddSiteSelDrive(drives[0]);
+                            } catch { setAddSiteDrives([]); } finally { setAddSiteDrivesLoading(false); }
+                          }}
+                          style={{
+                            display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
+                            border: 0, borderBottom: '1px solid #f1f5f9',
+                            background: addSiteSelected?.id === ts.id ? '#eff6ff' : '#fff',
+                            cursor: 'pointer', fontSize: 12, color: '#0f172a',
+                          }}
+                        >
+                          <strong>{ts.name}</strong>
+                          <span style={{ display: 'block', fontSize: 10, color: '#64748b' }}>{ts.web_url}</span>
                         </button>
                       ))}
-                      {!filteredDiscoveredSites.length && <div style={{ padding: 10, fontSize: 11, color: '#64748b' }}>No matching sites.</div>}
-                    </div>
                   </div>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: '#166534', marginBottom: 6 }}>Document Libraries</div>
-                    {loadingDrives && <div style={{ fontSize: 11, color: '#64748b' }}>Loading libraries...</div>}
-                    {!loadingDrives && selectedDiscoveredSite && !siteDrives.length && <div style={{ fontSize: 11, color: '#64748b' }}>Select a site to view its libraries.</div>}
-                    {!loadingDrives && siteDrives.map(drive => (
-                      <button
-                        key={drive.id}
-                        onClick={() => setSelectedDrive(drive)}
-                        style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px', marginBottom: 5, border: '1px solid #dcfce7', borderRadius: 6, background: selectedDrive?.id === drive.id ? '#dcfce7' : '#fff', color: '#166534', cursor: 'pointer', fontSize: 11 }}
-                      >
-                        <strong>{drive.name}</strong><span style={{ display: 'block', fontSize: 10, color: '#64748b' }}>{drive.drive_type || 'documentLibrary'}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
 
-              {selectedDiscoveredSite && selectedDrive && (
-                <div style={{ marginTop: 10, padding: 10, background: '#fff', border: '1px solid #86efac', borderRadius: 6, fontSize: 11 }}>
-                  <div style={{ fontWeight: 700, color: '#166534', marginBottom: 6 }}>Resolved Site Configuration</div>
-                  {[['Site Key', selectedDiscoveredSite.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')], ['Site ID', selectedDiscoveredSite.id], ['Drive ID', selectedDrive.id]].map(([label, value]) => (
-                    <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                      <strong style={{ width: 55, color: '#475569' }}>{label}:</strong><code style={{ flex: 1, overflowWrap: 'anywhere', color: '#0f172a' }}>{value}</code>
-                      <button onClick={() => copyResolvedValue(String(value))} title={`Copy ${label}`} style={{ padding: '3px 7px', border: '1px solid #cbd5e1', borderRadius: 4, background: '#f8fafc', cursor: 'pointer', fontSize: 10 }}>Copy</button>
+                  {/* Drive picker */}
+                  {addSiteSelected && (
+                    <div style={{ marginBottom: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#0f172a', marginBottom: 6 }}>Document Library:</div>
+                      {addSiteDrivesLoading && <div style={{ fontSize: 11, color: '#64748b' }}>Loading libraries…</div>}
+                      {!addSiteDrivesLoading && addSiteDrives.map(drv => (
+                        <button
+                          key={drv.id}
+                          onClick={() => setAddSiteSelDrive(drv)}
+                          style={{
+                            display: 'block', width: '100%', textAlign: 'left', padding: '7px 10px', marginBottom: 4,
+                            border: `1px solid ${addSiteSelDrive?.id === drv.id ? '#16a34a' : '#e2e8f0'}`,
+                            borderRadius: 5, background: addSiteSelDrive?.id === drv.id ? '#dcfce7' : '#fff',
+                            cursor: 'pointer', fontSize: 11,
+                          }}
+                        >
+                          <strong>{drv.name}</strong>
+                          <span style={{ display: 'block', fontSize: 10, color: '#64748b' }}>{drv.drive_type}</span>
+                        </button>
+                      ))}
                     </div>
-                  ))}
+                  )}
+
+                  {/* Display name + site key inputs */}
+                  {addSiteSelected && addSiteSelDrive && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+                      <input
+                        value={addSiteDisplayName}
+                        onChange={e => setAddSiteDisplayName(e.target.value)}
+                        placeholder="Display Name (e.g. Vessel Mgmt - Production)"
+                        style={{ padding: '7px 10px', border: '1px solid #cbd5e1', borderRadius: 6, fontSize: 12, outline: 'none' }}
+                      />
+                      <input
+                        value={addSiteKey}
+                        onChange={e => setAddSiteKey(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
+                        placeholder="Internal site key (e.g. vessel_prod)"
+                        style={{ padding: '7px 10px', border: '1px solid #cbd5e1', borderRadius: 6, fontSize: 12, fontFamily: 'monospace', outline: 'none' }}
+                      />
+                    </div>
+                  )}
+
+                  {addSiteMsg && (
+                    <div style={{ background: addSiteMsg.startsWith('✓') ? '#dcfce7' : '#fee2e2', border: `1px solid ${addSiteMsg.startsWith('✓') ? '#86efac' : '#fca5a5'}`, color: addSiteMsg.startsWith('✓') ? '#166534' : '#991b1b', borderRadius: 6, padding: '6px 10px', fontSize: 12, marginBottom: 8 }}>
+                      {addSiteMsg}
+                    </div>
+                  )}
+
+                  <button
+                    disabled={!addSiteSelected || !addSiteSelDrive || !addSiteDisplayName.trim() || !addSiteKey.trim() || addSiteSaving}
+                    onClick={async () => {
+                      if (!addSiteSelected || !addSiteSelDrive || !addSiteDisplayName.trim() || !addSiteKey.trim()) return;
+                      setAddSiteSaving(true);
+                      setAddSiteMsg(null);
+                      try {
+                        const r = await fetch(`${host._base()}/api/admin/site-configurations`, {
+                          method: 'POST',
+                          headers: { ...host._headers(), 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            site_key: addSiteKey.trim(),
+                            display_name: addSiteDisplayName.trim(),
+                            site_name: addSiteSelected.name,
+                            site_id: addSiteSelected.id,
+                            drive_id: addSiteSelDrive.id,
+                          }),
+                        });
+                        const d = await r.json();
+                        if (!r.ok) throw new Error(d.detail || 'Failed to save site');
+                        setAddSiteMsg(`✓ Site "${addSiteDisplayName.trim()}" registered successfully.`);
+                        // Refresh the configured-sites list by appending the new entry
+                        setAdminConfig((prev: any) => prev ? {
+                          ...prev,
+                          available_sites: [
+                            ...(prev.available_sites || []),
+                            { name: addSiteKey.trim(), display_name: addSiteDisplayName.trim(), configured: true, site_id: addSiteSelected.id, drive_id: addSiteSelDrive.id },
+                          ],
+                        } : prev);
+                        // Reset add-site form
+                        setTimeout(() => {
+                          setShowAddSite(false);
+                          setAddSiteSelected(null); setAddSiteSelDrive(null);
+                          setAddSiteDrives([]); setAddSiteDisplayName(''); setAddSiteKey('');
+                          setAddSiteMsg(null); setAddSiteSearch('');
+                        }, 2000);
+                      } catch (e: any) {
+                        setAddSiteMsg(`⚠️ ${e?.message || 'Failed to save'}`);
+                      } finally {
+                        setAddSiteSaving(false);
+                      }
+                    }}
+                    style={{
+                      padding: '8px 16px',
+                      background: (!addSiteSelected || !addSiteSelDrive || !addSiteDisplayName.trim() || !addSiteKey.trim() || addSiteSaving) ? '#cbd5e1' : '#16a34a',
+                      color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600,
+                      cursor: addSiteSaving ? 'wait' : 'pointer',
+                    }}
+                  >
+                    {addSiteSaving ? '⏳ Saving…' : '✅ Save & Register Site'}
+                  </button>
                 </div>
               )}
-              {discoverMsg && <div style={{ marginTop: 8, padding: 8, background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 6, color: '#9a3412', fontSize: 11 }}>{discoverMsg}</div>}
             </div>
-            
-            <div style={{ marginBottom: 12 }}>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#166534', marginBottom: 6 }}>
-                Switch To:
-              </label>
-              <select
-                value={selectedNewSite}
-                onChange={e => setSelectedNewSite(e.target.value)}
-                disabled={switching}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  borderRadius: 6,
-                  border: '1px solid #bbf7d0',
-                  fontSize: 13,
-                  outline: 'none',
-                  background: '#fff',
-                  cursor: switching ? 'not-allowed' : 'pointer',
-                  opacity: switching ? 0.6 : 1,
-                }}
-              >
-                <option value="">-- Select a site --</option>
-                {adminConfig.available_sites?.map((site: any) => (
-                  <option key={site.name} value={site.name} disabled={site.name === adminConfig.current_site}>
-                    {site.display_name} ({site.name}){site.name === adminConfig.current_site ? ' (current)' : ''}
-                  </option>
+
+            {/* Drive picker for unregistered tenant sites */}
+            {pendingSite && (
+              <div style={{ marginBottom: 12, padding: 10, background: '#fff', border: '1px solid #86efac', borderRadius: 6, fontSize: 11 }}>
+                <div style={{ fontWeight: 700, color: '#166534', marginBottom: 6 }}>
+                  📂 Select Document Library for: <em>{pendingSite.name}</em>
+                </div>
+                {pendingDrivesLoading && <div style={{ color: '#64748b' }}>Loading document libraries…</div>}
+                {!pendingDrivesLoading && pendingDrives.length === 0 && <div style={{ color: '#b45309' }}>No document libraries found on this site.</div>}
+                {!pendingDrivesLoading && pendingDrives.map(drive => (
+                  <button
+                    key={drive.id}
+                    onClick={() => setSelectedDrive(drive)}
+                    style={{
+                      display: 'block', width: '100%', textAlign: 'left', padding: '7px 10px', marginBottom: 4,
+                      border: `1px solid ${selectedDrive?.id === drive.id ? '#16a34a' : '#dcfce7'}`,
+                      borderRadius: 5, background: selectedDrive?.id === drive.id ? '#dcfce7' : '#fff',
+                      cursor: 'pointer', fontSize: 11, color: '#166534',
+                    }}
+                  >
+                    <strong>{drive.name}</strong>
+                    <span style={{ display: 'block', fontSize: 10, color: '#64748b' }}>{drive.drive_type || 'documentLibrary'}</span>
+                    <span style={{ display: 'block', fontSize: 9, color: '#94a3b8', fontFamily: 'monospace' }}>{drive.id.substring(0, 30)}…</span>
+                  </button>
                 ))}
-              </select>
-            </div>
+                {selectedDrive && (
+                  <div style={{ marginTop: 6, fontSize: 10, color: '#15803d', fontWeight: 600 }}>
+                    ✅ Selected: {selectedDrive.name} — will be registered and switched to automatically.
+                  </div>
+                )}
+              </div>
+            )}
 
             <button
               onClick={() => setShowSwitchDialog(true)}
-              disabled={!selectedNewSite || selectedNewSite === adminConfig.current_site || switching}
+              disabled={!canSwitch}
               style={{
                 padding: '10px 16px',
-                background: selectedNewSite && selectedNewSite !== adminConfig.current_site && !switching ? '#16a34a' : '#cbd5e1',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 6,
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: selectedNewSite && selectedNewSite !== adminConfig.current_site && !switching ? 'pointer' : 'not-allowed',
+                background: canSwitch ? '#16a34a' : '#cbd5e1',
+                color: '#fff', border: 'none', borderRadius: 6,
+                fontSize: 12, fontWeight: 600,
+                cursor: canSwitch ? 'pointer' : 'not-allowed',
               }}
             >
-              {switching ? '⏳ Switching...' : 'Switch Site'}
+              {switching ? '⏳ Switching…' : 'Switch Site'}
             </button>
 
             {switchMsg && (
@@ -565,10 +850,7 @@ function SiteIntegrationInfo({ host }: { host: VesselEmail }): React.ReactElemen
                 background: switchSuccess ? '#dcfce7' : '#fee2e2',
                 border: `1px solid ${switchSuccess ? '#86efac' : '#fca5a5'}`,
                 color: switchSuccess ? '#166534' : '#991b1b',
-                borderRadius: 6,
-                padding: '8px 12px',
-                fontSize: 12,
-                fontWeight: 600,
+                borderRadius: 6, padding: '8px 12px', fontSize: 12, fontWeight: 600,
               }}>
                 {switchMsg}
               </div>
@@ -580,9 +862,7 @@ function SiteIntegrationInfo({ host }: { host: VesselEmail }): React.ReactElemen
                 <div style={{ maxHeight: 200, overflowY: 'auto', fontSize: 11, color: '#166534' }}>
                   {siteChanges.map((change: any) => (
                     <div key={change.id} style={{ padding: '6px 0', borderBottom: '1px solid #dcfce7' }}>
-                      <div>
-                        <strong>{change.previous_site} → {change.new_site}</strong> ({change.status})
-                      </div>
+                      <div><strong>{change.previous_site} → {change.new_site}</strong> ({change.status})</div>
                       <div style={{ fontSize: 10, color: '#15803d' }}>
                         {change.changed_by_email} • {new Date(change.created_at).toLocaleString()}
                       </div>
@@ -595,16 +875,7 @@ function SiteIntegrationInfo({ host }: { host: VesselEmail }): React.ReactElemen
             {siteChanges.length > 0 && (
               <button
                 onClick={() => setShowChanges(!showChanges)}
-                style={{
-                  marginTop: 8,
-                  background: 'transparent',
-                  border: 'none',
-                  color: '#16a34a',
-                  fontSize: 11,
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                }}
+                style={{ marginTop: 8, background: 'transparent', border: 'none', color: '#16a34a', fontSize: 11, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
               >
                 {showChanges ? '▼ Hide' : '▶ Show'} Recent Changes
               </button>
@@ -617,13 +888,10 @@ function SiteIntegrationInfo({ host }: { host: VesselEmail }): React.ReactElemen
               fromSiteName={adminConfig.current_site_name}
               fromDb={adminConfig.current_db_name}
               fromDriveId={adminConfig.current_drive_id}
-              toSite={selectedNewSite}
-              toSiteConfig={adminConfig.available_sites?.find((s: any) => s.name === selectedNewSite)}
+              toSite={pendingSite?.name || selectedNewSite}
+              toSiteConfig={toSiteConfig}
               onConfirm={() => handleSwitchSite()}
-              onCancel={() => {
-                setShowSwitchDialog(false);
-                setSwitchReason('');
-              }}
+              onCancel={() => { setShowSwitchDialog(false); setSwitchReason(''); }}
               reason={switchReason}
               onReasonChange={setSwitchReason}
               isProcessing={switching}
@@ -643,16 +911,14 @@ function SiteIntegrationInfo({ host }: { host: VesselEmail }): React.ReactElemen
         {isAdmin ? (
           <>
             <p style={{ margin: '0 0 6px' }}>
-              <strong>For admins:</strong> Use the "Switch Active Site" dropdown above to change the site for all users. No server restarts needed.
+              <strong>For admins:</strong> Use the "Switch Active Site" list above to change the site for this session. No server restart is needed.
             </p>
             <p style={{ margin: '0 0 6px' }}>
-              <strong>Fallback method:</strong> Manually edit <code>ACTIVE_SITE=&lt;site_key&gt;</code> in the backend <code>.env</code> file and restart the server (requires server access).
+              Sites under <em>✅ Configured Sites</em> are already registered. Sites under <em>🌐 All Tenant Sites</em> will be auto-registered on first switch.
             </p>
           </>
         ) : (
-          <p style={{ margin: 0 }}>
-            Contact an administrator to switch to a different SharePoint site. Changing the active site requires admin-level access.
-          </p>
+          <p style={{ margin: 0 }}>Contact an administrator to switch to a different SharePoint site.</p>
         )}
       </div>
     </div>
@@ -692,7 +958,7 @@ function AdminSwitchConfirmationDialog({
         </div>
 
         <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 12, color: '#7f1d1d', lineHeight: 1.6 }}>
-          <strong>Warning:</strong> Switching the active site affects all users in the application. This change is immediate and will redirect users' data contexts to the new site.
+          <strong>Notice:</strong> Switching the active site changes this session's document and folder context. The page will refresh its data without restarting the application.
         </div>
 
         <div style={{ marginBottom: 16 }}>
@@ -721,15 +987,17 @@ function AdminSwitchConfirmationDialog({
               <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
                 <td style={{ padding: '6px 0', fontWeight: 600, color: '#475569' }}>Database:</td>
                 <td style={{ padding: '6px 0 6px 12px', color: '#0f172a' }}>
-                  <span style={{ textDecoration: 'line-through', color: '#a1a1a1' }}>{fromDb}</span>
-                  <span style={{ display: 'block', color: '#15803d', fontWeight: 600 }}>→ (new site DB)</span>
+                  <span style={{ color: '#64748b' }}>{fromDb}</span>
+                  <span style={{ display: 'block', color: '#64748b', fontSize: 10 }}>(shared — same database for all sites)</span>
                 </td>
               </tr>
               <tr>
-                <td style={{ padding: '6px 0', fontWeight: 600, color: '#475569' }}>Drive ID:</td>
+                <td style={{ padding: '6px 0', fontWeight: 600, color: '#475569' }}>SharePoint Drive:</td>
                 <td style={{ padding: '6px 0 6px 12px', color: '#0f172a', fontSize: 10, fontFamily: 'monospace' }}>
-                  <span style={{ textDecoration: 'line-through', color: '#a1a1a1' }}>{fromDriveId.substring(0, 20)}...</span>
-                  <span style={{ display: 'block', color: '#15803d', fontWeight: 600 }}>→ (new site drive)</span>
+                  <span style={{ textDecoration: 'line-through', color: '#a1a1a1' }}>{fromDriveId.substring(0, 22)}…</span>
+                  <span style={{ display: 'block', color: '#15803d', fontWeight: 600 }}>
+                    → {toSiteConfig?.display_name || toSite}{toSiteConfig?.drive_id ? ` (${String(toSiteConfig.drive_id).substring(0, 22)}…)` : ''}
+                  </span>
                 </td>
               </tr>
             </tbody>
@@ -896,6 +1164,7 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
     drive_id: string;
     is_available_for_provisioning: boolean;
     is_default_provisioning: boolean;
+    is_hidden?: boolean;
   }>>([]);
   const [loading, setLoading] = React.useState<boolean>(true);
   const [saving, setSaving] = React.useState<boolean>(false);
@@ -1089,7 +1358,7 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
                 </tr>
               </thead>
               <tbody>
-                {sites.map(s => (
+                {sites.filter(s => !s.is_hidden).map(s => (
                   <tr key={s.site_key} style={{ borderBottom: '1px solid #f1f5f9' }}>
                     <td style={{ padding: '10px 12px', fontWeight: 600, color: '#0f172a' }}>
                       {s.display_name}
@@ -1192,7 +1461,8 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
                                   gap: 4,
                                 }}
                               >
-                                <span>✅</span> {siteNameMap[sk] || sk}
+                                <span>✅</span>
+                                {siteNameMap[sk] || sk}
                               </span>
                             ))
                           )}
@@ -1254,7 +1524,7 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
-              {sites.filter(s => s.is_available_for_provisioning).map(site => {
+              {sites.filter(s => s.is_available_for_provisioning && !s.is_hidden).map(site => {
                 const isAlreadyProvisioned = (selectedVessel.provisioned_site_ids || []).includes(site.site_key);
                 const isChecked = targetSiteKeys.includes(site.site_key);
 

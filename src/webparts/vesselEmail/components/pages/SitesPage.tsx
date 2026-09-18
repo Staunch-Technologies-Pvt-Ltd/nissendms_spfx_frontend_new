@@ -4,7 +4,7 @@
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 
-type Site = { id: string; display_name: string; web_url?: string; description?: string; thumbnail?: string };
+type Site = { id: string; name?: string; display_name: string; web_url?: string; description?: string; thumbnail?: string };
 type Drive = { id: string; name: string; web_url?: string };
 type FolderCounts = {
   direct_subfolders: number;
@@ -120,6 +120,21 @@ function getInitialSite(host: VesselEmail): Site[] {
     web_url: siteUrl,
     description: 'Current SharePoint site',
   }];
+}
+
+function getSiteName(site: Site): string {
+  const candidates = [site.name, site.display_name].filter(Boolean) as string[];
+  const readable = candidates.find(value => !/^https?:\/\//i.test(value) && value !== site.id);
+  if (readable) return readable;
+
+  try {
+    const url = new URL(site.web_url || '');
+    const lastSegment = url.pathname.split('/').filter(Boolean).pop();
+    if (lastSegment) return decodeURIComponent(lastSegment).replace(/[-_]+/g, ' ');
+    return url.hostname;
+  } catch {
+    return site.display_name || site.id;
+  }
 }
 
 export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
@@ -375,8 +390,10 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       setFieldChoices({});
     }
 
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000);
     try {
-      const response = await fetch(`${api}/api/sites/${encodeURIComponent(nextContext.site.id)}/drives/${encodeURIComponent(nextContext.drive.id)}/folders/${encodeURIComponent(folderId)}/children`, { headers });
+      const response = await fetch(`${api}/api/sites/${encodeURIComponent(nextContext.site.id)}/drives/${encodeURIComponent(nextContext.drive.id)}/folders/${encodeURIComponent(folderId)}/children`, { headers, signal: controller.signal });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Could not load folder');
       setContext(nextContext);
@@ -437,9 +454,12 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       }
     } catch (error) {
       if (!cached) {
-        setMessage(error instanceof Error ? error.message : 'Could not load folder');
+        setMessage(error instanceof DOMException && error.name === 'AbortError'
+          ? 'SharePoint folder loading timed out. Please retry.'
+          : error instanceof Error ? error.message : 'Could not load folder');
       }
     } finally {
+      window.clearTimeout(timeoutId);
       setLoading(false);
     }
   };
@@ -731,7 +751,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
     try {
       let nextIndex = 0;
       const confirmOne = async (): Promise<void> => {
-        while (true) {
+        for (let _safetyBreaker = 0; _safetyBreaker < reviewable.length + 1; _safetyBreaker++) {
           const i = nextIndex++;
           if (i >= reviewable.length) return;
           const result = reviewable[i];
@@ -1356,9 +1376,10 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         }
       };
 
-      while (true) {
+      let _reading = true;
+      while (_reading) {
         const chunk = await reader.read();
-        if (chunk.done) break;
+        if (chunk.done) { _reading = false; break; }
         buffer += decoder.decode(chunk.value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
@@ -1992,9 +2013,9 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
             <div key={site.id} style={{ background: '#fff', border: '1px solid #dbe5ec', borderRadius: 10, padding: 18, boxShadow: '0 2px 8px #1230440d' }}>
               <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                 <div style={{ width: 42, height: 42, background: '#e0f2fe', color: '#0284c7', display: 'grid', placeItems: 'center', borderRadius: 8, fontWeight: 700 }}>SP</div>
-                <div>
-                  <h2 style={{ margin: 0, fontSize: 16, color: '#123044' }}>{site.display_name}</h2>
-                  <small style={{ color: '#64748b' }}>{site.web_url || site.id}</small>
+                <div style={{ minWidth: 0 }}>
+                  <h2 style={{ margin: 0, fontSize: 16, color: '#123044', overflowWrap: 'anywhere' }}>{getSiteName(site)}</h2>
+                  <small style={{ color: '#64748b', display: 'block', overflowWrap: 'anywhere' }}>{site.web_url || site.id}</small>
                 </div>
               </div>
               <p style={{ color: '#64748b', fontSize: 13, minHeight: 34 }}>{site.description || 'SharePoint site'}</p>

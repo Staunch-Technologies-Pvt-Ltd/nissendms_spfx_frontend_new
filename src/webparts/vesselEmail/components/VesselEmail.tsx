@@ -46,6 +46,61 @@ import { BulkUploadModal, BulkUploadFile, extractFilesFromDataTransfer } from '.
 import { renderVesselSuggestionsModal } from './pages/VesselSuggestionsModal';
 import { isMobileWidth, isTabletOrBelow } from './responsive';
 
+// ── Error Boundary ────────────────────────────────────────────────────────────
+// Prevents any crash inside DocumentsPage (or other pages) from unmounting
+// the entire SPFx web part. Instead shows a friendly reset card.
+class PageErrorBoundary extends React.Component<
+  { pageName?: string; children: React.ReactNode },
+  { hasError: boolean; errorMsg: string }
+> {
+  constructor(props: { pageName?: string; children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, errorMsg: '' };
+  }
+  static getDerivedStateFromError(error: unknown): { hasError: boolean; errorMsg: string } {
+    const msg = error instanceof Error ? error.message : String(error);
+    return { hasError: true, errorMsg: msg };
+  }
+  componentDidCatch(error: unknown, info: React.ErrorInfo): void {
+    console.error('[VesselDMS] PageErrorBoundary caught render error:', error, info?.componentStack);
+  }
+  render(): React.ReactNode {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          margin: 24, padding: 32, borderRadius: 14, border: '1px solid #fecaca',
+          background: '#fff5f5', color: '#991b1b', fontFamily: 'sans-serif',
+        }}>
+          <div style={{ fontSize: 22, marginBottom: 8 }}>⚠️ Something went wrong</div>
+          <div style={{ fontSize: 13, marginBottom: 4, fontWeight: 600 }}>
+            {this.props.pageName || 'Page'} encountered an error and could not render.
+          </div>
+          <div style={{ fontSize: 12, color: '#b91c1c', marginBottom: 20, fontFamily: 'monospace', wordBreak: 'break-all' }}>
+            {this.state.errorMsg}
+          </div>
+          <button
+            type="button"
+            onClick={() => this.setState({ hasError: false, errorMsg: '' })}
+            style={{
+              background: '#0284c7', color: '#fff', border: 'none', borderRadius: 8,
+              padding: '8px 22px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            Reset View
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+class DocumentsPageWrapper extends React.Component<{ host: any }> {
+  public render(): React.ReactElement | null {
+    return renderDocumentsPage(this.props.host);
+  }
+}
+
 // ── State Interface ──────────────────────────────────────────────────────────
 
 interface State {
@@ -90,9 +145,27 @@ interface State {
 
   // Module Specific Data
   documentsList: DocumentItem[];
+  documentSites: Array<{ site_key: string; sp_site_name: string; site_id: string; drive_id: string; web_url?: string; default_library_name?: string; is_primary?: boolean }>;
+  documentDepartmentAliases?: Record<string, string[]>;
+  documentVesselAliases?: Record<string, string[]>;
+  tenantDiscoveredSites?: Array<{ id: string; name: string; display_name: string; web_url?: string }>;
+  activeDocumentSite: string | null;
+  documentLiveFolders: Array<{
+    id: string;
+    name: string;
+    path: string;
+    parent_id: string;
+    depth: number;
+    is_folder?: boolean;
+    size?: number;
+    created_date_time?: string;
+    last_modified_date_time?: string;
+    web_url?: string;
+  }>;
+  documentLiveFoldersLoading: boolean;
   docViewMode: 'folder' | 'list';
-  docScopeType: 'vessels' | 'common' | 'kaizen';
-  docMainFolder: 'Technical & Crewing' | 'Commercial & Chartering' | 'Insurance' | 'Kaizen - Knowledge Bank' | 'Knowledge Bank' | null;
+  docScopeType: 'vessels' | 'common' | 'kaizen' | 'sites' | 'shared_docs' | 'documents';
+  docMainFolder: 'Technical & Crewing' | 'Commercial & Chartering' | 'Insurance' | 'Kaizen - Knowledge Bank' | 'Knowledge Bank' | 'Shared Documents' | 'Documents' | 'SharePoint Sites' | null;
   showAllVesselsInFolderView: boolean;
   docListPage: number;
   docListSort: 'name_az' | 'newest' | 'default';
@@ -269,6 +342,8 @@ interface State {
     subFolderPath: string;
     vesselName: string;
     currentFolderNode: { id: string; name: string } | null;
+    targetSiteId?: string;
+    targetDriveId?: string;
   } | null;
 
   // Folder Delete Dialog (moves uploaded folder to Recycle Bin)
@@ -329,8 +404,14 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   public _syncScheduler: SyncScheduler | null = null;
   private _folderRefreshSeq = 0;
   private _latestFolderRefreshTokenByKey: Map<string, number> = new Map();
+  private _documentSitesLoading = false;
+  private _documentLiveTreeLoading: Set<string> = new Set();
+  private _documentLiveTreeLoaded: Set<string> = new Set();
+  private _documentLiveTreeAbortControllers: Map<string, AbortController> = new Map();
+  private _liveSharePointMerges: Set<string> = new Set();
   private _rootFoldersEnsured = false;
   public _isLoadingData = false;
+  public _isUnmounted = false;
   public _deltaReloadTimer: ReturnType<typeof setTimeout> | null = null;
     public _deltaFileRefreshTimer: ReturnType<typeof setTimeout> | null = null;   // ← add this line
   public _alertRefreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -379,6 +460,13 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       vesselsSearch: '', vesselStatusFilter: 'all', vesselTypeFilter: 'all',
 
       documentsList: INITIAL_MOCK_DOCUMENTS,
+      documentSites: [],
+      documentDepartmentAliases: {},
+      documentVesselAliases: {},
+      tenantDiscoveredSites: [],
+      activeDocumentSite: null,
+      documentLiveFolders: [],
+      documentLiveFoldersLoading: false,
       docViewMode: 'folder',
       docScopeType: 'vessels',
       docMainFolder: null,
@@ -522,14 +610,17 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   }
 
   private _readSuppressUploadNavigationPrompt(): boolean {
-    if (typeof window === 'undefined') return false;
+    if (typeof window === 'undefined') return true;
     try {
       const raw = window.localStorage.getItem(this._vesselSuggestionPrefsStorageKey());
-      if (!raw) return false;
+      if (!raw) return true;
       const parsed = JSON.parse(raw) as { suppressUploadNavigationPrompt?: boolean };
-      return Boolean(parsed?.suppressUploadNavigationPrompt);
+      if (parsed && parsed.suppressUploadNavigationPrompt !== undefined) {
+        return Boolean(parsed.suppressUploadNavigationPrompt);
+      }
+      return true;
     } catch {
-      return false;
+      return true;
     }
   }
 
@@ -665,7 +756,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   private _mergeWithUploadCache(baseRows: FlatRow[], baseUploadedFilesByFolder?: State['uploadedFilesByFolder']): { rows: FlatRow[]; uploadedFilesByFolder: State['uploadedFilesByFolder'] } {
     const cache = this._readUploadCache();
     const mergedUploaded: State['uploadedFilesByFolder'] = { ...(baseUploadedFilesByFolder || {}) };
-    if (!cache) return { rows: baseRows, uploadedFilesByFolder: mergedUploaded };
+    const liveRows = this.state.rows.filter(row => row.groupKey.startsWith('live:'));
+    const rowsWithLive = [...baseRows, ...liveRows];
+    if (!cache) return { rows: rowsWithLive, uploadedFilesByFolder: mergedUploaded };
 
     const rowSignature = (row: FlatRow): string => [
       (row.vesselName || '').trim().toLowerCase(),
@@ -677,7 +770,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       (row.fileId || '').trim().toLowerCase(),
     ].join('||');
 
-    const mergedRows = [...baseRows];
+    const mergedRows = [...rowsWithLive];
     const seenRows = new Set(mergedRows.map(rowSignature));
     for (const cachedRow of cache.rows) {
       const sig = rowSignature(cachedRow);
@@ -953,31 +1046,11 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
 
   public componentDidMount(): void {
-    if (this.props.sessionId) {
-      this.setState({ sessionReady: true });
+    this._isUnmounted = false;
+    void this._loadDocumentSites().finally(() => {
+      if (this.props.sessionId) this.setState({ sessionReady: true });
       this._loadData();
-    } else if (this.props.sessionInitialized) {
-      // Session flow already settled with no session_id (stub/no-DB backend) —
-      // do NOT wait for a sessionId that will never arrive. Load data now.
-      this._loadData();
-    } else {
-      // Session not yet available (bypass-login still in flight in the webpart).
-      // Retry once after 2 s — by then _ensureSession() will have completed
-      // one way or another (with or without a session_id).
-      setTimeout(() => {
-        if (this.props.sessionId) {
-          this.setState({ sessionReady: true });
-          this._loadData();
-        } else if (this.props.sessionInitialized) {
-          this._loadData();
-        } else {
-          // Last-resort fallback: even if the webpart's onInit somehow never
-          // settled (e.g. an unhandled error before the finally{} block), still
-          // attempt to load data so the vessel list isn't blank forever.
-          this._loadData();
-        }
-      }, 2000);
-    }
+    });
     this._startDeltaSync();
     this._loadBentoConfig();
     void this._loadDashboardStats();
@@ -1065,6 +1138,10 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       this._loadVesselRowsFromApi(vesselFilter).catch(() => undefined);
       setTimeout(() => this._refreshFilesFromBackendRows(), 100);
     }
+    if (ps.docListPage !== this.state.docListPage && this.state.docViewMode === 'list') {
+      this._lastRefreshedRowsKey = '';
+      this._refreshFilesFromBackendRows(this.state.docListPage);
+    }
 
     if (ps.rows !== this.state.rows || ps.uploadedFilesByFolder !== this.state.uploadedFilesByFolder) {
       this._persistUploadCache(this.state.rows, this.state.uploadedFilesByFolder);
@@ -1076,6 +1153,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   }
 
   public componentWillUnmount(): void {
+    this._isUnmounted = true;
+    this._cancelDocumentLiveTree();
     this._abort?.abort();
     this._syncScheduler?.stop();
     if (this._deltaReloadTimer) clearTimeout(this._deltaReloadTimer);
@@ -1622,6 +1701,16 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     return h;
   }
 
+  private _headersForLocalFallback(): Record<string, string> {
+    const headers = this._headers();
+    delete headers.Authorization;
+    delete headers['X-Session-ID'];
+    const localSession = `mock-local-${(this.props.userEmail || 'guest').toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    headers['X-Session-ID'] = localSession;
+    headers.Authorization = `Bearer ${localSession}`;
+    return headers;
+  }
+
   // Upload headers – DO NOT set Content-Type; the browser must set it with the multipart boundary
   public _uploadHeaders(): Record<string, string> {
     const h: Record<string, string> = {};
@@ -1661,10 +1750,14 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         if (opts.signal?.aborted || err?.message === 'SESSION_EXPIRED') throw err;
         if (url.includes('nk-dms-dev.sg-nissenkaiun.com')) {
           VesselEmail._remoteServerDown = true;
-          const fallbackUrl = url.replace('https://nk-dms-dev.sg-nissenkaiun.com', 'http://localhost:8000');
+          const fallbackUrl = url.replace('https://nk-dms-dev.sg-nissenkaiun.com', 'http://127.0.0.1:8000');
           console.warn(`[VesselDMS] Remote API 502/Network error (${err?.message}) — auto-switched primary base to local backend: ${fallbackUrl}`);
           try {
-            const r = await fetch(fallbackUrl, opts);
+            const localOpts: RequestInit = {
+              ...opts,
+              headers: this._headersForLocalFallback(),
+            };
+            const r = await fetch(fallbackUrl, localOpts);
             if (r.status === 401 || r.status === 403) {
               this.setState({ sessionExpired: true });
               throw new Error('SESSION_EXPIRED');
@@ -1699,9 +1792,402 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   public _base(): string {
     const url = (this.props.apiBaseUrl || '').replace(/\/$/, '');
     if (VesselEmail._remoteServerDown && (!url || url.includes('nk-dms-dev.sg-nissenkaiun.com'))) {
-      return 'http://localhost:8000';
+      return 'http://127.0.0.1:8000';
     }
     return url || 'https://nk-dms-dev.sg-nissenkaiun.com';
+  }
+
+  public async _loadDocumentSites(): Promise<void> {
+    if (this._documentSitesLoading) return;
+    this._documentSitesLoading = true;
+    try {
+      let base = this._base();
+      let data: any = null;
+      try {
+        data = await this._fetchJson(`${base}/api/documents/sites`);
+      } catch {
+        if (!base.includes('localhost')) {
+          data = await this._fetchJson('http://127.0.0.1:8000/api/documents/sites').catch(() => null);
+        }
+      }
+      if (!data || !Array.isArray(data.sites) || data.sites.length === 0) {
+        try {
+          const cfg = await this._fetchJson(`${base}/api/config/available-sites`).catch(() => null);
+          if (Array.isArray(cfg?.sites) && cfg.sites.length > 0) {
+            data = {
+              sites: cfg.sites.map((s: any) => ({
+                site_key: s.site_key || s.name,
+                sp_site_name: s.sp_site_name || s.display_name || s.name,
+                site_id: s.site_id || '',
+                drive_id: s.drive_id || '',
+                web_url: s.web_url || '',
+                default_library_name: s.default_library_name || ((s.name || '').toLowerCase().includes('nks') ? 'Shared Documents' : 'Documents'),
+                is_primary: true,
+              })),
+              active_site: cfg.current_site,
+            };
+          }
+        } catch { /* ignore */ }
+      }
+      let sites = Array.isArray(data?.sites) ? data.sites : [];
+      const active = data?.active_site || sites[0]?.site_key || null;
+      this.setState({ documentSites: sites, activeDocumentSite: active });
+      // Fetch dynamic aliases alongside sites
+      void this._loadDocumentAliases().catch(() => undefined);
+    } catch (error) {
+      console.warn('[VesselDMS] configured Documents sites unavailable:', error);
+    } finally {
+      this._documentSitesLoading = false;
+    }
+  }
+
+  public async _loadDocumentAliases(): Promise<void> {
+    try {
+      const base = this._base();
+      let data = await this._fetchJson(`${base}/api/documents/aliases`).catch(() => null);
+      if (!data && !base.includes('localhost')) {
+        data = await this._fetchJson('http://127.0.0.1:8000/api/documents/aliases').catch(() => null);
+      }
+      if (data) {
+        this.setState({
+          documentDepartmentAliases: data.departments || {},
+          documentVesselAliases: data.vessels || {},
+        });
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  public _tenantSitesLoading = false;
+  public async _loadTenantSites(limit: number = 50): Promise<Array<{ id: string; name: string; display_name: string; web_url?: string }>> {
+    if (this.state.tenantDiscoveredSites && this.state.tenantDiscoveredSites.length > 0) {
+      return this.state.tenantDiscoveredSites;
+    }
+    try {
+      this._tenantSitesLoading = true;
+      const base = this._base();
+      let sResp = await this._fetchJson(`${base}/api/sites?limit=${limit}`).catch(() => null);
+      if (!sResp && !base.includes('localhost')) {
+        sResp = await this._fetchJson(`http://127.0.0.1:8000/api/sites?limit=${limit}`).catch(() => null);
+      }
+      const rawSites: any[] = Array.isArray(sResp?.sites) ? sResp.sites : [];
+      // Deduplicate: Exclude any site that is already in documentSites (configured first-class libraries)
+      const configuredIds = new Set<string>();
+      (this.state.documentSites || []).forEach(cs => {
+        if (cs.site_id) configuredIds.add(cs.site_id.toLowerCase());
+        if (cs.site_key) configuredIds.add(cs.site_key.toLowerCase());
+        if (cs.sp_site_name) configuredIds.add(cs.sp_site_name.toLowerCase());
+      });
+      const filtered = rawSites.filter(s => {
+        const id = (s.id || '').toLowerCase();
+        const name = (s.name || '').toLowerCase();
+        const disp = (s.display_name || '').toLowerCase();
+        return !configuredIds.has(id) && !configuredIds.has(name) && !configuredIds.has(disp);
+      }).map(s => ({
+        id: s.id,
+        name: s.name || s.id,
+        display_name: s.display_name || s.name || s.id,
+        web_url: s.web_url,
+      }));
+      this.setState({ tenantDiscoveredSites: filtered });
+      return filtered;
+    } catch {
+      return [];
+    } finally {
+      this._tenantSitesLoading = false;
+    }
+  }
+
+  public async _loadDocumentLiveTree(siteKey: string, knownSites = this.state.documentSites): Promise<void> {
+    if (this._documentLiveTreeLoading.has(siteKey) || this._documentLiveTreeLoaded.has(siteKey)) return;
+    const site = knownSites.find(item => item.site_key === siteKey);
+    if (!site || !site.drive_id) return;
+    this._documentLiveTreeLoading.add(siteKey);
+    const controller = new AbortController();
+    this._documentLiveTreeAbortControllers.set(siteKey, controller);
+    const selectedSite = knownSites.find(item => item.site_key === siteKey);
+    const isNksDocMan = /nksdocman/i.test(`${selectedSite?.site_key || ''} ${selectedSite?.sp_site_name || ''}`);
+    this.setState({
+      activeDocumentSite: siteKey,
+      documentLiveFoldersLoading: true,
+    });
+    if (isNksDocMan) {
+      this.setState({
+        docViewMode: 'folder',
+        docScopeType: 'sites',
+        folderPathStack: [],
+        folderNavHistory: [],
+        folderNavIndex: -1,
+        docMainFolder: null,
+        vesselFilter: 'all',
+      });
+    }
+    try {
+      const url = `${this._base()}/api/sites/${encodeURIComponent(site.site_id)}/drives/${encodeURIComponent(site.drive_id)}/folders/root/recursive`;
+      const timeout = new Promise<never>((_, reject) => {
+        window.setTimeout(() => reject(new Error('LIVE_TREE_TIMEOUT')), 20000);
+      });
+      const data = await Promise.race([this._fetchJson(url, controller.signal), timeout]);
+      if (this.state.activeDocumentSite !== siteKey) return;
+      const liveItems = Array.isArray(data?.folders) ? data.folders : [];
+      const liveRows: FlatRow[] = [];
+      const siteLabel = site.sp_site_name || site.site_key;
+      const libraryName = site.default_library_name || 'Shared Documents';
+      const knownVessels = this.state.vessels || [];
+      liveItems.forEach((item: any, index: number) => {
+        const parts = String(item.path || item.name || '').split('/').filter(Boolean);
+        if (parts.length === 0 || !item.id) return;
+        const folderParts = item.is_folder ? parts : parts.slice(0, -1);
+        const folderPath = folderParts.length > 0 ? folderParts : [siteLabel];
+
+        const tags = item.tags || {};
+        const tagVessel = tags.vessel && tags.vessel !== 'To Be Classified' && tags.vessel !== 'Unknown' && tags.vessel !== 'Not Listed' ? tags.vessel : null;
+        const tagDept = tags.department || tags.mainFolder || null;
+        const tagGroup = tags.group || null;
+        const tagCat = tags.category || null;
+        const tagSubCat = tags.sub_category || tags.subCategory || null;
+        const tagDocSec = tags.document_section || tags.documentSection || null;
+
+        const matchedVessel = knownVessels.find(vessel =>
+          folderPath.some(part => part.trim().toLowerCase() === vessel.name.trim().toLowerCase())
+        );
+        const vesselIndex = matchedVessel
+          ? folderPath.findIndex(part => part.trim().toLowerCase() === matchedVessel.name.trim().toLowerCase())
+          : -1;
+        const vesselName = tagVessel || matchedVessel?.name || 'Vessel not assigned';
+        const folderLevels = vesselIndex >= 0 ? folderPath.slice(vesselIndex + 1) : folderPath.slice(1);
+        const category = tagCat || (folderLevels[0] && folderLevels[0] !== siteLabel ? folderLevels[0] : 'Category not assigned');
+        const subCategory = tagSubCat || (folderLevels.length > 1 ? folderLevels[folderLevels.length - 1] : 'Sub-category not assigned');
+        const mainFolder = tagDept || 'Technical & Crewing';
+        const group = tagGroup || 'Group not assigned';
+        const documentSection = tagDocSec || 'Document section not assigned';
+        const subFolderPath = ['SharePoint Sites', siteLabel, libraryName, ...folderPath.filter((part, partIndex) => partIndex !== 0 || part.toLowerCase() !== libraryName.toLowerCase())].join(' > ');
+        const folderId = item.is_folder ? item.id : item.parent_id;
+        if (!folderId) return;
+        liveRows.push({
+          srNo: `LIVE-${index + 1}`,
+          vesselName,
+          group: mainFolder,
+          documentSection,
+          groupTag: group,
+          category,
+          subCategory,
+          subFolderPath,
+          fileName: item.is_folder ? null : (item.name || null),
+          fileId: item.is_folder ? null : item.id,
+          fileUploadedAt: item.created_date_time ? Date.parse(item.created_date_time) : (item.last_modified_date_time ? Date.parse(item.last_modified_date_time) : undefined),
+          fileSize: typeof item.size === 'number' ? `${(item.size / 1024).toFixed(1)} KB` : undefined,
+          canUpload: false,
+          groupKey: `live:${siteKey}:${folderId}`,
+          uploadFolderId: folderId,
+          monthDriven: false,
+          tags,
+        });
+      });
+      await new Promise<void>(resolve => {
+        this.setState(previous => ({
+          activeDocumentSite: siteKey,
+          documentLiveFolders: liveItems,
+          rows: [
+            ...previous.rows.filter(row => !row.groupKey.startsWith('live:')),
+            ...liveRows,
+          ],
+          documentLiveFoldersLoading: false,
+        }), resolve);
+      });
+    } catch (error: any) {
+      // Non-fatal: recursive tree is optional, folder browsing uses direct children
+      if (error?.name !== 'AbortError' && error?.message !== 'REQUEST_ABORTED') {
+        console.warn('[VesselDMS] live folder scan skipped:', error);
+      }
+      this._documentLiveTreeLoaded.delete(siteKey); // allow retry
+    } finally {
+      this._documentLiveTreeAbortControllers.delete(siteKey);
+      this._documentLiveTreeLoading.delete(siteKey);
+      this._documentLiveTreeLoaded.add(siteKey);
+      if (this.state.activeDocumentSite === siteKey) this.setState({ documentLiveFoldersLoading: false });
+    }
+  }
+
+  public _cancelDocumentLiveTree(): void {
+    this._documentLiveTreeAbortControllers.forEach(controller => controller.abort());
+    this._documentLiveTreeAbortControllers.clear();
+    this._documentLiveTreeLoading.clear();
+    if (!this._isUnmounted && this.state.documentLiveFoldersLoading) {
+      this.setState({ documentLiveFoldersLoading: false });
+    }
+  }
+
+  public async _loadSiteDrives(siteId: string): Promise<Array<{ id: string; name: string; web_url?: string }>> {
+    try {
+      const data = await this._fetchJson(`${this._base()}/api/sites/${encodeURIComponent(siteId)}/drives`);
+      return Array.isArray(data?.drives) ? data.drives : [];
+    } catch (err) {
+      console.warn('[VesselDMS] _loadSiteDrives error:', err);
+      return [];
+    }
+  }
+
+  public async _loadSiteFolderChildren(
+    siteId: string,
+    driveId: string,
+    folderId: string = 'root',
+  ): Promise<{ items: any[]; summaryCounts?: any; parentPath?: string; folderId?: string }> {
+    try {
+      const encodedFolderRef = folderId
+        .split('/')
+        .map(part => encodeURIComponent(part))
+        .join('/');
+      const data = await this._fetchJson(
+        `${this._base()}/api/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/folders/${encodedFolderRef}/children`
+      );
+      return {
+        items: Array.isArray(data?.items) ? data.items : [],
+        summaryCounts: data?.summary_counts || null,
+        parentPath: data?.parent_path || '',
+        folderId: data?.folder_id || folderId,
+      };
+    } catch (err) {
+      console.warn('[VesselDMS] _loadSiteFolderChildren error:', err);
+      return { items: [], summaryCounts: null, parentPath: '', folderId };
+    }
+  }
+
+  public _siteDrivesCache: Map<string, Array<{ id: string; name: string; web_url?: string }>> = new Map();
+  public _siteFolderItemsCache: Map<string, { items: any[]; loading?: boolean; parentPath?: string }> = new Map();
+  private _siteFolderChildPrefetched: Set<string> = new Set();
+
+  public _getOrLoadSiteDrives(siteId: string): Array<{ id: string; name: string; web_url?: string }> | null {
+    if (!siteId) return [];
+    if (this._siteDrivesCache.has(siteId)) {
+      return this._siteDrivesCache.get(siteId) || [];
+    }
+    this._siteDrivesCache.set(siteId, []);
+    this._loadSiteDrives(siteId).then(drives => {
+      this._siteDrivesCache.set(siteId, drives);
+      this.forceUpdate();
+    }).catch(() => undefined);
+    return null;
+  }
+
+  public _getOrLoadSiteFolderChildren(
+    siteId: string,
+    driveId: string,
+    folderId: string = 'root',
+    force: boolean = false,
+  ): { items: any[]; loading?: boolean } {
+    // Guard: cannot load without a valid site and drive
+    if (!siteId || !driveId) {
+      return { items: [], loading: false };
+    }
+    const key = `${siteId}::${driveId}::${folderId}`;
+    if (force) {
+      this._siteFolderItemsCache.delete(key);
+    } else if (this._siteFolderItemsCache.has(key)) {
+      return this._siteFolderItemsCache.get(key)!;
+    }
+
+    // The recursive live-tree load already contains every folder and file in
+    // the active drive. Use it for drill-down immediately instead of issuing
+    // another Graph request with a potentially stale cached folder ID.
+    if (!force && this.state.activeDocumentSite && this.state.documentLiveFolders.length > 0) {
+      const liveItems = folderId === 'root'
+        ? this.state.documentLiveFolders.filter(item => item.is_folder !== false && item.depth === 0)
+        : this.state.documentLiveFolders.filter(item => item.parent_id === folderId);
+      if (liveItems.length > 0 || folderId === 'root') {
+        const items = liveItems.map(item => ({
+          id: item.id,
+          name: item.name,
+          folder: item.is_folder !== false ? (() => {
+            const children = this.state.documentLiveFolders.filter(child => child.parent_id === item.id);
+            const prefix = `${item.path}/`;
+            const descendants = this.state.documentLiveFolders.filter(child => child.path.startsWith(prefix));
+            return {
+              childCount: descendants.length,
+              directFileCount: children.filter(child => child.is_folder === false).length,
+              directFolderCount: children.filter(child => child.is_folder !== false).length,
+            };
+          })() : undefined,
+          folder_counts: item.is_folder !== false ? (() => {
+            const children = this.state.documentLiveFolders.filter(child => child.parent_id === item.id);
+            const directFiles = children.filter(child => child.is_folder === false).length;
+            const directFolders = children.filter(child => child.is_folder !== false).length;
+            const prefix = `${item.path}/`;
+            const totalFiles = this.state.documentLiveFolders.filter(child => child.path.startsWith(prefix) && child.is_folder === false).length;
+            const totalFolders = this.state.documentLiveFolders.filter(child => child.path.startsWith(prefix) && child.is_folder !== false).length;
+            return {
+              direct_files: directFiles,
+              direct_subfolders: directFolders,
+              total_files: totalFiles,
+              total_subfolders: totalFolders,
+            };
+          })() : undefined,
+          file: item.is_folder === false ? {} : undefined,
+          size: item.size,
+          lastModifiedDateTime: item.last_modified_date_time,
+          webUrl: item.web_url,
+        }));
+        const immediate = { items, loading: false, parentPath: '' };
+        this._siteFolderItemsCache.set(key, immediate);
+        return immediate;
+      }
+    }
+
+    const entry: { items: any[]; loading: boolean } = { items: [], loading: true };
+    this._siteFolderItemsCache.set(key, entry);
+    this._loadSiteFolderChildren(siteId, driveId, folderId).then(res => {
+      const loadedEntry = { items: res.items || [], loading: false, parentPath: res.parentPath || '' };
+      this._siteFolderItemsCache.set(key, loadedEntry);
+      if (res.folderId && res.folderId !== folderId) {
+        const resolvedKey = `${siteId}::${driveId}::${res.folderId}`;
+        this._siteFolderItemsCache.set(resolvedKey, loadedEntry);
+      }
+      this.forceUpdate();
+    }).catch(() => {
+      this._siteFolderItemsCache.set(key, { items: [], loading: false, parentPath: '' });
+      this.forceUpdate();
+    });
+    return entry;
+  }
+
+  public async _refreshSiteFolder(siteId: string, driveId: string, folderId: string = 'root'): Promise<void> {
+    if (!siteId || !driveId) return;
+    const key = `${siteId}::${driveId}::${folderId}`;
+    this._siteFolderItemsCache.delete(key);
+    this._getOrLoadSiteFolderChildren(siteId, driveId, folderId, true);
+    this.forceUpdate();
+  }
+
+  private _usesBackendDocumentSite(): boolean {
+    return false;
+  }
+
+  public async _switchDocumentSite(siteKey: string): Promise<void> {
+    const base = this._base();
+    const selectedSite = this.state.documentSites.find(site => site.site_key === siteKey);
+    if (!selectedSite) throw new Error(`SharePoint site '${siteKey}' is not available.`);
+    const response = await fetch(`${this._base()}/api/sites/active`, {
+      method: 'POST',
+      headers: {
+        ...(base.includes('localhost') ? this._headersForLocalFallback() : this._headers()),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ site_name: siteKey }),
+    });
+    if (!response.ok) throw new Error(`Could not switch site (${response.status})`);
+    this._siteFolderItemsCache.clear();
+    this._siteFolderChildPrefetched.clear();
+    this.setState({
+      activeDocumentSite: siteKey,
+      documentLiveFolders: [],
+      documentLiveFoldersLoading: false,
+      rows: [],
+      uploadedFilesByFolder: {},
+      folderPathStack: [],
+      docMainFolder: null,
+      folderNavHistory: [{ folderPathStack: [], docMainFolder: null }],
+      folderNavIndex: 0,
+    });
+    await this._loadData(true);
   }
 
   // ── Alert Bell (top-header) ────────────────────────────────────────────────
@@ -1930,6 +2416,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       this._deltaReloadTimer = null;
     }
     this._isLoadingData = true;
+    this._fileFolderRefreshRequestedAt.clear();
     this._abort?.abort();
     this._abort = new AbortController();
     const signal = this._abort.signal;
@@ -1962,16 +2449,26 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       if (signal.aborted) return;
 
       let vessels: VesselRecord[] = [];
+      const { spoDeletedVesselIds, recycleBin } = this.state;
+      const deletedNames = new Set(
+        recycleBin
+          .filter(r => r.kind === 'vessel' || r.item_type === 'vessel')
+          .map(r => r.name.toLowerCase())
+      );
       if (vesselList && Array.isArray(vesselList) && vesselList.length > 0) {
-        const { spoDeletedVesselIds, recycleBin } = this.state;
-        const deletedNames = new Set(
-          recycleBin
-            .filter(r => r.kind === 'vessel' || r.item_type === 'vessel')
-            .map(r => r.name.toLowerCase())
-        );
         vessels = vesselList
           .map((v: any) => ({ ...v, name: cleanName(v.name), status: v.status || 'Active' }))
           .filter((v: any) => !spoDeletedVesselIds.has(v.id) && !deletedNames.has((v.name || '').toLowerCase()));
+      }
+      // Preserve any locally created vessels currently in state that might not yet be returned by backend
+      const fetchedNames = new Set(vessels.map(v => (v.name || '').trim().toLowerCase()));
+      const pendingLocalVessels = (this.state.vessels || []).filter(v =>
+        !fetchedNames.has((v.name || '').trim().toLowerCase()) &&
+        !spoDeletedVesselIds.has(v.id) &&
+        !deletedNames.has((v.name || '').trim().toLowerCase())
+      );
+      if (pendingLocalVessels.length > 0) {
+        vessels = [...pendingLocalVessels, ...vessels];
       }
 
       // Step 1b: SPO anomaly scan runs fully in the BACKGROUND — does NOT block vessel/document rendering
@@ -2139,7 +2636,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           // The flat tree contains folder structure only. Walk the active
           // SharePoint tree so parent folders with child folders (for example
           // Invoices & Payments > Invoice) are traversed to their file leaves.
-          this._refreshDocumentVesselFiles(initialVesselNames);
+          this._refreshFilesFromBackendRows(0);
         });
         return;
       }
@@ -2257,9 +2754,6 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         // DB rows describe the folder structure, but existing files live in
         // SharePoint. Walk the active drive so a refresh never depends on
         // stale cached folder IDs.
-        void this._mergeLiveSharePointFiles([vesselName]).catch(err =>
-          console.warn('[VesselDMS] live vessel file refresh warning:', err)
-        );
       });
     } catch (err) {
       console.warn('[VesselDMS] _loadVesselRowsFromApi warning:', err);
@@ -2326,9 +2820,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   }
 
   /** Merge existing SharePoint files for the vessels currently shown in Documents. */
-  public _refreshDocumentVesselFiles(vesselNames: string[]): void {
-    const uniqueVessels = Array.from(new Set(vesselNames.filter(Boolean)));
-    if (uniqueVessels.length > 0) void this._mergeLiveSharePointFiles(uniqueVessels);
+  public _refreshDocumentVesselFiles(vesselNames: string[], page: number = 0): void {
+    if (vesselNames.some(Boolean)) this._refreshFilesFromBackendRows(page);
   }
 
   /**
@@ -2340,8 +2833,10 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   /** Run-once guard: track the last rows snapshot we refreshed from, so we
    * don't fire Graph calls repeatedly if the row set hasn't changed. */
   private _lastRefreshedRowsKey: string = '';
+  private _fileFolderRefreshRequestedAt: Map<string, number> = new Map();
 
-  public _refreshFilesFromBackendRows(): void {
+  public _refreshFilesFromBackendRows(page: number = 0): void {
+    if (this._isUnmounted) return;
     const { graphClient, siteId, driveId } = this.props;
     if (!graphClient || !siteId || !driveId) return;
 
@@ -2356,7 +2851,13 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     // Collect unique subFolderPaths + uploadFolderIds for visible vessels.
     const seen = new Set<string>();
     const toRefresh: Array<{ subFolderPath: string; groupKey: string; uploadFolderId: string }> = [];
-    for (const row of rows) {
+    const LIST_PAGE_SIZE = 20;
+    const pageStart = Math.max(0, page) * LIST_PAGE_SIZE;
+    const orderedRows = [...rows].sort((a, b) =>
+      (b.fileUploadedAt || 0) - (a.fileUploadedAt || 0)
+    );
+    const pageRows = orderedRows.slice(pageStart, pageStart + LIST_PAGE_SIZE);
+    for (const row of pageRows) {
       if (!isSpecificVessel && !visibleVesselNames.has(cleanName(row.vesselName).trim().toLowerCase())) continue;
       if (isSpecificVessel && cleanName(row.vesselName).trim().toLowerCase() !== cleanName(vesselFilter).trim().toLowerCase()) continue;
       if (!row.subFolderPath || seen.has(row.subFolderPath)) continue;
@@ -2374,6 +2875,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     const BATCH = 2;
     const runBatch = async (items: typeof toRefresh): Promise<void> => {
       for (let i = 0; i < items.length; i += BATCH) {
+        if (this._isUnmounted) return;
         // Collect results for the whole batch first, then apply in ONE setState
         // call to prevent concurrent setState calls from overwriting each other.
         const batchResults: Array<{
@@ -2388,6 +2890,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
             // Strategy 1: Resolve folder via live spoFolderMap (delta-synced active drive).
             const liveFolderId = this._getLiveSharePointFolderId(item.subFolderPath);
+            const refreshFolderKey = `${siteId}:${driveId}:${liveFolderId || item.uploadFolderId || item.subFolderPath}`;
+            if (this._fileFolderRefreshRequestedAt.has(refreshFolderKey)) return;
+            this._fileFolderRefreshRequestedAt.set(refreshFolderKey, Date.now());
             if (liveFolderId) {
               const node = this.state.spoFolderMap.get(liveFolderId);
               const memFiles = (node?.children || []).filter(c => !c.isFolder);
@@ -2451,6 +2956,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             });
           })
         );
+
+        if (this._isUnmounted) return;
 
         // Apply ALL batch results in ONE setState to avoid race conditions.
         if (batchResults.length > 0) {
@@ -2517,9 +3024,14 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       return;
     }
 
+    const mergeKey = vesselNames.filter(Boolean).map(name => name.trim().toLowerCase()).sort().join('|');
+    if (this._liveSharePointMerges.has(mergeKey)) return;
+    this._liveSharePointMerges.add(mergeKey);
     this.setState({ documentFilesLoading: true });
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 20000);
     try {
-      const signal = new AbortController().signal;
+      const signal = controller.signal;
       const liveFolderRows: FlatRow[] = [];
       await this._mapLimit(vesselNames.filter(Boolean), 4, async vesselName => {
         const rows = await this._flattenVesselViaGraph(vesselName, signal, () => undefined).catch(() => []);
@@ -2668,6 +3180,10 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     } catch (err) {
       console.warn('[VesselDMS] _mergeLiveSharePointFiles warning:', err);
       this.setState({ documentFilesLoading: false });
+    } finally {
+      window.clearTimeout(timeoutId);
+      this._liveSharePointMerges.delete(mergeKey);
+      if (this.state.documentFilesLoading) this.setState({ documentFilesLoading: false });
     }
   }
 
@@ -2681,7 +3197,25 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     // The destination is always the same SharePoint tenant, so the window.opener
     // reference in the new tab is not a security concern.
     const target = window.open('about:blank', '_blank');
-    const { graphClient, siteId, driveId } = this.props;
+    const { graphClient } = this.props;
+
+    // Resolve the effective site (siteId, driveId, siteUrl) from state.documentSites.
+    // The row may carry siteKey (set by DocumentsPage), otherwise fall back to
+    // activeDocumentSite. Only default to the web-part props when the row
+    // genuinely belongs to the primary Communication site.
+    const rowSiteKey: string | undefined = (row as any).siteKey;
+    const effectiveSiteKey = rowSiteKey || this.state.activeDocumentSite || '';
+    const matchedSite = effectiveSiteKey
+      ? (this.state.documentSites || []).find(
+          s => s.site_key.toLowerCase() === effectiveSiteKey.toLowerCase()
+        )
+      : null;
+
+    const siteId   = (matchedSite?.site_id  && matchedSite.site_id !== matchedSite.site_key)
+                       ? matchedSite.site_id  : this.props.siteId;
+    const driveId  = matchedSite?.drive_id  || this.props.driveId;
+    const siteUrl  = matchedSite?.web_url   || this.props.siteUrl || '';
+
     const normalisePath = (path: string): string =>
       (path || '').replace(/^\/+/, '').replace(/\/+$/, '').replace(/\/vessels\//i, '/').toLocaleLowerCase();
     const sharePointPath = this._sharePointFolderPath(row.subFolderPath, '');
@@ -2699,11 +3233,12 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     console.info('[VesselDMS] folder navigation start', {
       uiPath: row.subFolderPath,
       sharePointPath,
-      siteUrl: this.props.siteUrl,
+      effectiveSiteKey,
+      siteUrl,
       siteId,
       driveId,
     });
-    logNavigation('start', { siteUrl: this.props.siteUrl, siteId: this.props.siteId, driveId: this.props.driveId });
+    logNavigation('start', { siteUrl, siteId, driveId, effectiveSiteKey });
     const expectedPath = normalisePath(sharePointPath);
     let liveFolderPath: string | undefined;
     let resolvedDrivePath: string | undefined;
@@ -2795,8 +3330,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           logNavigation('graph_search_failed', { error: String(searchError) });
         }
       }
-      if (!item && this.props.siteUrl) {
-        const site = new URL(this.props.siteUrl);
+      if (!item && siteUrl) {
+        const site = new URL(siteUrl);
         const sitePath = site.pathname.replace(/\/$/, '');
         const restPaths = [
           `${sitePath}/Shared Documents/Vessels/Specific Vessels/${sharePointPath}`,
@@ -2808,7 +3343,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           try {
             const escapedPath = serverRelativePath.replace(/'/g, "''");
             const response = await fetch(
-              `${this.props.siteUrl}/_api/web/GetFolderByServerRelativePath(decodedUrl='${encodeURIComponent(escapedPath)}')?$select=ServerRelativeUrl`,
+              `${siteUrl}/_api/web/GetFolderByServerRelativePath(decodedUrl='${encodeURIComponent(escapedPath)}')?$select=ServerRelativeUrl`,
               { headers: { Accept: 'application/json;odata=nometadata' }, credentials: 'include' },
             );
             if (response.ok) {
@@ -2819,7 +3354,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               // produce a blank page.  Encode only non-slash segments instead.
               const encodedActualPath = actualPath.split('/').map((s: string) => encodeURIComponent(s)).join('/');
               item = {
-                webUrl: `${site.origin}${sitePath}/Shared%20Documents/Forms/AllItems.aspx?id=${encodedActualPath}`,
+                webUrl: `${site.origin}${encodedActualPath}`,
               };
               resolvedDrivePath = actualPath.replace(`${sitePath}/Shared Documents/`, '');
               console.info('[VesselDMS] folder navigation success via SharePoint REST', {
@@ -2842,49 +3377,29 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         }
       }
       if (!item) {
-        if (this.props.siteUrl) {
-          const site = new URL(this.props.siteUrl);
-          const sitePath = site.pathname.replace(/\/$/, '');
-          if (target) {
-            const fallbackUrl = `${site.origin}${sitePath}/Shared Documents/Forms/AllItems.aspx`;
-            console.warn('[VesselDMS] folder navigation fallback to Documents root', {
-              url: fallbackUrl,
-              error: lastError,
-            });
-            logNavigation('fallback_documents_root', { url: fallbackUrl, error: String(lastError || '') });
-            target.location.href = fallbackUrl;
-          }
+        const fallbackBase = siteUrl || this.props.siteUrl;
+        if (fallbackBase) {
+          try {
+            const site = new URL(fallbackBase);
+            const sitePath = site.pathname.replace(/\/$/, '');
+            if (target) {
+              const fallbackUrl = `${site.origin}${sitePath}/Shared%20Documents`;
+              console.warn('[VesselDMS] folder navigation fallback to Documents root', {
+                url: fallbackUrl,
+                error: lastError,
+              });
+              logNavigation('fallback_documents_root', { url: fallbackUrl, error: String(lastError || '') });
+              target.location.href = fallbackUrl;
+            }
+          } catch { /* malformed URL — fall through */ }
           return;
         }
         throw lastError || new Error('The selected SharePoint folder was not found.');
       }
       if (!item?.webUrl) throw new Error('SharePoint did not return a folder link.');
-      // Derive the redirect URL from the Graph-returned webUrl.  The webUrl is
-      // already the correct SharePoint URL for the folder (e.g.
-      // https://tenant.sharepoint.com/Shared%20Documents/Vessels/…).  We convert
-      // it to the AllItems.aspx viewer form so the folder opens in the document
-      // library UI instead of downloading as a raw resource.
-      //
-      // IMPORTANT: SharePoint's AllItems.aspx ?id= parameter must contain the
-      // server-relative path with LITERAL slashes.  Using encodeURIComponent() on
-      // the whole path encodes '/' as '%2F' and produces a blank page.
-      let redirectUrl = item.webUrl;
-      try {
-        const folderUrl = new URL(item.webUrl);
-        // The webUrl pathname is already the server-relative path to the folder,
-        // properly percent-encoded by Graph (spaces → %20, & → %26, etc.).
-        const serverRelativePath = folderUrl.pathname; // e.g. /sites/NKSDocMan/Shared%20Documents/Vessels/…
-        const segments = serverRelativePath.split('/').filter(Boolean);
-        let libBasePath = '/Shared%20Documents';
-        if (segments[0]?.toLowerCase() === 'sites' && segments.length >= 3) {
-          libBasePath = `/${segments[0]}/${segments[1]}/${segments[2]}`;
-        } else if (segments.length >= 1) {
-          libBasePath = `/${segments[0]}`;
-        }
-        redirectUrl = `${folderUrl.origin}${libBasePath}/Forms/AllItems.aspx?id=${serverRelativePath}`;
-      } catch {
-        // Fallback: keep item.webUrl as-is if URL parsing fails.
-      }
+      // item.webUrl from Graph / SharePoint REST is the canonical, direct URL to open
+      // the folder in the modern document library view without fragile AllItems query params.
+      const redirectUrl = item.webUrl;
       console.info('[VesselDMS] folder navigation redirecting', { webUrl: redirectUrl, resolvedDrivePath });
       logNavigation('redirecting', { url: redirectUrl, resolvedDrivePath });
       if (target) {
@@ -3053,6 +3568,16 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       }
     }
 
+    const liveFolders = this.state.documentLiveFolders || [];
+    const livePathMatches = liveFolders.filter(folder => {
+      const path = (folder.path || '').toLowerCase().replace(/\\/g, '/');
+      return cleanPaths.some((candidate: string) => {
+        const normalized = candidate.toLowerCase().replace(/\\/g, '/');
+        return normalized && (path === normalized || path.endsWith(`/${normalized}`));
+      });
+    });
+    if (livePathMatches.length > 0) return livePathMatches[0].id;
+
     return null;
   }
 
@@ -3066,32 +3591,39 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     vesselName: string,
     file: File,
     monthDriven: boolean = false,
+    targetSiteId?: string,
+    targetDriveId?: string,
+    baseSubFolderPath?: string,
   ): Promise<{ fileId: string | null; statusPending: boolean; folderId: string | null; isGraphUpload: boolean }> {
     const base = this._base();
     if (!base) return { fileId: null, statusPending: false, folderId: null, isGraphUpload: false };
+
+    const effectiveSiteId = targetSiteId || this.props.siteId;
+    const effectiveDriveId = targetDriveId || this.props.driveId;
 
     const activeMainFolder = this.state.docMainFolder || 'Technical & Crewing';
     const encodePath = (p: string): string =>
       p.split('/').filter(Boolean).map(encodeURIComponent).join('/');
 
-    // 1. Construct canonical target SharePoint folder path
+    const { graphClient } = this.props;
     const rawSegments = (subFolderPath || uploadFolderId || '')
       .split(/[>/]/)
       .map(s => s.trim())
-      .filter(Boolean);
-
+      .filter(Boolean)
+      .filter(s => !/^(sharepoint sites|sites documents|documents|shared documents|home)$/i.test(s));
+    const cleanDirectPath = rawSegments.join('/');
     const cleanUploadFolder = (uploadFolderId || '').replace(/^[\s>/]+|[\s>/]+$/g, '');
     const isKaizen = vesselName === 'Kaizen - Knowledge Bank' ||
       rawSegments.some(s => s.toLowerCase() === 'kaizen - knowledge bank') ||
       cleanUploadFolder.toLowerCase().includes('kaizen');
-
     const isCommon = vesselName === 'Common for all vessels' ||
       vesselName === 'Common for all ships' ||
       rawSegments.some(s => /^common for all (vessels|ships)$/i.test(s)) ||
       cleanUploadFolder.toLowerCase().includes('common for all');
-
     let canonicalSharePointPath: string;
-    if (isKaizen) {
+    if (targetSiteId) {
+      canonicalSharePointPath = cleanDirectPath || 'General';
+    } else if (isKaizen) {
       const kaizenParts = rawSegments.filter(s => s.toLowerCase() !== 'kaizen - knowledge bank');
       canonicalSharePointPath = ['Kaizen - Knowledge Bank', ...kaizenParts].join('/');
     } else if (isCommon) {
@@ -3104,7 +3636,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       const mainF = rawSegments.find(s => this.MAIN_FOLDER_NAMES.some(mf => mf.toLowerCase() === s.toLowerCase())) || activeMainFolder;
       canonicalSharePointPath = [mainF, 'Common for all ships', ...commonParts].join('/');
     } else {
-      const effectiveVessel = vesselName && vesselName !== 'all'
+      const effectiveVessel = vesselName && vesselName !== 'all' && !/^(sharepoint sites|sites documents)$/i.test(vesselName)
         ? vesselName
         : (rawSegments.find(s => !this.MAIN_FOLDER_NAMES.some(mf => mf.toLowerCase() === s.toLowerCase()) && !/^(vessels|specific vessels|documents)$/i.test(s)) || 'newvessel37');
       const mainF = rawSegments.find(s => this.MAIN_FOLDER_NAMES.some(mf => mf.toLowerCase() === s.toLowerCase())) || activeMainFolder;
@@ -3115,101 +3647,202 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       );
       canonicalSharePointPath = [mainF, effectiveVessel, ...subTree].join('/');
     }
-
-    const { graphClient, siteId, driveId } = this.props;
-    if (graphClient && siteId && driveId) {
+    if (graphClient && effectiveSiteId && effectiveDriveId) {
       try {
         let folder: any = null;
 
-        // 1. Direct candidate path checks in Graph
-        const candidatePaths = Array.from(new Set([
-          canonicalSharePointPath,
-          uploadFolderId.includes('/') ? uploadFolderId.replace(/^\/+|\/+$/g, '') : '',
-          this._sharePointFolderPath(subFolderPath, uploadFolderId).replace(/^\/+|\/+$/g, ''),
-          vesselName ? `Vessels/Specific Vessels/${vesselName}/${canonicalSharePointPath}` : '',
-          vesselName ? `Vessels/${vesselName}/${canonicalSharePointPath}` : '',
-        ].filter(Boolean)));
-
-        for (const tryPath of candidatePaths) {
+        // 0. Direct Graph Item ID check if uploadFolderId is a real DriveItem ID or root
+        if (uploadFolderId === 'root') {
           try {
-            const folderItem = await graphClient
-              .api(`/sites/${siteId}/drives/${driveId}/root:/${encodePath(tryPath)}?$select=id,name,folder,webUrl`)
+            const rootItem = await graphClient
+              .api(`/sites/${effectiveSiteId}/drives/${effectiveDriveId}/root?$select=id,name,folder,webUrl`)
               .get();
-            if (folderItem?.id && folderItem.folder) {
-              folder = folderItem;
-              console.log(`[VesselDMS] _uploadFileToFolder: resolved folder in SPO at "${tryPath}" (id=${folder.id})`);
-              break;
+            if (rootItem?.id && rootItem.folder) folder = rootItem;
+          } catch {
+            // Fall back
+          }
+        } else if (
+          uploadFolderId &&
+          !uploadFolderId.includes('/') &&
+          !uploadFolderId.includes('>') &&
+          !/^(sf_|dept_|lib:|category_|sites_root|site:|drive:)/i.test(uploadFolderId) &&
+          !/^\d+$/.test(uploadFolderId)
+        ) {
+          try {
+            const itemById = await graphClient
+              .api(`/sites/${effectiveSiteId}/drives/${effectiveDriveId}/items/${uploadFolderId}?$select=id,name,folder,webUrl`)
+              .get();
+            if (itemById?.id && itemById.folder) {
+              folder = itemById;
+              console.log(`[VesselDMS] _uploadFileToFolder: resolved folder in SPO directly by ID "${uploadFolderId}" (name="${folder.name}")`);
             }
           } catch {
-            // Check next candidate
+            // Fall back to candidate paths
           }
         }
 
-        // 2. If folder does not exist yet in SPO, recursively create every missing segment
-        if (!folder) {
-          console.log(`[VesselDMS] _uploadFileToFolder: ensuring folder path "${canonicalSharePointPath}" in SharePoint Online...`);
-          const segments = canonicalSharePointPath.split('/').filter(Boolean);
-          let currentParentPath = '';
-          let currentFolderItem: any = null;
+        // Folder uploads pass the current folder ID plus a deeper relative path.
+        // Resolve that relative path beneath the current folder before uploading.
+        if (folder && baseSubFolderPath && subFolderPath) {
+          const splitPath = (path: string): string[] => path.split(/[>/]/).map(part => part.trim()).filter(Boolean);
+          const baseSegments = splitPath(baseSubFolderPath);
+          const targetSegments = splitPath(subFolderPath);
+          const hasBasePrefix = baseSegments.every((segment, index) =>
+            targetSegments[index]?.toLowerCase() === segment.toLowerCase()
+          );
+          const relativeSegments = hasBasePrefix ? targetSegments.slice(baseSegments.length) : [];
 
-          for (let i = 0; i < segments.length; i++) {
-            const seg = segments[i].trim();
-            const accumulatedPath = currentParentPath ? `${currentParentPath}/${seg}` : seg;
-            const encodedAccumulated = encodePath(accumulatedPath);
-
+          for (const segment of relativeSegments) {
+            const encodedSegment = encodeURIComponent(segment);
+            let parentFolder = folder;
+            let currentCreatedOrExisting: any = null;
             try {
               const existing = await graphClient
-                .api(`/sites/${siteId}/drives/${driveId}/root:/${encodedAccumulated}?$select=id,name,folder,webUrl`)
+                .api(`/sites/${effectiveSiteId}/drives/${effectiveDriveId}/items/${folder.id}:/${encodedSegment}?$select=id,name,folder,webUrl`)
                 .get();
               if (existing?.id && existing.folder) {
-                currentFolderItem = existing;
-                currentParentPath = accumulatedPath;
-                continue;
+                folder = existing;
+                currentCreatedOrExisting = existing;
               }
             } catch {
-              // Not found, create it
+              // The relative folder does not exist yet.
             }
 
-            const createUrl = currentParentPath
-              ? `/sites/${siteId}/drives/${driveId}/root:/${encodePath(currentParentPath)}:/children`
-              : `/sites/${siteId}/drives/${driveId}/root/children`;
+            if (!currentCreatedOrExisting) {
+              const created = await graphClient
+                .api(`/sites/${effectiveSiteId}/drives/${effectiveDriveId}/items/${folder.id}/children`)
+                .post({
+                  name: segment,
+                  folder: {},
+                  '@microsoft.graph.conflictBehavior': 'fail',
+                });
+              folder = created;
+              currentCreatedOrExisting = created;
+            }
 
-            try {
-              const created = await graphClient.api(createUrl).post({
-                name: seg,
-                folder: {},
-                '@microsoft.graph.conflictBehavior': 'fail',
-              });
-              currentFolderItem = created;
-              currentParentPath = accumulatedPath;
-              console.log(`[VesselDMS] _uploadFileToFolder: created SPO folder "${seg}" (id=${created.id})`);
-            } catch (createErr: any) {
-              try {
-                const existingAfterConflict = await graphClient
-                  .api(`/sites/${siteId}/drives/${driveId}/root:/${encodedAccumulated}?$select=id,name,folder,webUrl`)
-                  .get();
-                currentFolderItem = existingAfterConflict;
-                currentParentPath = accumulatedPath;
-              } catch {
-                throw createErr;
+            if (parentFolder?.id && currentCreatedOrExisting) {
+              const pCacheKey = `${effectiveSiteId}::${effectiveDriveId}::${parentFolder.id}`;
+              const pCache = this._siteFolderItemsCache.get(pCacheKey);
+              const pItem = {
+                id: currentCreatedOrExisting.id,
+                name: segment,
+                folder: { childCount: 0 },
+                webUrl: currentCreatedOrExisting.webUrl || '',
+                lastModifiedDateTime: new Date().toISOString(),
+              };
+              if (pCache) {
+                if (!pCache.items.some((it: any) => (it.name || '').toLowerCase() === segment.toLowerCase())) {
+                  pCache.items = [pItem, ...pCache.items];
+                }
+              } else {
+                this._siteFolderItemsCache.set(pCacheKey, { items: [pItem], loading: false, parentPath: '' });
               }
             }
           }
-          folder = currentFolderItem;
+        }
+
+        // 1. Construct canonical target SharePoint folder path if not resolved by ID
+        if (!folder) {
+          // Direct candidate path checks in Graph
+          const rawCandidatePaths = targetSiteId
+            ? [
+                cleanDirectPath,
+                canonicalSharePointPath,
+                uploadFolderId && uploadFolderId.includes('/') ? uploadFolderId.replace(/^\/+|\/+$/g, '') : '',
+              ]
+            : [
+                cleanDirectPath,
+                canonicalSharePointPath,
+                uploadFolderId && uploadFolderId.includes('/') ? uploadFolderId.replace(/^\/+|\/+$/g, '') : '',
+                this._sharePointFolderPath(subFolderPath, uploadFolderId).replace(/^\/+|\/+$/g, ''),
+                vesselName ? `Vessels/Specific Vessels/${vesselName}/${canonicalSharePointPath}` : '',
+                vesselName ? `Vessels/${vesselName}/${canonicalSharePointPath}` : '',
+              ];
+          const candidatePaths = Array.from(new Set(rawCandidatePaths.filter(Boolean)))
+            .filter(p => !targetSiteId || !/^(sharepoint sites|sites documents)/i.test(p.trim()));
+
+          for (const tryPath of candidatePaths) {
+            try {
+              const folderItem = await graphClient
+                .api(`/sites/${effectiveSiteId}/drives/${effectiveDriveId}/root:/${encodePath(tryPath)}?$select=id,name,folder,webUrl`)
+                .get();
+              if (folderItem?.id && folderItem.folder) {
+                folder = folderItem;
+                console.log(`[VesselDMS] _uploadFileToFolder: resolved folder in SPO at "${tryPath}" (id=${folder.id})`);
+                break;
+              }
+            } catch {
+              // Check next candidate
+            }
+          }
+
+          // 2. If folder does not exist yet in SPO, recursively create every missing segment
+          if (!folder) {
+            const targetPathToCreate = targetSiteId && cleanDirectPath ? cleanDirectPath : canonicalSharePointPath;
+            console.log(`[VesselDMS] _uploadFileToFolder: ensuring folder path "${targetPathToCreate}" in SharePoint Online...`);
+            const segments = targetPathToCreate.split('/').filter(Boolean);
+            let currentParentPath = '';
+            let currentFolderItem: any = null;
+
+            for (let i = 0; i < segments.length; i++) {
+              const seg = segments[i].trim();
+              const accumulatedPath = currentParentPath ? `${currentParentPath}/${seg}` : seg;
+              const encodedAccumulated = encodePath(accumulatedPath);
+
+              try {
+                const existing = await graphClient
+                  .api(`/sites/${effectiveSiteId}/drives/${effectiveDriveId}/root:/${encodedAccumulated}?$select=id,name,folder,webUrl`)
+                  .get();
+                if (existing?.id && existing.folder) {
+                  currentFolderItem = existing;
+                  currentParentPath = accumulatedPath;
+                  continue;
+                }
+              } catch {
+                // Not found, create it
+              }
+
+              const createUrl = currentParentPath
+                ? `/sites/${effectiveSiteId}/drives/${effectiveDriveId}/root:/${encodePath(currentParentPath)}:/children`
+                : `/sites/${effectiveSiteId}/drives/${effectiveDriveId}/root/children`;
+
+              try {
+                const created = await graphClient.api(createUrl).post({
+                  name: seg,
+                  folder: {},
+                  '@microsoft.graph.conflictBehavior': 'fail',
+                });
+                currentFolderItem = created;
+                currentParentPath = accumulatedPath;
+                console.log(`[VesselDMS] _uploadFileToFolder: created SPO folder "${seg}" (id=${created.id})`);
+              } catch (createErr: any) {
+                try {
+                  const existingAfterConflict = await graphClient
+                    .api(`/sites/${effectiveSiteId}/drives/${effectiveDriveId}/root:/${encodedAccumulated}?$select=id,name,folder,webUrl`)
+                    .get();
+                  currentFolderItem = existingAfterConflict;
+                  currentParentPath = accumulatedPath;
+                } catch {
+                  throw createErr;
+                }
+              }
+            }
+            folder = currentFolderItem;
+          }
         }
 
         if (!folder?.id) {
-          throw new Error(`Could not locate or create SharePoint folder for "${canonicalSharePointPath}".`);
+          throw new Error(`Could not locate or create SharePoint folder for "${subFolderPath || uploadFolderId}".`);
         }
 
         // 3. Upload file directly into the resolved SharePoint Online folder
         let item: any = null;
         if (file.size <= 4 * 1024 * 1024) {
-          const uploadUrl = `/sites/${siteId}/drives/${driveId}/items/${folder.id}:/${encodeURIComponent(file.name)}:/content`;
+          const uploadUrl = `/sites/${effectiveSiteId}/drives/${effectiveDriveId}/items/${folder.id}:/${encodeURIComponent(file.name)}:/content`;
           item = await graphClient.api(uploadUrl).put(file);
         } else {
           // Large file chunked upload session (> 4 MB)
-          const sessionUrl = `/sites/${siteId}/drives/${driveId}/items/${folder.id}:/${encodeURIComponent(file.name)}:/createUploadSession`;
+          const sessionUrl = `/sites/${effectiveSiteId}/drives/${effectiveDriveId}/items/${folder.id}:/${encodeURIComponent(file.name)}:/createUploadSession`;
           const session = await graphClient.api(sessionUrl).post({
             item: { '@microsoft.graph.conflictBehavior': 'rename', name: file.name },
           });
@@ -3241,8 +3874,26 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         if (!item?.id) throw new Error('SharePoint did not return an uploaded file ID.');
         console.log(`[VesselDMS] _uploadFileToFolder: successfully uploaded "${file.name}" to SharePoint Online (id=${item.id}) in folder "${folder.name}"`);
         this._appUploadedFileIds.add(item.id as string);
-        // Metadata write-back is intentionally handled by backend OCR/staging
-        // to avoid path-based field shifts (department/vessel/category overlap).
+
+        // Optimistically update site folder cache & live items
+        const siteCacheKey = `${effectiveSiteId}::${effectiveDriveId}::${folder.id}`;
+        const newFileItem = {
+          id: item.id,
+          name: file.name,
+          file: {},
+          size: file.size,
+          lastModifiedDateTime: new Date().toISOString(),
+          webUrl: item.webUrl || '',
+        };
+        const existingSiteCache = this._siteFolderItemsCache.get(siteCacheKey);
+        if (existingSiteCache) {
+          if (!existingSiteCache.items.some(i => i.name.toLowerCase() === file.name.toLowerCase())) {
+            existingSiteCache.items = [...existingSiteCache.items, newFileItem];
+          }
+        } else {
+          this._siteFolderItemsCache.set(siteCacheKey, { items: [newFileItem], loading: false, parentPath: '' });
+        }
+        void this._refreshSiteFolder(effectiveSiteId, effectiveDriveId, folder.id);
 
         return { fileId: item.id as string, statusPending: false, folderId: folder.id as string, isGraphUpload: true };
       } catch (graphErr) {
@@ -3302,39 +3953,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     vesselName: string,
     source: 'folder' | 'direct' = 'direct'
   ): void {
-    const base = this._base();
-    if (!base) return;
-
-    try {
-      const form = new FormData();
-      form.append('filename', file.name);
-      if (driveItemId) form.append('drive_item_id', driveItemId);
-      if (folderId) form.append('source_folder_id', folderId);
-      if (subFolderPath) form.append('source_subfolder_path', subFolderPath);
-      if (vesselName) form.append('vessel_name', vesselName);
-      form.append('upload_source', source);
-      if (this.props.userEmail) form.append('uploaded_by_email', this.props.userEmail);
-      // Attach binary for direct OCR parsing if file is <= 10MB
-      if (file.size <= 10 * 1024 * 1024) {
-        form.append('file', file);
-      }
-
-      fetch(`${base}/api/ocr/stage-file`, {
-        method: 'POST',
-        headers: this._uploadHeaders(),
-        body: form,
-      })
-        .then(async res => {
-          if (!res.ok) return;
-          const data = await res.json().catch(() => null);
-          if (data?.id && !data.duplicate) {
-            this.setState(prev => ({ ocrStagingCount: (prev.ocrStagingCount || 0) + 1 }));
-          }
-        })
-        .catch(() => undefined); // Fire-and-forget
-    } catch {
-      // Ignore errors in staging enqueue
-    }
+    // Disabled per user request: we do not want review & ocr
+    return;
   }
 
   // ── Graph API Folder Walking (mirrors VesselListView.tsx from reference project) ────
@@ -3386,6 +4006,23 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   }
 
 
+  public _mapToStandardGroup(rawName: string): string | null {
+    const n = (rawName || '').replace(/^Folder-\d+\s+/i, '').trim().toLowerCase();
+    if (n === 'technical & crewing' || n === 'technical' || n.includes('technical and crewing') || n.includes('technical & crewing')) {
+      return 'Technical & Crewing';
+    }
+    if (n === 'commercial & chartering' || n.includes('commercial and chartering') || n.includes('commercial & chartering') || n === 'commercial') {
+      return 'Commercial & Chartering';
+    }
+    if (n === 'insurance' || n.includes('insurance')) {
+      return 'Insurance';
+    }
+    if (n.includes('kaizen')) {
+      return 'Kaizen - Knowledge Bank';
+    }
+    return null;
+  }
+
   /**
    * Recursively walk a Graph folder path and emit FlatRow entries.
    * Mirrors the walkFolder() + leafToRows() pattern from the reference project's VesselListView.tsx.
@@ -3397,6 +4034,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     signal: AbortSignal,
     srCounter: { value: number },
     onRows: (rows: FlatRow[]) => void,
+    folderId?: string,
   ): Promise<void> {
     if (signal.aborted) return;
 
@@ -3414,7 +4052,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     const stripPrefix = (s: string): string => s.replace(/^Folder-\d+\s+/i, '');
 
     const isKaizen = vesselName.toLowerCase().includes('kaizen');
-    let group = stripPrefix(pathParts[0] || '');
+    const mappedGroup = this._mapToStandardGroup(pathParts[0] || '');
+    let group = mappedGroup || stripPrefix(pathParts[0] || '');
     let category = pathParts.length >= 3 ? stripPrefix(pathParts[2]) : (pathParts.length >= 2 ? stripPrefix(pathParts[pathParts.length - 1]) : group);
     let subCategory = pathParts.length >= 4 ? stripPrefix(pathParts[pathParts.length - 1]) : category;
     let subPath = '';
@@ -3445,7 +4084,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           srNo: baseSr, vesselName, group, category, subCategory,
           subFolderPath: subPath, fileName: null, fileId: null,
           canUpload, groupKey,
-          uploadFolderId: folderPath,
+          uploadFolderId: folderId || folderPath,
           monthDriven: false,
         }]);
       } else {
@@ -3453,7 +4092,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           srNo: idx === 0 ? baseSr : `${baseSr}${suffixes[idx - 1] ?? idx}`,
           vesselName, group, category, subCategory, subFolderPath: subPath,
           fileName: f.name, fileId: f.id, canUpload, groupKey,
-          uploadFolderId: folderPath,
+          uploadFolderId: folderId || folderPath,
           fileUploadedAt: f.createdDateTime ? Date.parse(f.createdDateTime) : (f.lastModifiedDateTime ? Date.parse(f.lastModifiedDateTime) : undefined),
           fileSize: typeof (f as any).size === 'number' ? `${((f as any).size / 1024).toFixed(1)} KB` : undefined,
           monthDriven: false,
@@ -3475,6 +4114,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           signal,
           srCounter,
           onRows,
+          sf.id,
         ),
       );
     }
@@ -3541,17 +4181,18 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       return allRows;
     }
 
-    // Check all known main folders first
-    const mainFolderNodes = rootChildren.filter(node => node.isFolder && knownMainFolders.has(normaliseName(node.name)));
+    // Check all known main folders first (including flexible naming like "Technical and Crewing  New")
+    const mainFolderNodes = rootChildren.filter(node => node.isFolder && (knownMainFolders.has(normaliseName(node.name)) || this._mapToStandardGroup(node.name) !== null));
     if (mainFolderNodes.length > 0) {
       foundSupportedStructure = true;
       for (const mainNode of mainFolderNodes) {
         if (signal.aborted) break;
         const mainPath = mainNode.name;
+        const standardGroup = this._mapToStandardGroup(mainNode.name) || mainNode.name;
         const mainChildren = await this._getGraphChildren(mainPath, signal).catch(() => []);
         const vesselNode = mainChildren.find(node => node.isFolder && normaliseName(node.name) === normaliseName(vesselName));
         if (vesselNode) {
-          discoveredMainFolders.push({ path: `${mainPath}/${vesselNode.name}`, group: mainNode.name });
+          discoveredMainFolders.push({ path: `${mainPath}/${vesselNode.name}`, group: standardGroup });
         }
       }
     }
@@ -3593,7 +4234,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           const vesselPath = `${vesselParentPath}/${vesselNode.name}`;
           const mainNodes = await this._getGraphChildren(vesselPath, signal).catch(() => []);
           mainNodes.filter(node => node.isFolder).forEach(node => {
-            discoveredMainFolders.push({ path: `${vesselPath}/${node.name}`, group: node.name });
+            const standardGroup = this._mapToStandardGroup(node.name) || node.name;
+            discoveredMainFolders.push({ path: `${vesselPath}/${node.name}`, group: standardGroup });
           });
         }
       }
@@ -3601,11 +4243,12 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       // Legacy structure: {Main folder} / {Vessel} / ... or
       // {Main folder} / Vessels / {Vessel} / ....
       if (discoveredMainFolders.length === 0) {
-        const mainNodes = baseChildren.filter(node => node.isFolder && knownMainFolders.has(normaliseName(node.name)));
+        const mainNodes = baseChildren.filter(node => node.isFolder && (knownMainFolders.has(normaliseName(node.name)) || this._mapToStandardGroup(node.name) !== null));
         if (mainNodes.length > 0) foundSupportedStructure = true;
         for (const mainNode of mainNodes) {
           if (signal.aborted) break;
           const mainPath = `${prefix}${mainNode.name}`;
+          const standardGroup = this._mapToStandardGroup(mainNode.name) || mainNode.name;
           const mainChildren = await this._getGraphChildren(mainPath, signal).catch(() => []);
           let vesselNode = mainChildren.find(node => node.isFolder && normaliseName(node.name) === normaliseName(vesselName));
           let vesselPath = vesselNode ? `${mainPath}/${vesselNode.name}` : '';
@@ -3617,7 +4260,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               vesselPath = vesselNode ? `${mainPath}/${legacyVesselsRoot.name}/${vesselNode.name}` : '';
             }
           }
-          if (vesselNode && vesselPath) discoveredMainFolders.push({ path: vesselPath, group: mainNode.name });
+          if (vesselNode && vesselPath) discoveredMainFolders.push({ path: vesselPath, group: standardGroup });
         }
       }
     }
@@ -4113,6 +4756,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       vessel_type: form.vessel_type || undefined,
       status: 'Active',
       image_url: pickRandomVesselImage(form.vessel_type),
+      // Include target site IDs so link generation works immediately before backend refresh
+      provisioned_site_ids: form.target_site_ids && form.target_site_ids.length > 0 ? form.target_site_ids : undefined,
     };
 
         try {
@@ -4150,10 +4795,13 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       // Add new vessel immediately to top of state grid
       this.setState(prev => ({
         vessels: [newVesselRecord, ...prev.vessels.filter(v => v.name.toLowerCase() !== newVesselRecord.name.toLowerCase())],
+        // Clear any stale folder provision banner from a previous operation so a fresh "0 created"
+        // result from the redundant front-end call does not appear. The backend already kicked off
+        // provisioning via asyncio.create_task during POST /api/vessels — we do not need to call
+        // _provisionVesselFolders here. The vessel state refreshes when the success modal closes.
+        folderCreationResults: null,
+        folderCreationError: null,
       }));
-
-      // Fire-and-forget folder provisioning — backend already handles SPO folder creation in background
-      void this._provisionVesselFolders(form.name.trim(), newVesselRecord.id).catch(() => undefined);
 
       // Transition modal to success screen immediately
       this.setState({
@@ -4170,6 +4818,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         modalBusy: false,
         modalMsg: `🎉 Vessel "${form.name}" Created & Provisioned Successfully!`,
         modalError: null,
+        folderCreationResults: null,
+        folderCreationError: null,
       }));
     }
   };
@@ -4419,7 +5069,81 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   public async _provisionVesselFolders(
     vesselName: string,
     vesselId?: string,
+    targetSiteIds?: string[],
   ): Promise<{ success: boolean; results: FolderResult[] }> {
+    // Determine which sites to provision on:
+    // • If caller passes explicit targetSiteIds (e.g. from Create Vessel form), honour exactly those.
+    // • Otherwise fall back to the currently active document site (legacy path for manual Provision button).
+    const explicitSites = targetSiteIds && targetSiteIds.length > 0 ? targetSiteIds : null;
+    const selectedSite = explicitSites ? explicitSites[0] : this.state.activeDocumentSite;
+    if (explicitSites && vesselId && /^\d+$/.test(vesselId)) {
+      // Multi-site explicit provision: call provision-sites with all chosen site keys
+      this.setState({ folderCreationBusy: true, folderCreationResults: null, folderCreationError: null, folderProvisioningVesselId: vesselId });
+      try {
+        const response = await fetch(`${this._base()}/api/vessels/${encodeURIComponent(vesselId)}/provision-sites`, {
+          method: 'POST',
+          headers: this._headers(),
+          body: JSON.stringify({ site_keys: explicitSites }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data?.detail || data?.error || `Provisioning failed (${response.status})`);
+        const allSucceeded = explicitSites.every(sk => {
+          const sr = data?.results?.[sk] || {};
+          return sr.status === 'success' || sr.success === true;
+        });
+        if (!allSucceeded) {
+          const failedSites = explicitSites.filter(sk => {
+            const sr = data?.results?.[sk] || {};
+            return sr.status !== 'success' && sr.success !== true;
+          });
+          throw new Error(`Provisioning failed for sites: ${failedSites.join(', ')}`);
+        }
+        this.setState({
+          folderCreationBusy: false,
+          folderProvisioningVesselId: null,
+          folderCreationError: null,
+          folderCreationResults: null,
+          provisionedVesselIds: new Set(Array.from(this.state.provisionedVesselIds).concat(vesselId)),
+          rows: [],
+        });
+        await this._loadData(true);
+        return { success: true, results: [] };
+      } catch (error: any) {
+        const message = error?.message || 'Folder provisioning failed.';
+        this.setState({ folderCreationBusy: false, folderProvisioningVesselId: null, folderCreationResults: null, folderCreationError: message });
+        return { success: false, results: [] };
+      }
+    }
+    if (selectedSite && vesselId && /^\d+$/.test(vesselId)) {
+      this.setState({ folderCreationBusy: true, folderCreationResults: null, folderCreationError: null, folderProvisioningVesselId: vesselId });
+      try {
+        const response = await fetch(`${this._base()}/api/vessels/${encodeURIComponent(vesselId)}/provision-sites`, {
+          method: 'POST',
+          headers: this._headers(),
+          body: JSON.stringify({ site_keys: [selectedSite] }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data?.detail || data?.error || `Provisioning failed (${response.status})`);
+        const siteResult = data?.results?.[selectedSite] || {};
+        const success = siteResult.status === 'success' || siteResult.success === true;
+        if (!success) throw new Error(siteResult.error || `Provisioning failed for site ${selectedSite}`);
+        this.setState({
+          folderCreationBusy: false,
+          folderProvisioningVesselId: null,
+          folderCreationError: null,
+          folderCreationResults: null,
+          provisionedVesselIds: new Set(Array.from(this.state.provisionedVesselIds).concat(vesselId)),
+          rows: [],
+        });
+        await this._loadData(true);
+        return { success: true, results: [] };
+      } catch (error: any) {
+        const message = error?.message || 'Folder provisioning failed.';
+        this.setState({ folderCreationBusy: false, folderProvisioningVesselId: null, folderCreationResults: null, folderCreationError: message });
+        return { success: false, results: [] };
+      }
+    }
+
     const { graphClient, siteId, driveId } = this.props;
     console.log(`[VesselDMS] _provisionVesselFolders vessel="${vesselName}" graphClient=${!!graphClient} siteId="${siteId}" driveId="${driveId}"`);
     if (!graphClient || !siteId || !driveId) {
@@ -4602,6 +5326,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         resolvedFolderPath = node.serverRelativePath;
         break;
       }
+
     }
 
     if (!mainFolderNodeId || !resolvedFolderPath) return;
@@ -4682,11 +5407,16 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     force: boolean = false,
     isConfirmedGraphFolderId: boolean = false,
   ): Promise<void> {
+    if (this._isUnmounted) return;
     if (!uploadFolderId) return;
     if (/^f\d+$/.test(uploadFolderId)) return;
     // These IDs exist only in the navigation tree and are not SharePoint
     // drive item IDs. Their contents are loaded by path/vessel-level logic.
     if (/^(kaizen_root|vessels_root|specific_vessels)$/i.test(uploadFolderId)) return;
+    if (/^(spo_|live:)/.test(groupKey) || /^01YT4WOQ/.test(uploadFolderId) || /^014ZGIJ/.test(uploadFolderId)) {
+      this._filesLoadedForFolders.add(uploadFolderId);
+      return;
+    }
     if (this.MAIN_FOLDER_NAMES.some(mf => mf.toLowerCase() === uploadFolderId.toLowerCase())) {
       this._filesLoadedForFolders.add(uploadFolderId);
       return;
@@ -4757,8 +5487,10 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     const isResolvedIdLive = this.state.spoFolderMap.has(resolvedId);
 
     if (graphClient && siteId && driveId) {
-      if ((!isLiveDriveFolderId && pathSegments.length >= 2) || directPath || resolvedPath) {
-        const rawBasePaths = Array.from(new Set([spPath, directPath, resolvedPath].filter(Boolean)));
+      const looksLikeDriveItemId = (s: string) => !s.includes('/') && !s.includes('>') && (/^01[A-Za-z0-9]{20,}/.test(s) || /^[A-Za-z0-9_-]{24,}$/.test(s));
+      const validPaths = [spPath, directPath, resolvedPath].filter(p => Boolean(p) && !looksLikeDriveItemId(p));
+      if ((!isLiveDriveFolderId && pathSegments.length >= 2) || validPaths.length > 0) {
+        const rawBasePaths = Array.from(new Set(validPaths));
         const tryPathsSet = new Set<string>();
 
         for (const basePath of rawBasePaths) {
@@ -6031,16 +6763,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           row.subFolderPath,
           row.vesselName,
           file,
-          row.monthDriven,
-        );
-        // Queue single file into OCR staging review pipeline (fire-and-forget)
-        this._triggerOcrStaging(
-          result.fileId,
-          file,
-          result.folderId || row.uploadFolderId,
-          row.subFolderPath,
-          row.vesselName,
-          'direct'
+          row.monthDriven
         );
         if (result.statusPending) pending++;
         else done++;
@@ -6080,9 +6803,6 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         },
       });
       this._startUploadSuccessTimer();
-      // ── Vessel Suggestions: always trigger after a successful upload ──
-      // Pass the folder's vessel name as context so the Term Store match is immediate.
-      void this._openVesselSuggestions(files, row.vesselName || undefined, successfulUploadEntries);
     }
     if (done > 0 || pending > 0) {
       const refreshFolderId = lastFolderId || row.uploadFolderId;
@@ -6218,127 +6938,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   }
 
   public _renderUploadNavigationPrompt(): React.ReactElement | null {
-    const p = this.state.uploadNavigationPrompt;
-    if (!p) return null;
-
-    const isMobile = isMobileWidth(this.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
-    const unresolvedPreview = (p.unresolvedFiles || []).slice(0, 4);
-
-    return (
-      <div style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(2, 6, 23, 0.45)',
-        zIndex: 100050,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: isMobile ? 12 : 20,
-      }}>
-        <div style={{
-          width: isMobile ? '100%' : 520,
-          maxWidth: '100%',
-          background: '#ffffff',
-          borderRadius: 14,
-          border: '1px solid #e2e8f0',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.22)',
-          padding: isMobile ? 16 : 20,
-          fontFamily: "'Segoe UI', sans-serif",
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-            <div style={{ width: 34, height: 34, borderRadius: 9, background: '#fff7ed', color: '#9a3412', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>⚠</div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>Review Needed for OCR</div>
-          </div>
-
-          <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.6 }}>
-            {p.queueTab === 'unstaged'
-              ? (p.unidentifiedCount > 0
-                ? `Vessel name was not identified for ${p.unidentifiedCount} file${p.unidentifiedCount === 1 ? '' : 's'}.`
-                : 'Some uploaded files require manual OCR review.')
-              : 'Upload was OCR-staged successfully.'}{' '}
-            Do you want to open Templates &amp; OCR &gt; {p.queueTab === 'unstaged' ? 'Needs Review' : 'Staging Queue'} now?
-          </div>
-
-          {unresolvedPreview.length > 0 && (
-            <div style={{ marginTop: 12, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 12px' }}>
-              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6 }}>Files needing review</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {unresolvedPreview.map((name, idx) => (
-                  <div key={`${name}_${idx}`} style={{ fontSize: 12, color: '#0f172a', wordBreak: 'break-all' }}>• {name}</div>
-                ))}
-                {p.unresolvedFiles.length > unresolvedPreview.length && (
-                  <div style={{ fontSize: 12, color: '#475569' }}>+{p.unresolvedFiles.length - unresolvedPreview.length} more file(s)</div>
-                )}
-              </div>
-            </div>
-          )}
-
-          <label style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
-            <input
-              type="checkbox"
-              checked={!!p.dontAskAgain}
-              onChange={(e) => this.setState(prev => ({
-                uploadNavigationPrompt: prev.uploadNavigationPrompt
-                  ? { ...prev.uploadNavigationPrompt, dontAskAgain: !!e.target.checked }
-                  : prev.uploadNavigationPrompt,
-              }))}
-            />
-            <span style={{ fontSize: 12, color: '#475569' }}>Don&apos;t ask again (stay on this page by default)</span>
-          </label>
-
-          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexDirection: isMobile ? 'column' : 'row' }}>
-            <button
-              onClick={() => {
-                const suppress = !!p.dontAskAgain;
-                this._persistSuppressUploadNavigationPrompt(suppress);
-                this.setState({
-                  suppressUploadNavigationPrompt: suppress,
-                  view: 'templates',
-                  ocrQueueTabHint: p.queueTab,
-                  uploadNavigationPrompt: null,
-                });
-              }}
-              style={{
-                flex: 1,
-                border: 'none',
-                borderRadius: 8,
-                minHeight: 44,
-                background: '#0369a1',
-                color: '#ffffff',
-                fontSize: 13,
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              Go to Templates &amp; OCR
-            </button>
-            <button
-              onClick={() => {
-                const suppress = !!p.dontAskAgain;
-                this._persistSuppressUploadNavigationPrompt(suppress);
-                this.setState({
-                  suppressUploadNavigationPrompt: suppress,
-                  uploadNavigationPrompt: null,
-                });
-              }}
-              style={{
-                flex: 1,
-                border: '1px solid #cbd5e1',
-                borderRadius: 8,
-                minHeight: 44,
-                background: '#ffffff',
-                color: '#334155',
-                fontSize: 13,
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              Stay on This Page
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+    // Disabled per user request: we do not want review & ocr
+    return null;
   }
 
   public _getGrouped(): GroupedRow[] {
@@ -6827,39 +7428,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     vesselName?: string,
     uploadEntries?: VesselSuggestionUploadEntry[],
   ): Promise<void> {
-    if ((files || []).length > 0) {
-      const queueAnalysis = await this._analyzeUploadQueueRouting(files || [], uploadEntries);
-      const unidentifiedFiles = queueAnalysis.unidentifiedFiles;
-      const shouldPromptTemplateNav = queueAnalysis.hasMatchedItems
-        && this.state.view !== 'templates'
-        && !this.state.suppressUploadNavigationPrompt;
-
-      if (unidentifiedFiles.length > 0 || shouldPromptTemplateNav) {
-        this.setState(prev => ({
-          vesselSuggestionDialog: null,
-          view: prev.view,
-          ocrQueueTabHint: queueAnalysis.hasMatchedItems ? queueAnalysis.queueTab : prev.ocrQueueTabHint,
-          ocrUnidentifiedFiles: unidentifiedFiles,
-          uploadNavigationPrompt: (shouldPromptTemplateNav)
-            ? {
-              unidentifiedCount: unidentifiedFiles.length,
-              unresolvedFiles: unidentifiedFiles,
-              queueTab: queueAnalysis.queueTab,
-              dontAskAgain: false,
-            }
-            : null,
-          docUploadMsg: unidentifiedFiles.length > 0
-            ? `Vessel name not identified for ${unidentifiedFiles.length} file${unidentifiedFiles.length === 1 ? '' : 's'}. Review in Templates & OCR > Needs Review.`
-            : (queueAnalysis.queueTab === 'unstaged'
-              ? 'Some uploaded files need manual OCR review in Templates & OCR > Needs Review.'
-              : 'Uploaded files are OCR-staged in Templates & OCR > Staging Queue.'),
-          uploadSuccessPopup: prev.uploadSuccessPopup
-            ? { ...prev.uploadSuccessPopup, unidentifiedFiles }
-            : prev.uploadSuccessPopup,
-        }));
-        return;
-      }
-    }
+    // Disabled OCR staging review queue routing per user request: we do not want review & ocr
 
     const dialog: VesselSuggestionDialog = {
       open: true,
@@ -7593,7 +8162,11 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   }
 
   public _renderDocumentsPage(): React.ReactElement {
-    return renderDocumentsPage(this);
+    return (
+      <PageErrorBoundary pageName="Documents">
+        <DocumentsPageWrapper host={this} />
+      </PageErrorBoundary>
+    );
   }
 
   public _renderVesselsPage(): React.ReactElement {
@@ -8333,7 +8906,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     folderId: string,
     subFolderPath: string,
     vesselName: string,
-    currentFolderNode?: { id: string; name: string } | null
+    currentFolderNode?: { id: string; name: string } | null,
+    targetSiteId?: string,
+    targetDriveId?: string,
   ): void => {
     if (!files || files.length === 0) return;
     this.setState({
@@ -8343,6 +8918,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         subFolderPath,
         vesselName,
         currentFolderNode: currentFolderNode || null,
+        targetSiteId,
+        targetDriveId,
       },
     });
   };
@@ -8358,6 +8935,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         subFolderPath={bulkUploadDialog.subFolderPath}
         vesselName={bulkUploadDialog.vesselName}
         currentFolderNode={bulkUploadDialog.currentFolderNode}
+        targetSiteId={bulkUploadDialog.targetSiteId}
+        targetDriveId={bulkUploadDialog.targetDriveId}
         onClose={() => this.setState({ bulkUploadDialog: null })}
       />
     );
