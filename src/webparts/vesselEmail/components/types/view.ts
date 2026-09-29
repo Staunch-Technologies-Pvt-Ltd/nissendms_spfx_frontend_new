@@ -12,8 +12,10 @@ export type AppView =
   | 'reports'
   | 'users'
   | 'settings'
+  | 'profile'
   | 'bento_email'
   | 'email_notify'
   | 'recycle'
   | 'archive'
-  | 'alerts';
+  | 'alerts'
+  | 'migration';

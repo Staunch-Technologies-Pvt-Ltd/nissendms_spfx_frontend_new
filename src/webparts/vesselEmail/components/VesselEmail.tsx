@@ -1,8 +1,24 @@
 import * as React from 'react';
 import type { IVesselEmailProps } from './IVesselEmailProps';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from './vesselImagePool';
-import { createVesselFolders, retryUntilComplete, FolderResult } from './graphFolderService';
 import { MAIN_FOLDERS } from './vesselFolderTemplate';
+import { clay, applyColorTheme, DEFAULT_CLAY_COLORS } from './clayTheme';
+import type { ClayColorTheme } from './clayTheme';
+
+/** Per-folder outcome of a provisioning attempt. Folder provisioning now
+ * always goes through the backend's flat-root `/provision-sites` endpoint
+ * (a single folder, single API call) rather than the old client-side
+ * multi-folder Graph builder (graphFolderService.ts, retired), so this list
+ * is normally empty on success — it's kept only so the existing
+ * folderCreationResults/folderCreationFeed state and the vessel-provisioning
+ * dialogs that read them keep compiling and can still surface a per-item
+ * failure list on the rare path that reports one. */
+export interface FolderResult {
+  path: string;
+  id?: string;
+  status: 'created' | 'existed' | 'failed';
+  error?: string;
+}
 import {
   createSyncScheduler, SyncScheduler, DeltaSyncResult,
   mergeNodeIntoMap, removeNodeFromMap, SpoFolderNode, fetchFolderChildren,
@@ -15,13 +31,13 @@ import type { BentoEmailLog } from './types/bento';
 import type { AppView, ModalMode } from './types/view';
 import type {
   FormState, DocPreviewItem, DeletedNode, DocumentItem, TemplateItem,
-  ApprovalItem, UserItem, FolderAnomalyItem, NormalFolderRecord, AlertItem,
-  VesselSuggestion, VesselSuggestionDialog, OcrStagingItem, VesselSuggestionUploadEntry,
+  UserItem, UserSitePermissionItem, FolderAnomalyItem, NormalFolderRecord, AlertItem,
+  ApprovalItem, VesselSuggestion, VesselSuggestionDialog, OcrStagingItem, VesselSuggestionUploadEntry,
 } from './types/ui';
 
 
 import {
-  cleanName, INITIAL_MOCK_DOCUMENTS, INITIAL_MOCK_TEMPLATES,
+  cleanName, INITIAL_MOCK_APPROVALS, INITIAL_MOCK_DOCUMENTS, INITIAL_MOCK_TEMPLATES,
 } from './constants';
 import { renderSidebar } from './pages/Sidebar';
 import { renderLayout } from './pages/AppLayout';
@@ -30,21 +46,23 @@ import { renderDashboard, DashboardStats } from './pages/DashboardPage';
 import { renderDocumentsPage } from './pages/DocumentsPage';
 import { SitesPage } from './pages/SitesPage';
 import { renderVesselsPage, renderClassifyDialog } from './pages/VesselsPage';
-import { renderTemplatesPage } from './pages/TemplatesPage';
-import { renderApprovalsPage } from './pages/ApprovalsPage';
-import { renderReportsPage } from './pages/ReportsPage';
 import { renderUsersPage } from './pages/UsersPage';
 import { renderSettingsPage } from './pages/SettingsPage';
+import { renderProfilePage } from './pages/ProfilePage';
+import { renderAuthPage, AuthPageMode } from './pages/AuthPage';
 import { renderBentoEmailDashboardPage } from './pages/BentoEmailDashboardPage';
 import { renderRecycleBinPage } from './pages/RecycleBinPage';
-import { renderArchivePage } from './pages/ArchivePage';
+import { ArchivePage } from './pages/ArchivePage';
 import { renderAlertsPage } from './pages/AlertsPage';
 import { renderBentoComposeModal } from './modals/BentoComposeModal';
 import { renderVesselForm } from './modals/VesselFormModal';
 import { renderDeleteModal } from './modals/DeleteVesselModal';
+import { renderArchivePickerModal, ArchivePickerDialogState } from './modals/ArchiveSelectionModal';
+import { renderCreateFolderModal, CreateFolderDialogState } from './modals/CreateFolderModal';
 import { BulkUploadModal, BulkUploadFile, extractFilesFromDataTransfer } from './BulkUploadModal';
 import { renderVesselSuggestionsModal } from './pages/VesselSuggestionsModal';
 import { isMobileWidth, isTabletOrBelow } from './responsive';
+import { MigrationAssistantModule } from './migrationAssistant/MigrationAssistantModule';
 
 // ── Error Boundary ────────────────────────────────────────────────────────────
 // Prevents any crash inside DocumentsPage (or other pages) from unmounting
@@ -82,8 +100,8 @@ class PageErrorBoundary extends React.Component<
             type="button"
             onClick={() => this.setState({ hasError: false, errorMsg: '' })}
             style={{
-              background: '#0284c7', color: '#fff', border: 'none', borderRadius: 8,
-              padding: '8px 22px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+              background: clay.accentGradient, color: '#fff', border: 'none', borderRadius: 8,
+              padding: '8px 22px', fontSize: 13, fontWeight: 600, cursor: 'pointer', boxShadow: clay.shadowButton,
             }}
           >
             Reset View
@@ -106,10 +124,28 @@ class DocumentsPageWrapper extends React.Component<{ host: any }> {
 interface State {
   rows: FlatRow[];
   vessels: VesselRecord[];
+  // Tenant-wide vessel names (every site, unscoped), fetched once purely so
+  // DocumentsPage's search-clause classifier (matchesSearchTokens'
+  // knownVesselNamesLower) can recognize "Bow Fighter + plan" as naming a
+  // vessel even while browsing a SharePoint site whose `vessels` (the
+  // Vessels-module table, scoped by vesselSiteFilter — see
+  // _switchDocumentSite's comment on why it deliberately never refetches
+  // that on a site switch) doesn't happen to include that vessel. Without
+  // this, a clause naming a real vessel not in the currently-loaded
+  // `vessels` list silently fell through to matchesSearchTokens' "unknown
+  // clause" OR fallback, which matched the OTHER clause's words (e.g.
+  // "plan") anywhere at all — pulling in unrelated vessels' files instead
+  // of narrowing to the named one. Never used for anything else (no UI
+  // renders from this list), so scoping it tenant-wide is safe.
+  allVesselNamesForSearch: string[];
   loading: boolean;
   error: string | null;
   reloadKey: number;
   textFilter: string;
+  // Documents page search box results dropdown (SearchResultsDropdown) —
+  // open/closed state and the keyboard-highlighted row index (-1 = none).
+  searchDropdownOpen: boolean;
+  searchDropdownActiveIndex: number;
   vesselFilter: string;
   groupFilter: string;
   catFilter: string;
@@ -127,6 +163,8 @@ interface State {
   selectedVessel: VesselRecord | null;
   deleteVesselIds: Set<string>;
   deleteVesselProgress: Record<string, { name: string; status: 'waiting' | 'deleting' | 'success' | 'pending' | 'failed'; message?: string }>;
+  /** Optional "Reason for deletion" text captured in the delete-vessel modal. */
+  deleteVesselReason: string;
   form: FormState;
   modalBusy: boolean;
   modalMsg: string | null;
@@ -138,10 +176,17 @@ interface State {
   view: AppView;
   recycleBin: DeletedNode[];
   archiveList: DeletedNode[];
+  // Drive item IDs currently archived (GET /api/archive/ids) — used to hide
+  // archived files from the normal Documents/Vessels views (they're only
+  // "retrievable" via the Archive page's Restore action) without having to
+  // re-derive that from archiveList, which only loads on the Archive page.
+  archivedFileIds: Set<string>;
+  archiveSearch: string;
   panelLoading: boolean;
   vesselsSearch: string;
   vesselStatusFilter: string;
   vesselTypeFilter: string;
+  vesselSiteFilter: string;
 
   // Module Specific Data
   documentsList: DocumentItem[];
@@ -174,6 +219,25 @@ interface State {
   docGroupLevelFilter: string;
   docLeafCategoryFilter: string;
   docSubCategoryFilter: string;
+  // Live per-site folders that are neither a known main folder/category nor a
+  // recognised vessel (e.g. "Report", "ACRA CHARGE", "Share with Mr Akase" —
+  // real folders that sit alongside vessel folders in SharePoint but aren't
+  // part of the app's department template). Selecting one filters Documents
+  // down to that folder's own rows in both List view and Folder view.
+  docSubfolderOtherFilter: string;
+  // "Compare" mode: when a selected vessel has a folder under 2+ main
+  // folders (Technical & Crewing, Commercial & Chartering, ...), this shows
+  // one browsable box per main folder side by side instead of Folder view's
+  // single breadcrumb-driven location. Opt-in via a toolbar toggle; Folder
+  // view / List view are unaffected when it's off (the default).
+  docCompareMode: boolean;
+  // Per-main-folder browsing state for Compare mode: each box drills through
+  // its own vessel-folder subtree independently of the others and of the
+  // main folderPathStack. Keyed by main folder name; value is the chain of
+  // sub-folder names navigated into within that box, relative to the
+  // vessel's own folder under that main folder (empty = showing the vessel
+  // folder's direct children).
+  compareBoxSubPaths: Record<string, string[]>;
   documentVesselCount: number;
   documentVesselsLoadingMore: boolean;
   documentFilesLoading: boolean;
@@ -181,26 +245,67 @@ interface State {
   docUploadRowKey: string | null;
   docUploadBusy: boolean;
   docUploadMsg: string | null;
+  // Phase 4 — full vessel + folder summary Excel export (independent of Documents filters)
+  vesselsExcelExportBusy: boolean;
   folderPathStack: { id: string; name: string }[];
   uploadedFilesByFolder: Record<string, { name: string; size: string; date: string; pending?: boolean; uploading?: boolean; id?: string; uploadedAt?: number }[]>;
   selectedDocPreview: DocPreviewItem | null;
   templatesList: TemplateItem[];
-  ocrStagingCount: number;
   approvalsList: ApprovalItem[];
   approvalTab: 'Pending' | 'Approved' | 'Rejected';
+  reportsSelectedVessel: string;
+  ocrStagingCount: number;
   // Top-header alert bell — new folder/vessel creation alerts (replaces bottom-of-module notifications)
   alertsList: AlertItem[];
+  // True once GET /api/alerts/all has resolved at least once. The deletion
+  // toast layer (AppLayout.tsx) uses this — not "alertsList is non-empty" —
+  // to tell "no alerts yet" (still loading) apart from "no deletions" so it
+  // never mistakes old, already-existing deletion alerts for fresh ones.
+  alertsLoaded: boolean;
   alertFilter: 'all' | 'unread';
-  alertCategory: 'dms' | 'unclassified' | 'classified' | 'crud' | 'email';
+  alertCategory: 'dms' | 'crud' | 'email';
   selectedAlertId: string | null;
   alertOpen: boolean;
   usersList: UserItem[];
   userSearch: string;
   userRoleFilter: string;
-  reportsSelectedVessel: string;
+  // Which user row's site-permission editor is expanded (email, or null).
+  usersExpandedEmail: string | null;
+  // In-progress edits for the expanded row's permissions, keyed by site_key,
+  // before "Save" commits them via _updateUserSitePermissions.
+  usersPermissionsDraft: UserSitePermissionItem[];
+  usersPermissionsBusy: boolean;
 
   // Settings module state
-  settingsTab: 'General' | 'Site Selection' | 'Vessel Site Provisioning' | 'Document Settings' | 'Notification Settings' | 'Permission Settings' | 'Integration' | 'Audit Logs';
+  settingsTab: 'General' | 'Vessel Site Provisioning' | 'Document Settings' | 'Notification Settings' | 'Permission Settings' | 'Site Management' | 'Vessel Settings' | 'Tag Configuration' | 'Module Management' | 'Filter Search Management' | 'Color Management' | 'Audit Logs' | 'Settings Management';
+  // Module ids (Sidebar.tsx navItems/auxLinks `id`) currently hidden
+  // app-wide via Settings → Module Management. Loaded once in
+  // componentDidMount (_loadModuleSettings) and refreshed immediately after
+  // a save from that section. Sidebar filters its nav with this; _goToView
+  // and the view switch below refuse to land on a hidden module.
+  hiddenModules: string[];
+  // Settings-page tab labels (SettingsPage.tsx settingsTab values) currently
+  // hidden app-wide via Settings → Settings Management. Loaded once in
+  // componentDidMount (_loadSettingsTabSettings) and refreshed immediately
+  // after a save from that section. SettingsPage.tsx filters its own left
+  // nav with this and redirects off a tab that just got hidden.
+  hiddenSettingsTabs: string[];
+  // How the Documents page's filter toolbar is presented, app-wide, via
+  // Settings → Filter Search Management (filter_settings_api.py). Loaded
+  // once in componentDidMount (_loadFilterSettings) and refreshed
+  // immediately after a save from that section. DocumentsPage.tsx reads
+  // this to switch between the inline dropdown row ('dropdown') and the
+  // slide-out Filters panel ('panel').
+  filterUiMode: 'dropdown' | 'panel';
+  // Whether the slide-out Filters panel (filterUiMode === 'panel') is
+  // currently open on the Documents page.
+  filterPanelOpen: boolean;
+  // Background/text/design(accent)/hover colors, per light+night mode, set
+  // app-wide via Settings → Color Management (color_settings_api.py).
+  // Loaded once in componentDidMount (_loadColorSettings) and applied via
+  // applyColorTheme(); refreshed immediately after a save from that
+  // section. AppLayout.tsx also reads this to rebuild Fluent UI's theme.
+  colorTheme: ClayColorTheme;
   settingsForm: {
     siteTitle: string;
     siteDescription: string;
@@ -228,6 +333,8 @@ interface State {
   bentoComposeMsg: string | null;
   bentoComposeErr: string | null;
   bentoDetailLog: BentoEmailLog | null;
+  bentoClearAllBusy: boolean;
+  bentoClearAllErr: string | null;
 
   // Approved files cache per vessel (keyed by lowercase vessel name)
   bentoApprovedFiles: Record<string, string[]>;
@@ -248,17 +355,77 @@ interface State {
   folderCreationFeed: FolderResult[];
   provisionedVesselIds: Set<string>;
 
+  // Vessel auto-discovery sync (SharePoint root folders -> DB/Term Store).
+  // The manual "Sync Vessels from SharePoint" button (and vesselSyncRunning/
+  // vesselSyncSummary, which only it ever set) was removed — the backend
+  // already runs this in the background on every vessel-list fetch (see
+  // _maybeAutoSyncVesselsFromSharePoint). vesselSyncError stays: it's also
+  // used by _confirmDiscoveredVessel for its own failures.
+  vesselSyncError: string | null;
+  // Draft edits (IMO / Hull No.) for "Found in SharePoint" cards, keyed by a
+  // stable key (site_key + folder path) since these vessels have no DB id yet
+  discoveredVesselDrafts: Record<string, { imo: string; hull_number: string }>;
+  // Key of the discovered-vessel card currently being confirmed (POST in flight)
+  confirmingVesselKey: string | null;
+  // Per-card error for a failed "Confirm Vessel" click, keyed by
+  // _discoveredVesselKey. Shown inline under that card's button — the
+  // page-level vesselSyncError banner at the top of the page is easy to
+  // miss once the user has scrolled down into the vessel grid, which made
+  // a failed confirm look like it silently did nothing ("no response").
+  discoveredVesselConfirmError: Record<string, string>;
+
+  // In-progress edits for a regular ("dms"-source) vessel card's IMO / Hull
+  // No. / Shipyard / Type fields, offered only when that field is currently
+  // empty (see renderVesselsPage). Keyed by vessel.id, unlike
+  // discoveredVesselDrafts which is deferred-save; these commit immediately
+  // via _saveVesselField (PATCH /api/vessels/{id}) on blur/select.
+  vesselFieldDrafts: Record<string, { imo?: string; hull_number?: string; shipyard?: string; vessel_type?: string }>;
+  // Save-in-flight / last-error state per "<vesselId>:<field>" key.
+  vesselFieldSaving: Record<string, boolean>;
+  vesselFieldError: Record<string, string>;
+  // A single field's edit awaiting the user's confirmation before it is
+  // PATCHed and locked. Set by _requestSaveVesselField (blur/select), cleared
+  // by confirming (which then calls _saveVesselField) or cancelling (which
+  // reverts the draft). Only one confirmation can be open at a time.
+  vesselFieldConfirm: {
+    vesselId: string;
+    vesselName: string;
+    field: 'imo' | 'hull_number' | 'shipyard' | 'vessel_type';
+    fieldLabel: string;
+    value: string;
+  } | null;
+
   // Delta sync — flat id→node map representing the live SPO folder tree
   spoFolderMap: Map<string, SpoFolderNode>;
   lastDeltaSync: Date | null;
 
   sessionExpired: boolean;
+  authPage: AuthPageMode | null;
   sessionReady: boolean;  // true once first valid session_id prop is received
 
   // Toast shown when a vessel is auto-moved to recycle bin via SPO deletion
-  spoVesselDeletedToast: { vesselName: string; id: string } | null;
-  // Toast shown when a document file/folder is moved to the SPO recycle bin
-  spoDocumentDeletedToast: { itemNames: string[]; itemType: 'file' | 'folder' } | null;
+  spoVesselDeletedToast: {
+    vesselName: string;
+    id: string;
+    siteName?: string | null;
+    originalPath?: string | null;
+    deletedByName?: string | null;
+    deletedByEmail?: string | null;
+  } | null;
+  // Toast shown when a document file/folder is moved to the SPO recycle bin.
+  // `items` carries per-item attribution (path / site / who deleted it) so the
+  // popup and the Alerts detail panel can both show "who / what / where".
+  spoDocumentDeletedToast: {
+    itemType: 'file' | 'folder';
+    items: Array<{
+      id: string;
+      name: string;
+      path?: string | null;
+      siteName?: string | null;
+      deletedByName?: string | null;
+      deletedByEmail?: string | null;
+    }>;
+  } | null;
   // IDs of vessels soft-deleted via SPO — used to filter them out of re-fetched vessel lists
   spoDeletedVesselIds: Set<string>;
 
@@ -294,6 +461,8 @@ interface State {
 
   // Sidebar collapse/expand state
   sidebarCollapsed: boolean;
+  themeMode: 'light' | 'night';
+  fullScreenWorkspace: boolean;
   windowWidth: number;
 
   // Folder navigation history (back/forward)
@@ -302,11 +471,26 @@ interface State {
 
   // File delete dialog
   fileDeleteDialog: {
-    files: Array<{ id: string; name: string; folderId: string; folderPath: string }>;
+    files: Array<{ id: string; name: string; folderId: string; folderPath: string; vesselName?: string }>;
     selected: Set<string>;
     busy: boolean;
     error: string | null;
+    /** "Reason for deletion (optional)" text captured before confirming. */
+    reason?: string;
   } | null;
+
+  // Archive picker popup — opened from the "Archive" toolbar button when
+  // browsing the plain SharePoint folder tree (Sites / Shared Documents /
+  // Documents), which has no per-file checkbox selection of its own. Lets
+  // the user check folders (recursively) and/or individual files under the
+  // folder they're currently viewing, then archives everything checked.
+  archivePickerDialog: ArchivePickerDialogState | null;
+
+  // Mirrors archivePickerDialog above, but for the "New Folder" toolbar
+  // button (top, next to Archive) — opens a popup to create a folder at
+  // (or under an edited variant of) whatever path the user is currently
+  // viewing, with an option to redirect into the Add Vessel form instead.
+  createFolderDialog: CreateFolderDialogState | null;
 
   // List view per-file checkbox selection (keyed by file id)
   listViewSelectedFiles: Set<string>;
@@ -346,6 +530,20 @@ interface State {
     targetDriveId?: string;
   } | null;
 
+  // Add Folder Dialog (create-subfolder under any vessel-owned or
+  // month-driven folder — Phase 3 "Add Folder" flow)
+  addFolderDialog: {
+    folderId: string;
+    folderLabel: string;
+    vesselName: string;
+    name: string;
+    busy: boolean;
+    error: string | null;
+    /** When checked, submitting redirects to the full Add Vessel form
+     *  (pre-filled with `name`) instead of creating a plain subfolder. */
+    asVessel: boolean;
+  } | null;
+
   // Folder Delete Dialog (moves uploaded folder to Recycle Bin)
   folderDeleteDialog: {
     currentFolderId: string;
@@ -357,6 +555,8 @@ interface State {
     selectedFolderId: string;
     busy: boolean;
     error: string | null;
+    /** "Reason for deletion (optional)" text captured before confirming. */
+    reason?: string;
   } | null;
 
   // OCR pending file from List/Folder View (triggers OCR tab in Templates)
@@ -377,6 +577,10 @@ interface State {
 
   // Real-time cached Dashboard/Home counts from backend
   dashboardStats: DashboardStats | null;
+  // SharePoint site the Dashboard's stat cards are scoped to ('all' = every
+  // configured site, merged). Independent of vesselSiteFilter/activeDocumentSite
+  // so switching it doesn't disturb the Vessels/Documents site selections.
+  dashboardSiteFilter: string;
 
   // Persistent progress for long-running site OCR scans, including navigation away from Sites.
   scanProgress: {
@@ -400,6 +604,13 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
   public _abort: AbortController | null = null;
   public _filesLoadedForVessels: Set<string> = new Set();
+  // Debounce timer + already-searched-terms cache for the Documents search
+  // box's fleet-wide backend lookup (see _scheduleGlobalSearch /
+  // _triggerGlobalSearch below) — lets a search term discover matches in
+  // vessels the user hasn't opened yet, instead of only filtering rows
+  // already loaded into state.
+  public _globalSearchTimer: ReturnType<typeof setTimeout> | null = null;
+  public _globalSearchSeenTerms: Set<string> = new Set();
   public _appUploadedFileIds: Set<string> = new Set();
   public _syncScheduler: SyncScheduler | null = null;
   private _folderRefreshSeq = 0;
@@ -409,13 +620,43 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   private _documentLiveTreeLoaded: Set<string> = new Set();
   private _documentLiveTreeAbortControllers: Map<string, AbortController> = new Map();
   private _liveSharePointMerges: Set<string> = new Set();
-  private _rootFoldersEnsured = false;
+  // Monotonic request counter for _loadDashboardStats. Guards against a
+  // slow in-flight request (e.g. a full live scan for a previous site
+  // selection) resolving AFTER a newer one and clobbering it. Sequencing
+  // the requests themselves — rather than comparing last_refreshed_epoch,
+  // which is a per-site server cache timestamp and isn't comparable across
+  // different sites — is what lets a dashboard site switch apply immediately
+  // instead of waiting for the newly selected site's cache epoch to catch up.
+  private _dashboardStatsSeq = 0;
+  private _dashboardStatsAppliedSeq = 0;
   public _isLoadingData = false;
   public _isUnmounted = false;
+  // Throttle state for the background auto-sync-from-SharePoint (see
+  // _maybeAutoSyncVesselsFromSharePoint): last time (ms) an automatic sync
+  // ran per site_key ('all' for the unfiltered view), so _loadData — which
+  // can fire many times a minute (delta reload, polling, user actions) —
+  // doesn't re-trigger a full SharePoint scan on every call.
+  private _lastAutoSyncAt: Record<string, number> = {};
+  private static readonly AUTO_SYNC_MIN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
   public _deltaReloadTimer: ReturnType<typeof setTimeout> | null = null;
     public _deltaFileRefreshTimer: ReturnType<typeof setTimeout> | null = null;   // ← add this line
   public _alertRefreshTimer: ReturnType<typeof setInterval> | null = null;
   public _deleteAutoCloseTimer: ReturnType<typeof setInterval> | null = null;
+  // Auto-dismiss timers for the two SPO-deletion popups (Recycle Bin fix #5):
+  // each popup dismisses itself after _TOAST_AUTO_DISMISS_MS unless the
+  // pointer is over it, in which case the timer is cleared on hover and
+  // restarted on mouse-leave.
+  public _vesselToastAutoCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  public _documentToastAutoCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly _TOAST_AUTO_DISMISS_MS = 7000;
+  // Drive item IDs we've already raised a deletion popup for, across BOTH
+  // the vessel-deletion and generic document-deletion paths — belt-and-
+  // suspenders against the same SPO deletion event surfacing more than one
+  // popup (e.g. a vessel's root folder being reported once as a vessel
+  // deletion and again by a generic delta-sync/poll path). Kept as a plain
+  // instance Set (not React state) since it's bookkeeping, not something
+  // that should trigger a re-render or ever need to be reset by the user.
+  public _shownDeletionToastIds: Set<string> = new Set();
   public _appDeletedItemIds: Set<string> = new Set();
   public _initialDocumentFolderRefreshDone = false;
   private readonly _uploadCacheVersion = 1;
@@ -437,6 +678,28 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   // Root prefix under which vessels/common reside (empty = Documents root)
   public readonly VESSEL_ROOT: string = '';
 
+  // Tracks whether the user has already clicked into the Documents module
+  // ('list' view) since this component was constructed (i.e. since the last
+  // full page load / hard refresh). Always starts false on a fresh mount —
+  // see _goToView's 'list' branch for why this matters.
+  private _hasEnteredDocumentsSinceMount: boolean = false;
+
+  // Set once _loadDocumentSites (componentDidMount) has finished resolving
+  // the initial/restored site+drive+folder root against live Graph data —
+  // i.e. state.folderPathStack/docScopeType are already trustworthy, not a
+  // stale unverified leftover. _goToView's 'list' branch used to always
+  // discard a live 'sites'/'shared_docs'/'documents' scope on the user's
+  // very first "Documents" click after mount (isFirstEntrySinceMount),
+  // assuming any such scope that early could only be an unverified
+  // sessionStorage restore. But _loadDocumentSites can finish (and set a
+  // freshly-verified 'sites' root, see its wantsInitialSiteRoot/live-drive
+  // logic) before that first click happens, and the reset threw that good
+  // data away — landing the user on the empty vessels-DB root ("0 main
+  // folders & libraries") on hard refresh / app start until they manually
+  // reselected a site (which re-resolves the drive via
+  // _switchDocumentSite). This flag lets _goToView tell the two cases
+  // apart instead of always assuming the worst on the first click.
+  private _initialDocumentsRootReady: boolean = false;
 
   public constructor(props: IVesselEmailProps) {
     super(props);
@@ -445,63 +708,82 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       suggestion => !ignoredSuggestionKeys.has(this._getSuggestionKey(suggestion))
     );
     const suppressUploadNavigationPrompt = this._readSuppressUploadNavigationPrompt();
+    const savedThemeMode = typeof window !== 'undefined' ? window.localStorage.getItem('vesseldms.theme-mode') : null;
+    const themeMode: 'light' | 'night' = savedThemeMode === 'night' ? 'night' : 'light';
+    const persistedFolderNav = this._readPersistedFolderNav();
     this.state = {
       rows: [],
       vessels: [],
+      allVesselNamesForSearch: [],
       loading: false, error: null, reloadKey: 0, sessionExpired: Boolean(props.sessionExpired),
-      textFilter: '', vesselFilter: 'all', groupFilter: 'all', catFilter: 'all', attachmentFilter: 'all',
+      authPage: props.sessionExpired ? 'login' : null,
+      textFilter: '', searchDropdownOpen: false, searchDropdownActiveIndex: -1,
+      vesselFilter: 'all', groupFilter: 'all', catFilter: 'all', attachmentFilter: 'all',
       sort: 'default', uploadingGroupKey: null, uploadInfo: null, uploadError: null,
       selectedFileIds: new Set(), page: 0,
-           modal: 'none', selectedVessel: null, deleteVesselIds: new Set(), deleteVesselProgress: {}, form: { ...BLANK_FORM },
+           modal: 'none', selectedVessel: null, deleteVesselIds: new Set(), deleteVesselProgress: {}, deleteVesselReason: '', form: { ...BLANK_FORM },
            vesselActionPicker: null,
       modalBusy: false, modalMsg: null, modalError: null, deleteAutoCloseSeconds: null, formFieldErrors: {},
       view: 'dashboard',
-      recycleBin: [], archiveList: [], panelLoading: false,
-      vesselsSearch: '', vesselStatusFilter: 'all', vesselTypeFilter: 'all',
+      recycleBin: [], archiveList: [], archivedFileIds: new Set<string>(), archiveSearch: '', panelLoading: false,
+      vesselsSearch: '', vesselStatusFilter: 'all', vesselTypeFilter: 'all', vesselSiteFilter: 'all',
 
       documentsList: INITIAL_MOCK_DOCUMENTS,
       documentSites: [],
       documentDepartmentAliases: {},
       documentVesselAliases: {},
       tenantDiscoveredSites: [],
-      activeDocumentSite: null,
+      activeDocumentSite: persistedFolderNav ? persistedFolderNav.activeDocumentSite : null,
       documentLiveFolders: [],
       documentLiveFoldersLoading: false,
-      docViewMode: 'folder',
-      docScopeType: 'vessels',
-      docMainFolder: null,
+      docViewMode: persistedFolderNav ? persistedFolderNav.docViewMode : 'folder',
+      docScopeType: persistedFolderNav ? persistedFolderNav.docScopeType : 'vessels',
+      docMainFolder: persistedFolderNav ? persistedFolderNav.docMainFolder : null,
       showAllVesselsInFolderView: false,
       docListPage: 0,
       docListSort: 'default',
       docGroupFilter: 'all',
-      docCategoryFilter: 'all',
+      docCategoryFilter: persistedFolderNav ? persistedFolderNav.docCategoryFilter : 'all',
       docGroupLevelFilter: 'all',
       docLeafCategoryFilter: 'all',
       docSubCategoryFilter: 'all',
+      docSubfolderOtherFilter: persistedFolderNav ? persistedFolderNav.docSubfolderOtherFilter : 'all',
+      docCompareMode: false,
+      compareBoxSubPaths: {},
       documentVesselCount: 4,
       documentVesselsLoadingMore: false,
       documentFilesLoading: false,
       vesselLoadingName: null,
       docUploadRowKey: null,
       docUploadBusy: false,
+      vesselsExcelExportBusy: false,
       docUploadMsg: null,
-      folderPathStack: [],
+      folderPathStack: persistedFolderNav ? persistedFolderNav.folderPathStack : [],
       uploadedFilesByFolder: {},
       selectedDocPreview: null,
       templatesList: INITIAL_MOCK_TEMPLATES,
-      ocrStagingCount: 0,
-      approvalsList: [],
+      approvalsList: INITIAL_MOCK_APPROVALS,
       approvalTab: 'Pending',
+      reportsSelectedVessel: 'All Vessels',
+      ocrStagingCount: 0,
       alertsList: [],
+      alertsLoaded: false,
       alertFilter: 'all',
       alertCategory: 'dms',
       selectedAlertId: null,
       alertOpen: false,
       usersList: [],
       userSearch: '', userRoleFilter: 'all',
-      reportsSelectedVessel: 'All Vessels',
+      usersExpandedEmail: null,
+      usersPermissionsDraft: [],
+      usersPermissionsBusy: false,
 
-      settingsTab: 'General',
+      settingsTab: 'Site Management',
+      hiddenModules: [],
+      hiddenSettingsTabs: [],
+      colorTheme: DEFAULT_CLAY_COLORS,
+      filterUiMode: 'dropdown',
+      filterPanelOpen: false,
       settingsForm: {
         siteTitle: 'Vessel Documents Management',
         siteDescription: 'Manage and track all vessel related documents efficiently.',
@@ -516,6 +798,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       bentoComposeForm: { vessel_name: '', datasource_tag: 'mail', subject_text: '', body: '', file: null, existing_attachment: '', recipient: '' },
       bentoComposeBusy: false, bentoComposeMsg: null, bentoComposeErr: null,
       bentoDetailLog: null,
+      bentoClearAllBusy: false, bentoClearAllErr: null,
       bentoUploadFile: null, bentoUploadVessel: '', bentoUploadTag: 'mail',
       bentoUploadBusy: false, bentoUploadMsg: null, bentoUploadErr: null,
       bentoApprovedFiles: {},
@@ -527,6 +810,14 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       folderProvisioningVesselId: null,
       folderCreationFeed: [],
       provisionedVesselIds: new Set<string>(),
+      vesselSyncError: null,
+      discoveredVesselDrafts: {},
+      confirmingVesselKey: null,
+      discoveredVesselConfirmError: {},
+      vesselFieldDrafts: {},
+      vesselFieldSaving: {},
+      vesselFieldError: {},
+      vesselFieldConfirm: null,
       spoFolderMap: new Map(),
       lastDeltaSync: null,
       sessionReady: false,
@@ -541,13 +832,20 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       spoDocumentDeletedToast: null,
       spoDeletedVesselIds: new Set<string>(),
       sidebarCollapsed: false,
+      themeMode,
+      fullScreenWorkspace: false,
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1200,
-      folderNavHistory: [{ folderPathStack: [], docMainFolder: null }],
+      folderNavHistory: persistedFolderNav
+        ? [{ folderPathStack: persistedFolderNav.folderPathStack, docMainFolder: persistedFolderNav.docMainFolder }]
+        : [{ folderPathStack: [], docMainFolder: null }],
       folderNavIndex: 0,
       uploadSuccessPopup: null,
       uploadNavigationPrompt: null,
       bulkUploadDialog: null,
       fileDeleteDialog: null,
+      archivePickerDialog: null,
+      createFolderDialog: null,
+      addFolderDialog: null,
       folderDeleteDialog: null,
       listViewSelectedFiles: new Set<string>(),
       folderViewSelectedFiles: new Set<string>(),
@@ -561,11 +859,26 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       suppressUploadNavigationPrompt,
       vesselsNavExpanded: true,
       dashboardStats: null,
+      dashboardSiteFilter: 'all',
       scanProgress: {
         status: 'idle', completed: 0, total: 0, title: '', recentFiles: [],
       },
     };
   }
+
+  public _toggleThemeMode = (): void => {
+    this.setState(prev => {
+      const themeMode: 'light' | 'night' = prev.themeMode === 'light' ? 'night' : 'light';
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('vesseldms.theme-mode', themeMode);
+      }
+      return { themeMode };
+    });
+  };
+
+  public _toggleFullScreenWorkspace = (): void => {
+    this.setState(prev => ({ fullScreenWorkspace: !prev.fullScreenWorkspace }));
+  };
 
   private _uploadCacheStorageKey(): string {
     const scope = (this.props.siteId || this.props.siteUrl || 'default').toString().toLowerCase();
@@ -645,6 +958,69 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       suppressUploadNavigationPrompt: next,
       uploadNavigationPrompt: next ? null : prev.uploadNavigationPrompt,
     }));
+  }
+
+  // ── Folder navigation persistence (survive a page refresh) ─────────────────
+  // sessionStorage (not localStorage): the selected folder/sub-folder should
+  // come back after a refresh in the same tab, but shouldn't resurrect a
+  // months-old navigation the next time the workbench page is opened fresh.
+  private _folderNavStorageKey(): string {
+    const scope = (this.props.siteId || this.props.siteUrl || 'default').toString().toLowerCase();
+    return `vesseldms.folder-nav:${scope}:v1`;
+  }
+
+  private _readPersistedFolderNav(): {
+    folderPathStack: { id: string; name: string }[];
+    docMainFolder: State['docMainFolder'];
+    docScopeType: State['docScopeType'];
+    docViewMode: State['docViewMode'];
+    docCategoryFilter: string;
+    docSubfolderOtherFilter: string;
+    activeDocumentSite: string | null;
+  } | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = window.sessionStorage.getItem(this._folderNavStorageKey());
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const stack = Array.isArray(parsed?.folderPathStack) ? parsed.folderPathStack : [];
+      const validStack = stack.filter((n: any) => n && typeof n.id === 'string' && typeof n.name === 'string');
+      if (validStack.length === 0) return null;
+      const validMainFolders: State['docMainFolder'][] = [
+        'Technical & Crewing', 'Commercial & Chartering', 'Insurance', 'Kaizen - Knowledge Bank',
+        'Knowledge Bank', 'Shared Documents', 'Documents', 'SharePoint Sites',
+      ];
+      const validScopeTypes: State['docScopeType'][] = ['vessels', 'common', 'kaizen', 'sites', 'shared_docs', 'documents'];
+      const docMainFolder = validMainFolders.indexOf(parsed?.docMainFolder) !== -1 ? parsed.docMainFolder as State['docMainFolder'] : null;
+      const docScopeType = validScopeTypes.indexOf(parsed?.docScopeType) !== -1 ? parsed.docScopeType as State['docScopeType'] : 'vessels';
+      return {
+        folderPathStack: validStack,
+        docMainFolder,
+        docScopeType,
+        docViewMode: parsed.docViewMode === 'list' ? 'list' : 'folder',
+        docCategoryFilter: typeof parsed.docCategoryFilter === 'string' ? parsed.docCategoryFilter : 'all',
+        docSubfolderOtherFilter: typeof parsed.docSubfolderOtherFilter === 'string' ? parsed.docSubfolderOtherFilter : 'all',
+        activeDocumentSite: typeof parsed.activeDocumentSite === 'string' ? parsed.activeDocumentSite : null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private _persistFolderNav(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const { folderPathStack, docMainFolder, docScopeType, docViewMode, docCategoryFilter, docSubfolderOtherFilter, activeDocumentSite } = this.state;
+      if (!folderPathStack || folderPathStack.length === 0) {
+        window.sessionStorage.removeItem(this._folderNavStorageKey());
+        return;
+      }
+      window.sessionStorage.setItem(this._folderNavStorageKey(), JSON.stringify({
+        folderPathStack, docMainFolder, docScopeType, docViewMode, docCategoryFilter, docSubfolderOtherFilter, activeDocumentSite,
+      }));
+    } catch {
+      // best-effort only
+    }
   }
 
   private _readPendingVesselSuggestions(): VesselSuggestion[] {
@@ -909,16 +1285,20 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         const uploadedFilesByFolder = Object.fromEntries(Object.entries(prev.uploadedFilesByFolder).map(([key, files]) => [
           key, files.filter(file => file.id !== fileId && file.name !== fileName),
         ]));
+        const nextArchivedFileIds = new Set(prev.archivedFileIds);
+        nextArchivedFileIds.add(fileId);
         return {
           rows,
           uploadedFilesByFolder,
           docUploadMsg: `"${fileName}" archived successfully.`,
           listViewSelectedFiles: new Set(Array.from(prev.listViewSelectedFiles).filter(id => id !== fileId)),
           folderViewSelectedFiles: new Set(Array.from(prev.folderViewSelectedFiles).filter(id => id !== fileId)),
+          archivedFileIds: nextArchivedFileIds,
         };
       });
       const archiveData = await this._fetchJson(`${this._base()}/api/archive/nodes`);
       this.setState({ archiveList: (archiveData || []).map((item: any) => ({ ...item, name: cleanName(item.name || '') })) });
+      void this._loadArchivedFileIds();
       return true;
     } catch (error: any) {
       this.setState({ docUploadMsg: `Archive failed: ${error?.message || 'Could not archive the file.'}` });
@@ -943,6 +1323,90 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     }
   };
 
+  /** Opens the Archive popup (see ArchiveSelectionModal) rooted at a given
+   *  SharePoint folder — used by the "Archive" toolbar button when browsing
+   *  the plain folder tree (Sites / Shared Documents / Documents), which has
+   *  no pre-existing checkbox selection to archive the old way. */
+  public _openArchivePicker = (
+    siteId: string,
+    driveId: string,
+    folderId: string,
+    folderName: string,
+    department: string = '',
+    vesselName: string = '',
+  ): void => {
+    if (!siteId || !driveId) {
+      this.setState({ docUploadMsg: 'Could not determine which SharePoint folder to archive from. Open a folder first.' });
+      return;
+    }
+    this.setState({
+      archivePickerDialog: { siteId, driveId, folderId: folderId || 'root', folderName: folderName || 'this folder', department, vesselName },
+    });
+  };
+
+  public _renderArchivePickerDialog(): React.ReactElement | null {
+    return renderArchivePickerModal(this);
+  }
+
+  /** Opens the "New Folder" popup (see CreateFolderModal) rooted at a given
+   *  SharePoint folder — used by the Documents toolbar's "New Folder" button
+   *  when browsing the plain folder tree (Sites / Shared Documents /
+   *  Documents), where folders are arbitrary and not DB-backed the way a
+   *  vessel's folders are (see _openAddFolderDialog for that case). */
+  public _openCreateFolderDialog = (
+    siteId: string,
+    driveId: string,
+    folderRef: string,
+    displayPath: string,
+    vesselName: string = '',
+  ): void => {
+    if (!siteId || !driveId) {
+      this.setState({ docUploadMsg: 'Could not determine which SharePoint folder to create the folder in. Open a folder first.' });
+      return;
+    }
+    this.setState({
+      createFolderDialog: { siteId, driveId, folderRef: folderRef || 'root', displayPath: displayPath || 'this folder', vesselName },
+    });
+  };
+
+  /** Creates a single named folder under an arbitrary Graph folder reference
+   *  (id, name, or slash/" > "-delimited path) via
+   *  POST /api/sites/{site}/drives/{drive}/folders/{folderRef}/create-folder. */
+  public _createFolderAtPath = async (
+    siteId: string,
+    driveId: string,
+    folderRef: string,
+    name: string,
+  ): Promise<{ success: boolean; error?: string }> => {
+    const encodedRef = (folderRef || 'root')
+      .split('/')
+      .map(seg => encodeURIComponent(seg))
+      .join('/');
+    try {
+      const res = await fetch(
+        `${this._base()}/api/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/folders/${encodedRef}/create-folder`,
+        {
+          method: 'POST',
+          headers: this._headers(),
+          body: JSON.stringify({ name, user_email: this.props.userEmail || undefined }),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { success: false, error: data?.detail || data?.message || `Error ${res.status}` };
+      }
+      const parentId = data?.parentReference?.id || 'root';
+      void this._refreshSiteFolder(siteId, driveId, parentId).catch(() => undefined);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error?.message || 'Could not create the folder. Check your connection and try again.' };
+    }
+  };
+
+  public _renderCreateFolderDialog(): React.ReactElement | null {
+    return renderCreateFolderModal(this);
+  }
+
   public _restoreArchivedItem = async (item: DeletedNode): Promise<void> => {
     try {
       const result = await this._fetchJson(`${this._base()}/api/restore/${encodeURIComponent(item.id)}?type=${encodeURIComponent(item.kind === 'file' ? 'file' : 'folder')}&item_name=${encodeURIComponent(item.name)}`, { method: 'POST' });
@@ -950,13 +1414,61 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         this.setState({ docUploadMsg: `Restore request for "${item.name}" submitted for approval.` });
         return;
       }
-      this.setState(prev => ({
-        archiveList: prev.archiveList.filter(archived => archived.id !== item.id),
-        docUploadMsg: `"${item.name}" restored successfully.`,
-      }));
+      this.setState(prev => {
+        const nextArchivedFileIds = new Set(prev.archivedFileIds);
+        nextArchivedFileIds.delete(item.id);
+        return {
+          archiveList: prev.archiveList.filter(archived => archived.id !== item.id),
+          archivedFileIds: nextArchivedFileIds,
+          docUploadMsg: `"${item.name}" restored successfully.`,
+        };
+      });
       await this._loadData(true);
     } catch (error: any) {
       this.setState({ docUploadMsg: `Restore failed: ${error?.message || 'Could not restore the item.'}` });
+    }
+  };
+
+  /** Archive page's "Move to Recycle Bin" action — distinct from Restore:
+   *  actually deletes the item from SharePoint (into the Recycle Bin) via
+   *  POST /api/archive/{id}/recycle, instead of un-archiving it back into
+   *  the working Documents view. */
+  public _moveArchivedItemToRecycleBin = async (item: DeletedNode): Promise<void> => {
+    try {
+      const type = item.kind === 'file' ? 'file' : 'folder';
+      const result = await this._fetchJson(
+        `${this._base()}/api/archive/${encodeURIComponent(item.id)}/recycle?type=${encodeURIComponent(type)}`,
+        { method: 'POST' },
+      );
+      if (result?.status === 'pending') {
+        this.setState({ docUploadMsg: `Recycle-bin request for "${item.name}" submitted for approval.` });
+        return;
+      }
+      this.setState(prev => {
+        const nextArchivedFileIds = new Set(prev.archivedFileIds);
+        nextArchivedFileIds.delete(item.id);
+        return {
+          archiveList: prev.archiveList.filter(archived => archived.id !== item.id),
+          archivedFileIds: nextArchivedFileIds,
+          docUploadMsg: `"${item.name}" moved to Recycle Bin.`,
+        };
+      });
+      await this._loadRecycleBin();
+    } catch (error: any) {
+      this.setState({ docUploadMsg: `Could not move "${item.name}" to the Recycle Bin: ${error?.message || 'unknown error'}` });
+    }
+  };
+
+  /** Loads (or reloads) the Archive page's list — shared by the Archive
+   *  nav item's _goToView('archive') and the page's own mount effect, so
+   *  navigating there twice or refreshing it doesn't duplicate this logic. */
+  public _loadArchiveList = async (): Promise<void> => {
+    this.setState({ panelLoading: true });
+    try {
+      const data = await this._fetchJson(`${this._base()}/api/archive/nodes`);
+      this.setState({ archiveList: (data || []).map((v: any) => ({ ...v, name: cleanName(v.name || '') })), panelLoading: false });
+    } catch {
+      this.setState({ archiveList: [], panelLoading: false });
     }
   };
 
@@ -1053,8 +1565,13 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     });
     this._startDeltaSync();
     this._loadBentoConfig();
+    void this._loadModuleSettings();
+    void this._loadSettingsTabSettings();
+    void this._loadFilterSettings();
+    void this._loadColorSettings();
     void this._loadDashboardStats();
-    void this._ensureKaizenSharePointFolders();
+    void this._loadArchivedFileIds();
+    void this._loadAllVesselNamesForSearch();
     this._alertRefreshTimer = setInterval(() => this._fetchAlerts(), 30000);
     this._handleResize();
     window.addEventListener('resize', this._handleResize);
@@ -1070,6 +1587,25 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     }
   };
 
+  /** Refresh the set of archived drive item IDs (GET /api/archive/ids) so
+   *  Documents/Folder/List views can hide archived files without needing
+   *  the full Archive page's data — they only become visible again on the
+   *  Archive page, or once restored. Called on mount and after every
+   *  archive/restore so the Documents view updates immediately, not just
+   *  the Archive page. */
+  public _loadArchivedFileIds = async (): Promise<void> => {
+    const base = this._base();
+    if (!base) return;
+    try {
+      const ids = await this._fetchJson(`${base}/api/archive/ids`);
+      if (this._isUnmounted) return;
+      this.setState({ archivedFileIds: new Set(Array.isArray(ids) ? ids.map((id: any) => String(id)) : []) });
+    } catch {
+      // Non-fatal — Documents/Folder views just won't hide archived files
+      // until the next successful refresh.
+    }
+  };
+
   public _loadBentoConfig(): void {
     this._fetchJson(`${this._base()}/api/email-notification/config`)
       .then((cfg: any) => {
@@ -1079,25 +1615,149 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       .catch(() => undefined);
   }
 
+  /** Settings → Module Management (module_settings_api.py). Loads which
+   *  modules are currently hidden app-wide so Sidebar can filter its nav
+   *  and _goToView/render can refuse to land on a hidden module. Non-fatal
+   *  on failure — the app just shows every module until the next reload. */
+  public _loadModuleSettings = async (): Promise<void> => {
+    try {
+      const data = await this._fetchJson(`${this._base()}/api/module-settings/config`);
+      if (this._isUnmounted) return;
+      const hidden = Array.isArray(data?.hidden) ? data.hidden.filter((id: unknown) => typeof id === 'string') : [];
+      this.setState({ hiddenModules: hidden });
+    } catch {
+      // Non-fatal — see comment above.
+    }
+  };
+
+  /** Settings → Settings Management (settings_tab_api.py). Loads which
+   *  Settings-page tabs are currently hidden app-wide so SettingsPage can
+   *  filter its own left nav and redirect off a tab that just got hidden.
+   *  Non-fatal on failure — the app just shows every tab until the next
+   *  reload. */
+  public _loadSettingsTabSettings = async (): Promise<void> => {
+    try {
+      const data = await this._fetchJson(`${this._base()}/api/settings-tab-settings/config`);
+      if (this._isUnmounted) return;
+      const hidden = Array.isArray(data?.hidden) ? data.hidden.filter((id: unknown) => typeof id === 'string') : [];
+      this.setState({ hiddenSettingsTabs: hidden });
+    } catch {
+      // Non-fatal — see comment above.
+    }
+  };
+
+  /** Settings → Filter Search Management (filter_settings_api.py). Loads
+   *  whether the Documents page's filter toolbar should render as the
+   *  inline dropdown row or the slide-out Filters panel, app-wide.
+   *  Non-fatal on failure — the app just keeps the default ('dropdown')
+   *  until the next reload. */
+  public _loadFilterSettings = async (): Promise<void> => {
+    try {
+      const data = await this._fetchJson(`${this._base()}/api/filter-settings/config`);
+      if (this._isUnmounted) return;
+      const mode = data?.mode === 'panel' ? 'panel' : 'dropdown';
+      this.setState({ filterUiMode: mode });
+    } catch {
+      // Non-fatal — see comment above.
+    }
+  };
+
+  /** Settings → Color Management (color_settings_api.py). Loads the
+   *  app-wide background/text/design/hover colors (light + night mode) and
+   *  applies them via applyColorTheme() so every page picks them up
+   *  through the clay.* CSS-variable tokens. Non-fatal on failure — the
+   *  app just keeps rendering with the Ocean Clay defaults already applied
+   *  at construction time. */
+  public _loadColorSettings = async (): Promise<void> => {
+    try {
+      const data = await this._fetchJson(`${this._base()}/api/color-settings/config`);
+      if (this._isUnmounted) return;
+      const colors: ClayColorTheme | undefined = data && data.colors && data.colors.light && data.colors.night ? data.colors : undefined;
+      if (!colors) return;
+      applyColorTheme(colors);
+      this.setState({ colorTheme: colors });
+    } catch {
+      // Non-fatal — see comment above.
+    }
+  };
+
   public _loadDashboardStats(forceRefresh = false): Promise<void> {
     const base = this._base();
     if (!base) return Promise.resolve();
-    const url = forceRefresh
-      ? `${base}/api/dashboard/stats?force_refresh=true`
-      : `${base}/api/dashboard/stats`;
+    const siteFilterValue = this.state.dashboardSiteFilter && this.state.dashboardSiteFilter !== 'all'
+      ? this.state.dashboardSiteFilter
+      : '';
+    const params = new URLSearchParams();
+    if (forceRefresh) params.set('force_refresh', 'true');
+    if (siteFilterValue) params.set('site_key', siteFilterValue);
+    const qs = params.toString();
+    const url = `${base}/api/dashboard/stats${qs ? `?${qs}` : ''}`;
+    // Two calls to this method can be in flight at once (initial mount, a
+    // Settings/Home site change, navigating back to Home, ...), and a slow
+    // one — e.g. a full live scan that started before a site was
+    // hidden/unhidden/added and only finishes 20-30s later — can resolve
+    // AFTER a faster, more recent one. Applying it blindly would overwrite
+    // the newer state with stale data. Guard by request order (this seq),
+    // not by last_refreshed_epoch: that's a per-site server cache
+    // timestamp, and a newly selected site's cache is very often older
+    // than the previously selected site's, which was dropping the fresh
+    // response for the new site and leaving the old site's stats on
+    // screen until a later background refresh happened to produce a
+    // higher epoch — the "site only updates after a few seconds" bug.
+    const seq = ++this._dashboardStatsSeq;
     return this._fetchJson(url)
       .then((data: any) => {
+        if (seq < this._dashboardStatsAppliedSeq) return;
         if (data && typeof data === 'object' && 'total_documents' in data) {
+          this._dashboardStatsAppliedSeq = seq;
           this.setState({ dashboardStats: data as import('./pages/DashboardPage').DashboardStats });
+          if (Array.isArray(data.sites) && data.sites.some((site: any) => site?.stats_pending)) {
+            window.setTimeout(() => {
+              if (!this._isUnmounted && seq === this._dashboardStatsSeq) {
+                void this._loadDashboardStats(false);
+              }
+            }, 3000);
+          }
         }
       })
       .catch(() => undefined);
   }
 
+  // Home/Dashboard module's own SharePoint-site filter. Kept separate from
+  // vesselSiteFilter (Vessels page) and activeDocumentSite (Documents/folder
+  // browsing) so switching the site on the Home dashboard doesn't affect
+  // those other views. Re-fetches dashboard stats (documents, vessels,
+  // recent documents) scoped to the chosen site.
+  public _handleDashboardSiteChange = (siteKey: string): void => {
+    if (siteKey === this.state.dashboardSiteFilter) return;
+    // Read from the backend's per-site cache (CACHE_TTL_DASHBOARD_STATS,
+    // 120s) instead of forcing a live Graph re-scan on every dropdown
+    // change. force_refresh=true here was making every site switch pay for
+    // a full live scan (can take 20-30s per the backend's own comments),
+    // even when that site's stats were already cached from a few seconds
+    // ago — which is what made switching feel "slow, again and again".
+    // Explicit refresh (the Refresh button, _refreshCurrentModule) still
+    // passes force_refresh=true on purpose.
+    this.setState({ dashboardSiteFilter: siteKey }, () => {
+      void this._loadDashboardStats(false);
+    });
+  };
+
   public componentDidUpdate(pp: IVesselEmailProps, ps: State): void {
     // Mark session as ready once we receive a valid session_id prop
     if (!this.state.sessionReady && this.props.sessionId) {
       this.setState({ sessionReady: true });
+    }
+    // Persist the current folder navigation (selected main folder / sub-folder
+    // / breadcrumb) so a page refresh can restore exactly where the user was,
+    // instead of dropping back to the Documents root. Reference-equality
+    // checks are enough here: every place that changes these fields does so
+    // via an immutable update (a fresh array/object), never a mutation.
+    if (ps.folderPathStack !== this.state.folderPathStack || ps.docMainFolder !== this.state.docMainFolder ||
+      ps.docCategoryFilter !== this.state.docCategoryFilter || ps.docSubfolderOtherFilter !== this.state.docSubfolderOtherFilter ||
+      ps.docViewMode !== this.state.docViewMode || ps.docScopeType !== this.state.docScopeType ||
+      ps.activeDocumentSite !== this.state.activeDocumentSite) {
+      this._persistFolderNav();
     }
     // Trigger initial load when sessionId first arrives (was missing on mount)
     if (!pp.sessionId && this.props.sessionId) {
@@ -1132,11 +1792,30 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     }
     // On-demand vessel row loading when user selects a specific vessel in the Documents list view.
     // Call the vessel-specific flat-tree endpoint and refresh live SharePoint files.
+    // Skipped in the live-library scopes ('sites' / 'shared_docs' / 'documents'):
+    // these two calls resolve a vessel's DB rows via the legacy default
+    // department template (Technical & Crewing/Vessels/<vessel>, etc.), which
+    // doesn't match a real site's actual folder names and just spams Graph
+    // with 404s (that's what selecting a vessel while browsing an actual
+    // SharePoint site's live folder tree was doing — see the "Technical"
+    // chip 404 storm). Live-scope file listings already come from
+    // _getOrLoadSiteFolderChildren / the folder tree, not from DB rows.
     const { vesselFilter } = this.state;
-    if (ps.vesselFilter !== vesselFilter && vesselFilter !== 'all') {
+    const isLiveLibraryScope = this.state.docScopeType === 'sites' ||
+      this.state.docScopeType === 'shared_docs' || this.state.docScopeType === 'documents';
+    if (!isLiveLibraryScope && ps.vesselFilter !== vesselFilter && vesselFilter !== 'all') {
       this._lastRefreshedRowsKey = '';
       this._loadVesselRowsFromApi(vesselFilter).catch(() => undefined);
       setTimeout(() => this._refreshFilesFromBackendRows(), 100);
+    }
+    // A different vessel (or vessel cleared) makes Compare mode's per-main-
+    // folder browsing state stale — it was keyed off the previous vessel's
+    // folders. Drop it and fall back out of Compare mode rather than showing
+    // boxes that no longer correspond to the newly selected vessel.
+    if (ps.vesselFilter !== vesselFilter) {
+      if (this.state.docCompareMode || Object.keys(this.state.compareBoxSubPaths).length > 0) {
+        this.setState({ docCompareMode: false, compareBoxSubPaths: {} });
+      }
     }
     if (ps.docListPage !== this.state.docListPage && this.state.docViewMode === 'list') {
       this._lastRefreshedRowsKey = '';
@@ -1160,6 +1839,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     if (this._deltaReloadTimer) clearTimeout(this._deltaReloadTimer);
     if (this._alertRefreshTimer) clearInterval(this._alertRefreshTimer);
     if (this._deleteAutoCloseTimer) clearInterval(this._deleteAutoCloseTimer);
+    if (this._vesselToastAutoCloseTimer) clearTimeout(this._vesselToastAutoCloseTimer);
+    if (this._documentToastAutoCloseTimer) clearTimeout(this._documentToastAutoCloseTimer);
     window.removeEventListener('resize', this._handleResize);
     document.removeEventListener('click', this._handleOutsideClick);
     document.removeEventListener('keydown', this._handleDocumentNavigationKeyDown);
@@ -1186,6 +1867,43 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         return { deleteAutoCloseSeconds: current - 1 };
       });
     }, 1000);
+  };
+
+  /** Schedule (or reschedule) the vessel-deletion popup's auto-dismiss.
+   *  Called whenever the popup's content changes (new item, or attribution
+   *  resolving in) so a slow-arriving update doesn't cut the timer short. */
+  public _scheduleVesselToastAutoClose = (): void => {
+    if (this._vesselToastAutoCloseTimer) clearTimeout(this._vesselToastAutoCloseTimer);
+    this._vesselToastAutoCloseTimer = window.setTimeout(() => {
+      this._vesselToastAutoCloseTimer = null;
+      this.setState({ spoVesselDeletedToast: null });
+    }, VesselEmail._TOAST_AUTO_DISMISS_MS);
+  };
+
+  /** Pause the vessel-deletion popup's auto-dismiss while the pointer is
+   *  over it (resumed by _scheduleVesselToastAutoClose on mouse-leave). */
+  public _pauseVesselToastAutoClose = (): void => {
+    if (this._vesselToastAutoCloseTimer) {
+      clearTimeout(this._vesselToastAutoCloseTimer);
+      this._vesselToastAutoCloseTimer = null;
+    }
+  };
+
+  /** Same as _scheduleVesselToastAutoClose, for the document/folder
+   *  deletion popup (which can accumulate several items into one toast). */
+  public _scheduleDocumentToastAutoClose = (): void => {
+    if (this._documentToastAutoCloseTimer) clearTimeout(this._documentToastAutoCloseTimer);
+    this._documentToastAutoCloseTimer = window.setTimeout(() => {
+      this._documentToastAutoCloseTimer = null;
+      this.setState({ spoDocumentDeletedToast: null });
+    }, VesselEmail._TOAST_AUTO_DISMISS_MS);
+  };
+
+  public _pauseDocumentToastAutoClose = (): void => {
+    if (this._documentToastAutoCloseTimer) {
+      clearTimeout(this._documentToastAutoCloseTimer);
+      this._documentToastAutoCloseTimer = null;
+    }
   };
 
   public _handleDocumentNavigationKeyDown = (event: KeyboardEvent): void => {
@@ -1249,11 +1967,26 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         parentSeg === 'vessels');
     if (!isVesselLevel) return false;
 
+    // Already raised a popup for this exact SPO item (this handler can be
+    // reached more than once for the same delete via retries/rescans) —
+    // report it as "handled" so the caller doesn't fall back to the
+    // generic document-deletion popup for the same folder.
+    if (this._shownDeletionToastIds.has(deletedId)) return true;
+
     // Match by folder name against known vessels
     const vessel = vessels.find(v => normName(v.name) === normName(vesselFolderNode.name));
     if (!vessel) return false;
 
     const now = new Date().toISOString();
+    const activeSiteObj = (this.state.documentSites || []).find(s => s.site_key === this.state.activeDocumentSite);
+    const siteNames = (vessel.provisioned_site_ids || []).map(sk => {
+      const matched = (this.state.documentSites || []).find(s => s.site_key === sk);
+      return matched?.sp_site_name || sk;
+    }).filter(Boolean);
+    const resolvedSiteName = siteNames.length > 0
+      ? siteNames.join(', ')
+      : (activeSiteObj?.sp_site_name || this.props.siteUrl || 'SharePoint');
+
     const recycleBinEntry: DeletedNode = {
       id: vessel.id,
       name: vessel.name,
@@ -1265,23 +1998,30 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       deleted_at: now,
       imo: vessel.imo,
       vessel_type: vessel.vessel_type,
+      site_name: resolvedSiteName,
+      site_key: (vessel.provisioned_site_ids || [])[0] || this.state.activeDocumentSite || undefined,
     };
 
     const alert: import('./types/ui').AlertItem = {
       id: `vessel_deleted_spo_${vessel.id}_${Date.now()}`,
       drive_item_id: deletedId,
       folder_name: vessel.name,
-      folder_path: vesselFolderNode.serverRelativePath,
+      folder_path: vesselFolderNode.serverRelativePath || recycleBinEntry.original_path || '',
       parent_folder_id: null,
       vessel_name: vessel.name,
       department: 'All Departments',
       created_by_email: '',
-      created_by_name: 'SharePoint Online',
+      created_by_name: 'Unknown user',
       alert_type: 'vessel_deleted',
+      alert_category: 'dms',
       read: false,
       created_at: now,
+      item_type: 'folder',
+      spo_path: vesselFolderNode.serverRelativePath,
+      site_name: resolvedSiteName,
     };
 
+    this._shownDeletionToastIds.add(deletedId);
     this.setState(prev => ({
       vessels: prev.vessels.filter(v => v.id !== vessel.id),
       recycleBin: [
@@ -1289,9 +2029,45 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         ...prev.recycleBin.filter(r => r.name.toLowerCase() !== vessel.name.toLowerCase()),
       ],
       alertsList: [alert, ...prev.alertsList],
-      spoVesselDeletedToast: { vesselName: vessel.name, id: alert.id },
+      spoVesselDeletedToast: {
+        vesselName: vessel.name,
+        id: alert.id,
+        siteName: resolvedSiteName,
+        originalPath: recycleBinEntry.original_path,
+        deletedByName: null,
+        deletedByEmail: null,
+      },
       spoDeletedVesselIds: (() => { const s = new Set(this.state.spoDeletedVesselIds); s.add(vessel.id); return s; })(),
     }));
+    this._scheduleVesselToastAutoClose();
+
+    // Who actually deleted it in SharePoint isn't in the delta-sync event —
+    // ask the backend's recycle-bin feed (enriched from SharePoint's own
+    // recycle bin once that propagates) and patch the alert + toast in place.
+    void this._lookupDeletionAttribution(vessel.id, vessel.name).then(resolved => {
+      if (!resolved) return;
+      this.setState(prev => ({
+        alertsList: prev.alertsList.map(a =>
+          a.id === alert.id
+            ? {
+                ...a,
+                created_by_email: resolved.deletedByEmail || a.created_by_email,
+                created_by_name: resolved.deletedByName || a.created_by_name,
+                site_name: resolved.siteName || a.site_name,
+              }
+            : a,
+        ),
+        spoVesselDeletedToast: prev.spoVesselDeletedToast && prev.spoVesselDeletedToast.id === alert.id
+          ? {
+              ...prev.spoVesselDeletedToast,
+              siteName: resolved.siteName || prev.spoVesselDeletedToast.siteName,
+              deletedByName: resolved.deletedByName || prev.spoVesselDeletedToast.deletedByName,
+              deletedByEmail: resolved.deletedByEmail || prev.spoVesselDeletedToast.deletedByEmail,
+            }
+          : prev.spoVesselDeletedToast,
+      }));
+      if (this.state.spoVesselDeletedToast) this._scheduleVesselToastAutoClose();
+    });
 
     // Notify backend so the DB record is soft-deleted (retry once on failure)
     const doDelete = (): Promise<any> =>
@@ -1495,11 +2271,30 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       alertsList: [alert, ...prev.alertsList],
     }));
 
-    // Ensure rows are loaded for the detected vessel so the data is ready when user views alerts
-    if (vesselName && !this._filesLoadedForVessels.has(vesselName)) {
-      this._filesLoadedForVessels.add(vesselName);
-      setTimeout(() => this._loadVesselRowsFromApi(vesselName!).catch(() => undefined), 0);
-    }
+    // NOTE: this used to eagerly call _loadVesselRowsFromApi(vesselName) here
+    // ("so the data is ready when user views alerts") — but _handleSpoNewFile
+    // fires once per file the site-wide delta sync reports, for whichever
+    // vessel that file happens to belong to, completely independent of what
+    // the user is currently looking at (this component is a single mounted
+    // instance shared across every module/page, so this ran the same way
+    // whether the user was on Shared Documents, the Dashboard, or Vessels).
+    // On a normal incremental poll that can be a handful of vessels; right
+    // after a resync (or the first poll of a long-lived browser tab, since
+    // the deltaLink persists in localStorage across page loads) it can be
+    // dozens fired within the same tick, each pulling flat-tree rows and
+    // then recursively walking that vessel's SharePoint folders for files
+    // (_refreshFilesFromBackendRows / _mergeLiveSharePointFiles) — the
+    // "why is it loading Belle Lune while I'm on Shared Documents" bug, and
+    // the request-volume/throttling behind the failing children/delta calls
+    // and the app's public-origin → http://127.0.0.1:8000 fallback firing
+    // per failed request (see _fetchJson), which is what the browser flags
+    // as a blocked/CORB-tripping local-network request.
+    //
+    // The alert above is what actually needs to exist immediately (it's a
+    // cheap state update, no network call); the vessel's rows only need to
+    // exist once the user actually opens that vessel or clicks the alert,
+    // which already loads on demand via componentDidUpdate's vesselFilter
+    // handler and FolderView's own click-to-open loading. So no fetch here.
   }
 
   public _applyDeltaResult(result: DeltaSyncResult): void {
@@ -1701,6 +2496,28 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     return h;
   }
 
+  /** Records a deletion that already happened client-side (a folder/file
+   * deleted directly against Graph rather than through this backend's own
+   * delete_folder/delete_file) so "Deleted By" and the optional reason are
+   * captured immediately, feeding both the Recycle Bin and the live
+   * deletion popup. Best-effort — never blocks or surfaces an error to the
+   * user; the native-SPO reconciliation poll backfills anything this misses. */
+  public _logDeletion(params: {
+    item_type: 'vessel' | 'folder' | 'file';
+    drive_item_id?: string | null;
+    name: string;
+    original_path?: string | null;
+    site_name?: string | null;
+    site_key?: string | null;
+    reason?: string | null;
+  }): void {
+    fetch(`${this._base()}/api/recycle-bin/log-deletion`, {
+      method: 'POST',
+      headers: this._headers(),
+      body: JSON.stringify(params),
+    }).catch(() => undefined);
+  }
+
   private _headersForLocalFallback(): Record<string, string> {
     const headers = this._headers();
     delete headers.Authorization;
@@ -1722,32 +2539,100 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     return h;
   }
 
+  // No call through _fetchJson had a client-side timeout: if a backend/Graph
+  // request never came back (stuck behind SharePoint Online throttling, a
+  // stalled Graph call, a site with a genuine permissions/resolution
+  // problem, ...), the returned promise never settled — and every caller's
+  // own "loading" state, all the way up to what the Documents module shows,
+  // stayed true forever. That's the single root cause behind "switching
+  // sites / opening Documents loads for a long time and then hangs": it
+  // isn't one call site, it's every call going through here having no
+  // ceiling on how long it will wait.
+  public static readonly _DEFAULT_FETCH_TIMEOUT_MS = 25000;
+
   public _fetchJson(url: string, optionsOrSignal?: RequestInit | AbortSignal): Promise<any> {
+    const callerProvidedSignal: AbortSignal | undefined = optionsOrSignal && 'aborted' in optionsOrSignal
+      ? (optionsOrSignal as AbortSignal)
+      : (optionsOrSignal as RequestInit | undefined)?.signal as AbortSignal | undefined;
+
+    // Own an AbortController with a timeout whenever the caller didn't
+    // already supply a signal, so a hung request is actually cancelled
+    // (freeing its connection-pool slot, same reasoning as
+    // _cancelSiteSubtreePrefetch elsewhere in this file) instead of left
+    // open in the background forever. A caller that passed its own signal
+    // keeps full ownership/control of that signal, unchanged from before.
+    let timeoutController: AbortController | null = null;
+    let timeoutHandle: number | null = null;
+    let effectiveSignal = callerProvidedSignal;
+    if (!effectiveSignal) {
+      timeoutController = new AbortController();
+      effectiveSignal = timeoutController.signal;
+      timeoutHandle = window.setTimeout(() => timeoutController!.abort(), VesselEmail._DEFAULT_FETCH_TIMEOUT_MS);
+    }
+
     const opts: RequestInit = optionsOrSignal && 'aborted' in optionsOrSignal
-      ? { signal: optionsOrSignal as AbortSignal, headers: this._headers(), cache: 'no-store' }
+      ? { signal: effectiveSignal, headers: this._headers(), cache: 'no-store' }
       : {
         cache: 'no-store',
         ...(optionsOrSignal as RequestInit || {}),
+        signal: effectiveSignal,
         headers: {
           ...this._headers(),
           ...((optionsOrSignal as RequestInit)?.headers || {}),
         },
       };
 
+    const clearOwnTimeout = (): void => {
+      if (timeoutHandle !== null) window.clearTimeout(timeoutHandle);
+    };
+
     return fetch(url, opts)
-      .then(r => {
+      .then(async r => {
+        clearOwnTimeout();
         if (r.status === 401 || r.status === 403) {
-          this.setState({ sessionExpired: true });
+          this.setState({ sessionExpired: true, authPage: 'login' });
           throw new Error('SESSION_EXPIRED');
         }
         if (r.status >= 500) {
-          throw new Error(`SERVER_ERROR_${r.status}`);
+          // The backend now returns a JSON {detail: "..."} body describing
+          // what actually failed (a Graph error, an unexpected exception,
+          // ...) on endpoints like /children — this used to be discarded
+          // entirely, so every 500 showed up here as a bare "SERVER_ERROR_500"
+          // with nothing to act on, in both the console and DocumentsPage's
+          // "Couldn't load this folder" retry card. Include it when present.
+          let detail = '';
+          try {
+            const body = await r.json();
+            detail = (body && (body.detail || body.message)) || '';
+          } catch {
+            // Response wasn't JSON (e.g. a proxy/HTML error page) — fall
+            // back to the plain status-only message below.
+          }
+          throw new Error(detail ? `SERVER_ERROR_${r.status}: ${detail}` : `SERVER_ERROR_${r.status}`);
+        }
+        if (r.status === 429) {
+          // The backend hit Microsoft Graph's per-app request quota
+          // (SharePoint Embedded `activityLimitReached`) and set a
+          // Retry-After header for how long that cooldown lasts (can be a
+          // few minutes, not a few seconds). Surface it distinctly so
+          // callers like _loadSiteFolderChildren can stop issuing new
+          // requests for that whole window instead of the UI's normal
+          // "Retry" button immediately generating another one.
+          const retryAfterSec = Number(r.headers.get('Retry-After')) || 60;
+          throw new Error(`THROTTLED_429:${retryAfterSec}`);
         }
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
       .catch(async err => {
+        clearOwnTimeout();
         if (opts.signal?.aborted || err?.message === 'SESSION_EXPIRED') throw err;
+        // A Graph quota throttle is an application-level condition (the
+        // backend told Graph "too much"), not a network/connectivity
+        // failure — falling back to a different backend host wouldn't fix
+        // it and would just muddy which backend is "active". Let it
+        // propagate straight to the caller (see _loadSiteFolderChildren).
+        if (typeof err?.message === 'string' && err.message.indexOf('THROTTLED_429:') === 0) throw err;
         if (url.includes('nk-dms-dev.sg-nissenkaiun.com')) {
           VesselEmail._remoteServerDown = true;
           const fallbackUrl = url.replace('https://nk-dms-dev.sg-nissenkaiun.com', 'http://127.0.0.1:8000');
@@ -1759,7 +2644,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             };
             const r = await fetch(fallbackUrl, localOpts);
             if (r.status === 401 || r.status === 403) {
-              this.setState({ sessionExpired: true });
+              this.setState({ sessionExpired: true, authPage: 'login' });
               throw new Error('SESSION_EXPIRED');
             }
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -1785,8 +2670,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, session_id: sid }),
     }).catch(() => undefined);
-    // Reload the page to force re-authentication
-    window.location.reload();
+    this.setState({ authPage: 'logout', sessionExpired: false });
   };
 
   public _base(): string {
@@ -1831,9 +2715,143 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       }
       let sites = Array.isArray(data?.sites) ? data.sites : [];
       const active = data?.active_site || sites[0]?.site_key || null;
-      this.setState({ documentSites: sites, activeDocumentSite: active });
+      const normalizeSiteKey = (value: string | null | undefined): string =>
+        String(value || '').trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const resolveDefaultSiteKey = (requested: string | null, available: Array<{ site_key?: string; sp_site_name?: string }>): string => {
+        if (!requested) return available[0]?.site_key || 'all';
+        const requestedKey = normalizeSiteKey(requested);
+        const exact = available.find(site => normalizeSiteKey(site.site_key) === requestedKey);
+        if (exact) return exact.site_key || requested;
+        const aliasMatch = available.find(site => {
+          const siteKey = normalizeSiteKey(site.site_key);
+          const siteName = normalizeSiteKey(site.sp_site_name);
+          if (!siteKey && !siteName) return false;
+          if (requestedKey === 'local' && (siteKey.includes('dev') || siteKey.includes('communication') || siteName.includes('dev') || siteName.includes('communication'))) return true;
+          if (requestedKey === 'dev' && (siteKey.includes('local') || siteKey.includes('docman') || siteName.includes('local') || siteName.includes('docman'))) return true;
+          if (requestedKey.includes('communication') && (siteKey.includes('dev') || siteName.includes('dev'))) return true;
+          return siteKey === requestedKey || siteName === requestedKey;
+        });
+        return aliasMatch?.site_key || available[0]?.site_key || 'all';
+      };
+      const initialSite = sites.find((site: any) => site.site_key === active) || sites[0];
+      const defaultSiteFilter = resolveDefaultSiteKey(active, sites);
+      const defaultSiteTarget = defaultSiteFilter === 'all' ? (initialSite?.site_key || null) : defaultSiteFilter;
+      const wantsInitialSiteRoot = Boolean(
+        initialSite?.site_id && initialSite?.drive_id &&
+        this.state.folderPathStack.length === 0 &&
+        this.state.docScopeType === 'vessels'
+      );
+      // site_configurations.drive_id can go stale (site re-provisioned, drive
+      // recreated, DB entry never updated, etc.). The manual Sites > site >
+      // drive click-through always re-resolves the drive live via Graph
+      // (_getOrLoadSiteDrives / _loadSiteDrives), so it recovers even when the
+      // stored id is wrong. This auto-open-on-load shortcut used to trust
+      // initialSite.drive_id directly and jump straight to the folder-root
+      // view — when the stored id was stale, every folder request beneath it
+      // came back empty/erroring (silently, since _getOrLoadSiteFolderChildren
+      // swallows the failure), which looked exactly like "no files here" to
+      // the user, but only on this shortcut path — not when navigating there
+      // by hand. Verify against Graph's live drive list first.
+      //
+      // This verification used to run only when wantsInitialSiteRoot was true
+      // (docScopeType === 'vessels'). But `initialSite.drive_id` — patched
+      // into `documentSites` below — is also what DocumentsPage's level-0
+      // view (`activeLiveSite.drive_id`, DocumentsPage.tsx ~L291) uses for
+      // its very first root `/children` fetch when the user lands directly
+      // on Documents/Shared Documents/Sites scope instead of Vessels. A stale
+      // id there made that first fetch 404/403 silently, showing "0 main
+      // folders & libraries" with an empty grid until the user manually
+      // reselected a site (which re-resolves the drive via
+      // _switchDocumentSite). Running this for every initialSite, regardless
+      // of scope, fixes it at the source instead of only for the auto-open
+      // shortcut.
+      let resolvedInitialDrive: { id: string; name: string } | null = initialSite?.drive_id
+        ? { id: initialSite.drive_id, name: initialSite.default_library_name || 'Documents' }
+        : null;
+      let openInitialSiteRoot = wantsInitialSiteRoot;
+      if (initialSite?.site_id) {
+        try {
+          const liveDrives = await this._loadSiteDrives(initialSite.site_id);
+          if (liveDrives.length > 0) {
+            this._siteDrivesCache.set(initialSite.site_id, liveDrives);
+            const preferredDrive = liveDrives.find(d => /^(documents|shared documents)$/i.test((d.name || '').trim()));
+            const configuredDrive = liveDrives.find(d => d.id === initialSite.drive_id);
+            const matchedDrive = preferredDrive || configuredDrive || liveDrives[0];
+            resolvedInitialDrive = { id: matchedDrive.id, name: matchedDrive.name || resolvedInitialDrive?.name || 'Documents' };
+            // Patch the verified drive back into `initialSite`/`sites` so
+            // every consumer of `documentSites` set below (the site
+            // dropdown, DocumentsPage's `activeLiveSite`) sees the live id,
+            // not the possibly-stale one from `/api/documents/sites`.
+            initialSite.drive_id = resolvedInitialDrive.id;
+            initialSite.default_library_name = resolvedInitialDrive.name;
+            sites = sites.map((site: any) => site.site_key === initialSite.site_key
+              ? { ...site, drive_id: resolvedInitialDrive!.id, default_library_name: resolvedInitialDrive!.name }
+              : site);
+          } else if (wantsInitialSiteRoot) {
+            // Could not verify any live drive for this site — don't auto-drop
+            // the user into a folder view that will just render as empty.
+            // Land on the Sites list instead; it resolves drives itself.
+            openInitialSiteRoot = false;
+          }
+        } catch {
+          // Network/Graph error while verifying — fall back to the configured
+          // id rather than blocking the auto-open entirely.
+        }
+      }
+      const initialSiteRoot = openInitialSiteRoot ? [
+        { id: 'sites_root', name: 'SharePoint Sites' },
+        { id: `site:${initialSite.site_id}`, name: initialSite.sp_site_name || initialSite.site_key },
+        { id: `drive:${resolvedInitialDrive!.id}`, name: resolvedInitialDrive!.name },
+      ] : this.state.folderPathStack;
+      if (openInitialSiteRoot) {
+        this.setState({
+          documentSites: sites,
+          activeDocumentSite: active,
+          vesselSiteFilter: this.state.vesselSiteFilter === 'all' || !this.state.vesselSiteFilter ? (defaultSiteTarget || defaultSiteFilter) : this.state.vesselSiteFilter,
+          docScopeType: 'sites',
+          docViewMode: 'folder',
+          folderPathStack: initialSiteRoot,
+          docMainFolder: 'SharePoint Sites',
+          folderNavHistory: [{ folderPathStack: initialSiteRoot, docMainFolder: 'SharePoint Sites' }],
+          folderNavIndex: 0,
+        });
+      } else {
+        // A folder navigation restored from sessionStorage after a refresh
+        // (see _readPersistedFolderNav) belongs to whichever site the user was
+        // browsing — but a refresh signs in with a NEW session, whose
+        // server-side active site is back to the default. Using `active`
+        // here made the "SharePoint site" dropdown say e.g. "Communication
+        // Site" while the breadcrumb/folders were still NissenKaiunExternal.
+        // The restored breadcrumb wins: the dropdown follows it, and the new
+        // session is pointed at that site so uploads/actions go to the site
+        // being shown.
+        const restoredSiteKey = this._siteKeyForFolderStack(this.state.folderPathStack, sites);
+        const nextActiveSite = restoredSiteKey || active;
+        this.setState({
+          documentSites: sites,
+          activeDocumentSite: nextActiveSite,
+          vesselSiteFilter: this.state.vesselSiteFilter === 'all' || !this.state.vesselSiteFilter ? (defaultSiteTarget || defaultSiteFilter) : this.state.vesselSiteFilter,
+        });
+        if (restoredSiteKey && restoredSiteKey !== active) {
+          void this._syncSessionActiveSite(restoredSiteKey).catch(error => {
+            // Couldn't align the session: fall back to the session's own
+            // site and its library root, so the dropdown and the folders
+            // shown still agree.
+            console.warn('[VesselDMS] Could not restore active site after refresh:', error);
+            if (active && sites.some((site: any) => site.site_key === active)) {
+              void this._switchDocumentSite(active).catch(() => undefined);
+            }
+          });
+        }
+      }
       // Fetch dynamic aliases alongside sites
       void this._loadDocumentAliases().catch(() => undefined);
+      // state.folderPathStack/docScopeType above are now either a freshly
+      // live-verified root (openInitialSiteRoot) or a sessionStorage restore
+      // that's just been re-synced against the live session (the `else`
+      // branch above) — either way, safe for _goToView('list') to treat as
+      // real, already-loaded live data on the user's first Documents click.
+      this._initialDocumentsRootReady = true;
     } catch (error) {
       console.warn('[VesselDMS] configured Documents sites unavailable:', error);
     } finally {
@@ -1855,6 +2873,32 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         });
       }
     } catch { /* non-fatal */ }
+  }
+
+  private _allVesselNamesForSearchLoading = false;
+  /** Fetches every vessel name tenant-wide (no site_key), once, purely so
+   * DocumentsPage's search-clause classifier can recognize a query clause
+   * as naming a vessel even when browsing a SharePoint site/library whose
+   * `vessels` (the Vessels-module table — scoped by vesselSiteFilter, and
+   * deliberately left un-refetched on a Documents site switch, see
+   * _switchDocumentSite's comment) doesn't include that vessel. Never
+   * rendered anywhere itself, so being tenant-wide/unscoped is safe. */
+  public async _loadAllVesselNamesForSearch(): Promise<void> {
+    if (this._allVesselNamesForSearchLoading || this.state.allVesselNamesForSearch.length > 0) return;
+    this._allVesselNamesForSearchLoading = true;
+    try {
+      const base = this._base();
+      const data = await this._fetchJson(`${base}/api/vessels`).catch(() => null);
+      if (Array.isArray(data)) {
+        const names = data.map((v: any) => String(v?.name || '').trim()).filter(Boolean);
+        if (names.length > 0) {
+          this.setState({ allVesselNamesForSearch: names });
+        }
+      }
+    } catch { /* non-fatal — search just falls back to whatever `vessels` already has */ }
+    finally {
+      this._allVesselNamesForSearchLoading = false;
+    }
   }
 
   public _tenantSitesLoading = false;
@@ -2004,7 +3048,38 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       this._documentLiveTreeAbortControllers.delete(siteKey);
       this._documentLiveTreeLoading.delete(siteKey);
       this._documentLiveTreeLoaded.add(siteKey);
-      if (this.state.activeDocumentSite === siteKey) this.setState({ documentLiveFoldersLoading: false });
+      if (this.state.activeDocumentSite === siteKey) {
+        this.setState({ documentLiveFoldersLoading: false });
+      }
+    }
+  }
+
+  /**
+   * A site's live folder tree (`documentLiveFolders`) is loaded once per
+   * session and then marked done in `_documentLiveTreeLoaded` — see the
+   * early-return guard at the top of `_loadDocumentLiveTree`. That guard
+   * means a folder created after the initial load (e.g. a new vessel via
+   * the "Create a new vessel" dialog) never appeared in the Documents
+   * module for that site again until a full page reload, because nothing
+   * ever cleared it. Call this right after an operation that adds/removes
+   * a root-level folder in a site's drive (vessel create/delete) so the
+   * next read re-fetches instead of serving the stale in-memory snapshot.
+   */
+  public _invalidateDocumentLiveTree(siteKey: string | undefined): void {
+    if (!siteKey) return;
+    this._documentLiveTreeLoaded.delete(siteKey);
+    this._documentLiveTreeLoading.delete(siteKey);
+    const site = (this.state.documentSites || []).find(s => s.site_key === siteKey);
+    if (site && site.site_id && site.drive_id) {
+      const prefix = `${site.site_id}::${site.drive_id}::`;
+      Array.from(this._siteFolderItemsCache.keys())
+        .filter(key => key.startsWith(prefix))
+        .forEach(key => this._siteFolderItemsCache.delete(key));
+    }
+    // If the user is already looking at this site's Documents view, refresh
+    // it right away instead of waiting for them to navigate away and back.
+    if (this.state.activeDocumentSite === siteKey) {
+      void this._loadDocumentLiveTree(siteKey);
     }
   }
 
@@ -2017,9 +3092,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     }
   }
 
-  public async _loadSiteDrives(siteId: string): Promise<Array<{ id: string; name: string; web_url?: string }>> {
+  public async _loadSiteDrives(siteId: string, signal?: AbortSignal): Promise<Array<{ id: string; name: string; web_url?: string; is_system?: boolean; item_count?: number | null }>> {
     try {
-      const data = await this._fetchJson(`${this._base()}/api/sites/${encodeURIComponent(siteId)}/drives`);
+      const data = await this._fetchJson(`${this._base()}/api/sites/${encodeURIComponent(siteId)}/drives`, signal);
       return Array.isArray(data?.drives) ? data.drives : [];
     } catch (err) {
       console.warn('[VesselDMS] _loadSiteDrives error:', err);
@@ -2027,18 +3102,43 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     }
   }
 
+  public async _loadTermStoreVessels(siteId: string): Promise<string[]> {
+    try {
+      const data = await this._fetchJson(`${this._base()}/api/sites/${encodeURIComponent(siteId)}/term-store-vessels`);
+      return Array.isArray(data?.vessels) ? data.vessels : [];
+    } catch (err) {
+      console.warn('[VesselDMS] _loadTermStoreVessels error:', err);
+      return [];
+    }
+  }
+
+  // Set whenever the backend reports Microsoft Graph's per-app request
+  // quota is exhausted (activityLimitReached) — see _fetchJson's
+  // THROTTLED_429 handling. While Date.now() is before this timestamp,
+  // _loadSiteFolderChildren fails fast locally instead of issuing another
+  // request. Without this, rapid folder navigation or vessel-filter changes
+  // kept firing fresh /children requests during the cooldown (each click a
+  // new request, each request its own retry attempts on the backend), which
+  // is what was re-triggering the throttle instead of letting it clear.
+  public _graphThrottledUntil: number = 0;
+
   public async _loadSiteFolderChildren(
     siteId: string,
     driveId: string,
     folderId: string = 'root',
-  ): Promise<{ items: any[]; summaryCounts?: any; parentPath?: string; folderId?: string }> {
+    signal?: AbortSignal,
+  ): Promise<{ items: any[]; summaryCounts?: any; parentPath?: string; folderId?: string; error?: boolean; throttled?: boolean }> {
+    if (Date.now() < this._graphThrottledUntil) {
+      return { items: [], summaryCounts: null, parentPath: '', folderId, error: true, throttled: true };
+    }
     try {
       const encodedFolderRef = folderId
         .split('/')
         .map(part => encodeURIComponent(part))
         .join('/');
       const data = await this._fetchJson(
-        `${this._base()}/api/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/folders/${encodedFolderRef}/children`
+        `${this._base()}/api/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/folders/${encodedFolderRef}/children`,
+        signal
       );
       return {
         items: Array.isArray(data?.items) ? data.items : [],
@@ -2046,17 +3146,220 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         parentPath: data?.parent_path || '',
         folderId: data?.folder_id || folderId,
       };
-    } catch (err) {
+    } catch (err: any) {
+      if (typeof err?.message === 'string' && err.message.indexOf('THROTTLED_429:') === 0) {
+        const retryAfterSec = Number(err.message.split(':')[1]) || 60;
+        this._graphThrottledUntil = Date.now() + retryAfterSec * 1000;
+        console.warn(`[VesselDMS] _loadSiteFolderChildren throttled by Graph quota — pausing folder requests for ${retryAfterSec}s.`);
+        return { items: [], summaryCounts: null, parentPath: '', folderId, error: true, throttled: true };
+      }
+      // Distinguish "the request failed" from "the folder is genuinely
+      // empty" — callers used to treat both the same, which showed a
+      // misleading "This folder is empty" for e.g. a stale/wrong drive id, a
+      // 404, or a transient network error.
       console.warn('[VesselDMS] _loadSiteFolderChildren error:', err);
-      return { items: [], summaryCounts: null, parentPath: '', folderId };
+      return { items: [], summaryCounts: null, parentPath: '', folderId, error: true };
     }
   }
 
-  public _siteDrivesCache: Map<string, Array<{ id: string; name: string; web_url?: string }>> = new Map();
-  public _siteFolderItemsCache: Map<string, { items: any[]; loading?: boolean; parentPath?: string }> = new Map();
+  public _siteDrivesCache: Map<string, Array<{ id: string; name: string; web_url?: string; is_system?: boolean; item_count?: number | null }>> = new Map();
+  // Site ids for which the "Libraries in <site>" grid (DocumentsPage.tsx,
+  // stackLevel 2) should also show SharePoint's own auto-provisioned system
+  // libraries (Site Assets, Style Library, Form Templates, ...), which are
+  // hidden by default there for the same reason they're hidden in the Sites
+  // module — they're never where a user's actual files live. Toggled by the
+  // "Show N more" control in that grid; a plain Set + forceUpdate() rather
+  // than state, matching how _siteDrivesCache itself is handled.
+  public _systemLibrariesRevealed: Set<string> = new Set();
+  public _siteFolderItemsCache: Map<string, { items: any[]; loading?: boolean; parentPath?: string; error?: boolean }> = new Map();
   private _siteFolderChildPrefetched: Set<string> = new Set();
+  // Folder ids already auto-drilled-through (see _getOrLoadSiteFolderChildren
+  // below): a folder whose only content is exactly one sub-folder and no
+  // files gets skipped straight into automatically, once, so browsing a
+  // vessel folder that only contains e.g. "Drawings and Manuals" doesn't
+  // force an extra click through an otherwise-empty single-item listing.
+  private _autoDrilledFolderIds: Set<string> = new Set();
+  public _termStoreVesselsCache: Map<string, string[]> = new Map();
+  // Tracks the AbortController for the currently-running _prefetchSiteSubtree
+  // walk, if any. See _cancelSiteSubtreePrefetch below for why this exists:
+  // that background walk's own outstanding requests share the browser's
+  // small per-origin connection pool with whatever single folder request
+  // Folder view needs next, and were starving it (Folder view stuck on
+  // "Loading contents of X..." while List view, which never awaits the
+  // walk, rendered instantly).
+  private _subtreePrefetchAbort: AbortController | null = null;
 
-  public _getOrLoadSiteDrives(siteId: string): Array<{ id: string; name: string; web_url?: string }> | null {
+  // Tracks the in-flight `_switchDocumentSite` call, if any, the same way
+  // `_subtreePrefetchAbort` tracks the subtree walk. Repeatedly changing the
+  // "SharePoint site" dropdown used to leave every earlier switch's requests
+  // (the /api/sites/active POST, the drives lookup, and the new site's root
+  // `/children` fetch) running to completion uncancelled — each one holding
+  // a slot in the browser's small per-origin connection pool and queuing up
+  // behind one another, which is what showed up as a pile-up of "children"
+  // calls in the Network tab and a "Loading contents of Documents..." that
+  // never finished after clicking through a few sites in a row. `_siteSwitchGeneration`
+  // is bumped on every call and captured locally so a switch that's been
+  // superseded by a newer one can tell and bail out without applying its
+  // (now stale) results or surfacing a spurious "Could not switch site" alert.
+  private _siteSwitchAbort: AbortController | null = null;
+  private _siteSwitchGeneration: number = 0;
+
+  // Async cache-fill completions (term store vessels, site drives, site
+  // folder children, ...) each used to call this.forceUpdate() directly.
+  // That was fine one at a time, but a burst of several completing within
+  // the same tick — e.g. a recursive SharePoint subtree prefetch (see
+  // _prefetchSiteSubtree below) resolving a dozen folders in quick
+  // succession — fired a full synchronous re-render of this ~9,000-line
+  // root component once per completion. Repeated navigation between Folder
+  // view and List view, each triggering its own burst, is what made the
+  // app hang. _scheduleForceUpdate coalesces any completions within a
+  // short window into a single re-render.
+  private _forceUpdateScheduled: boolean = false;
+  public _scheduleForceUpdate(): void {
+    if (this._forceUpdateScheduled) return;
+    this._forceUpdateScheduled = true;
+    setTimeout(() => {
+      this._forceUpdateScheduled = false;
+      this.forceUpdate();
+    }, 120);
+  }
+
+  /** Promise-based, cache-aware folder-children loader — shares
+   * _siteFolderItemsCache with the synchronous _getOrLoadSiteFolderChildren
+   * (same key format), but returns a Promise so callers (notably
+   * _prefetchSiteSubtree) can await one folder's load before recursing into
+   * its children instead of firing every request at once. */
+  public _loadAndCacheSiteFolderChildren(siteId: string, driveId: string, folderId: string, signal?: AbortSignal): Promise<any[]> {
+    if (!siteId || !driveId) return Promise.resolve([]);
+    const key = `${siteId}::${driveId}::${folderId}`;
+    const cached = this._siteFolderItemsCache.get(key) as any;
+    if (cached && !cached.loading) return Promise.resolve(cached.items || []);
+    if (cached && cached.loading && cached._promise) return cached._promise;
+
+    const promise: Promise<any[]> = this._loadSiteFolderChildren(siteId, driveId, folderId, signal).then(res => {
+      const loadedEntry = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
+      this._siteFolderItemsCache.set(key, loadedEntry);
+      this._scheduleForceUpdate();
+      return loadedEntry.items;
+    }).catch(() => {
+      // An aborted background prefetch (see _cancelSiteSubtreePrefetch) is
+      // not a real load failure — drop the cache entry instead of marking it
+      // errored so a later real request for this folder retries cleanly
+      // rather than showing a stuck error/empty state.
+      if (signal?.aborted) {
+        this._siteFolderItemsCache.delete(key);
+      } else {
+        this._siteFolderItemsCache.set(key, { items: [], loading: false, parentPath: '', error: true });
+      }
+      this._scheduleForceUpdate();
+      return [];
+    });
+    this._siteFolderItemsCache.set(key, { items: [], loading: true, _promise: promise } as any);
+    return promise;
+  }
+
+  /** Recursively prefetches a SharePoint site's folder subtree so List View
+   * can flatten every file underneath `folderId`, not just the folders the
+   * user has already opened one at a time in Folder view. Bounded by both
+   * depth and total node count so a very large or deep library can't hang
+   * the browser or flood Graph with requests; already-cached folders
+   * resolve instantly via _loadAndCacheSiteFolderChildren, so re-entering a
+   * folder already walked is cheap.
+   *
+   * Budget/concurrency were previously 80/6 — every single Folder -> List
+   * switch in the Documents/Sites module could burst up to 80 concurrent-ish
+   * requests to our own /api/sites/.../children endpoint (6 at a time),
+   * each of which can itself retry up to 6 times server-side against Graph
+   * on 429/503 (see GraphClient.request). That's what showed up as the
+   * "children API is looping" — a rapid flood of children calls in the
+   * Network tab — and is also what was tipping some sites into SharePoint
+   * Online's own throttling (the Throttle.htm page reported earlier).
+   * Halving both trims the peak burst substantially while still covering
+   * realistically-sized folder trees; already-cached folders still resolve
+   * instantly on repeat navigation regardless of this budget. */
+  public async _prefetchSiteSubtree(
+    siteId: string,
+    driveId: string,
+    folderId: string,
+    depth: number = 4,
+    budget: { remaining: number } = { remaining: 40 },
+  ): Promise<void> {
+    if (!siteId || !driveId || depth <= 0 || budget.remaining <= 0) return;
+
+    // Cancel any previous walk before starting a new one — otherwise
+    // repeated Folder view <-> List view switches pile up multiple
+    // overlapping background walks, each holding several of the browser's
+    // small per-origin connection slots and starving whatever single folder
+    // request Folder view needs next.
+    this._subtreePrefetchAbort?.abort();
+    const abortController = new AbortController();
+    this._subtreePrefetchAbort = abortController;
+    const { signal } = abortController;
+
+    // Breadth-first, a few folders at a time with one overall concurrency
+    // cap. The previous depth-first walk awaited every folder strictly one
+    // after another, so List view waited for up to `budget` round-trips back
+    // to back. Lowered from 6 to reduce how many requests land on the
+    // backend/Graph at once (see the "children API is looping" note above).
+    const CONCURRENCY = 3;
+    let level: string[] = [folderId];
+    for (let remainingDepth = depth; remainingDepth > 0 && level.length > 0 && budget.remaining > 0; remainingDepth--) {
+      if (signal.aborted) return;
+      const nextLevel: string[] = [];
+      for (let i = 0; i < level.length && budget.remaining > 0; i += CONCURRENCY) {
+        if (signal.aborted) return;
+        const batch = level.slice(i, i + Math.min(CONCURRENCY, budget.remaining));
+        budget.remaining -= batch.length;
+        // eslint-disable-next-line no-await-in-loop
+        const results = await Promise.all(batch.map(id => this._loadAndCacheSiteFolderChildren(siteId, driveId, id, signal)));
+        if (signal.aborted) return;
+        results.forEach(items => {
+          (items || []).forEach(item => {
+            if (item?.folder && item.id) nextLevel.push(item.id);
+          });
+        });
+      }
+      level = nextLevel;
+    }
+    if (this._subtreePrefetchAbort === abortController) {
+      this._subtreePrefetchAbort = null;
+    }
+  }
+
+  /** Cuts short any in-flight _prefetchSiteSubtree walk. Call this whenever
+   * Folder view is about to need a specific folder fetched right away — its
+   * one request should never have to wait behind the background walk's
+   * requests for the browser's per-origin connection slots. This is the fix
+   * for "Folder view stays on Loading contents of X... for a long time while
+   * List view comes back immediately": List view triggers the walk but never
+   * awaits it (see openListViewFromFolderContext in DocumentsPage.tsx), so it
+   * always renders straight away; the walk then keeps running in the
+   * background and, without this cancellation, its own outstanding requests
+   * were the thing actually blocking Folder view's next fetch. */
+  public _cancelSiteSubtreePrefetch(): void {
+    this._subtreePrefetchAbort?.abort();
+    this._subtreePrefetchAbort = null;
+  }
+
+  /** Live SharePoint Term Store vessel names for a site, merged with DB
+   * vessels server-side (see GET /api/sites/{site_id}/term-store-vessels).
+   * Same lazy load-and-cache-then-forceUpdate pattern as
+   * _getOrLoadSiteDrives, keyed per site so switching sites picks up that
+   * site's own term store on next render. */
+  public _getOrLoadTermStoreVessels(siteId: string): string[] {
+    if (!siteId) return [];
+    if (this._termStoreVesselsCache.has(siteId)) {
+      return this._termStoreVesselsCache.get(siteId) || [];
+    }
+    this._termStoreVesselsCache.set(siteId, []);
+    this._loadTermStoreVessels(siteId).then(names => {
+      this._termStoreVesselsCache.set(siteId, names);
+      this._scheduleForceUpdate();
+    }).catch(() => undefined);
+    return [];
+  }
+
+  public _getOrLoadSiteDrives(siteId: string): Array<{ id: string; name: string; web_url?: string; is_system?: boolean; item_count?: number | null }> | null {
     if (!siteId) return [];
     if (this._siteDrivesCache.has(siteId)) {
       return this._siteDrivesCache.get(siteId) || [];
@@ -2064,7 +3367,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     this._siteDrivesCache.set(siteId, []);
     this._loadSiteDrives(siteId).then(drives => {
       this._siteDrivesCache.set(siteId, drives);
-      this.forceUpdate();
+      this._scheduleForceUpdate();
     }).catch(() => undefined);
     return null;
   }
@@ -2074,7 +3377,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     driveId: string,
     folderId: string = 'root',
     force: boolean = false,
-  ): { items: any[]; loading?: boolean } {
+    signal?: AbortSignal,
+  ): { items: any[]; loading?: boolean; error?: boolean } {
     // Guard: cannot load without a valid site and drive
     if (!siteId || !driveId) {
       return { items: [], loading: false };
@@ -2132,19 +3436,59 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       }
     }
 
+    // Folder view is actively waiting on this one folder — free up the
+    // browser's per-origin connection slots from any background List-view
+    // subtree walk so this request isn't queued behind it (see
+    // _cancelSiteSubtreePrefetch for the full story).
+    this._cancelSiteSubtreePrefetch();
+
     const entry: { items: any[]; loading: boolean } = { items: [], loading: true };
     this._siteFolderItemsCache.set(key, entry);
-    this._loadSiteFolderChildren(siteId, driveId, folderId).then(res => {
-      const loadedEntry = { items: res.items || [], loading: false, parentPath: res.parentPath || '' };
+    this._loadSiteFolderChildren(siteId, driveId, folderId, signal).then(res => {
+      if (signal?.aborted) {
+        // Superseded (e.g. the user switched to a different site before this
+        // resolved) — drop the placeholder instead of caching it as either
+        // loaded or errored, same as _loadAndCacheSiteFolderChildren does,
+        // so a later real request for this folder retries cleanly rather
+        // than showing a stuck error/empty state.
+        this._siteFolderItemsCache.delete(key);
+        return;
+      }
+      const loadedEntry = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
       this._siteFolderItemsCache.set(key, loadedEntry);
       if (res.folderId && res.folderId !== folderId) {
         const resolvedKey = `${siteId}::${driveId}::${res.folderId}`;
         this._siteFolderItemsCache.set(resolvedKey, loadedEntry);
       }
-      this.forceUpdate();
+      // Auto-drill through a single-sub-folder, no-files listing (see
+      // _autoDrilledFolderIds above) — but only when this is the folder the
+      // user is actually looking at right now (the leaf of folderPathStack),
+      // not a background/prefetch load for some other folder, and only once
+      // per folder id so a deliberate Back navigation into it isn't fought.
+      const currentStack = this.state.folderPathStack || [];
+      const currentLeaf = currentStack[currentStack.length - 1];
+      if (
+        !loadedEntry.error &&
+        currentLeaf && currentLeaf.id === folderId &&
+        !this._autoDrilledFolderIds.has(folderId)
+      ) {
+        const childFolders = loadedEntry.items.filter((it: any) => !!it.folder);
+        const childFiles = loadedEntry.items.filter((it: any) => !it.folder);
+        if (childFolders.length === 1 && childFiles.length === 0) {
+          this._autoDrilledFolderIds.add(folderId);
+          const only = childFolders[0];
+          this._pushFolderNav([...currentStack, { id: only.id, name: only.name }], this.state.docMainFolder);
+          return;
+        }
+      }
+      this._scheduleForceUpdate();
     }).catch(() => {
-      this._siteFolderItemsCache.set(key, { items: [], loading: false, parentPath: '' });
-      this.forceUpdate();
+      if (signal?.aborted) {
+        this._siteFolderItemsCache.delete(key);
+      } else {
+        this._siteFolderItemsCache.set(key, { items: [], loading: false, parentPath: '', error: true });
+      }
+      this._scheduleForceUpdate();
     });
     return entry;
   }
@@ -2152,20 +3496,75 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   public async _refreshSiteFolder(siteId: string, driveId: string, folderId: string = 'root'): Promise<void> {
     if (!siteId || !driveId) return;
     const key = `${siteId}::${driveId}::${folderId}`;
-    this._siteFolderItemsCache.delete(key);
-    this._getOrLoadSiteFolderChildren(siteId, driveId, folderId, true);
-    this.forceUpdate();
+
+    // This fires on every breadcrumb click, including Back/Forward and
+    // re-clicking an earlier breadcrumb segment to step back to a folder
+    // already open this session. It used to delete the cache entry first
+    // (via _getOrLoadSiteFolderChildren(..., true)), which blanked the
+    // already-loaded folder contents and put the "Loading contents of
+    // X..." spinner back up — a real, noticeable reload — even though
+    // nothing about that folder had changed. Keep whatever's already
+    // cached on screen and refresh it in the background instead
+    // (stale-while-revalidate): _getOrLoadSiteFolderChildren's render path
+    // only shows the spinner when items.length === 0, so as long as the
+    // previous items stay in the cache entry while loading is refreshed,
+    // stepping back shows the folder instantly and swaps in fresh data
+    // silently once it arrives.
+    const existing = this._siteFolderItemsCache.get(key);
+    if (existing && !existing.loading) {
+      this._siteFolderItemsCache.set(key, { ...existing, loading: true });
+    }
+
+    // Same reasoning as _getOrLoadSiteFolderChildren: don't let a background
+    // List-view subtree walk hold onto connection slots this foreground
+    // refresh needs.
+    this._cancelSiteSubtreePrefetch();
+
+    this._loadSiteFolderChildren(siteId, driveId, folderId).then(res => {
+      const loadedEntry = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
+      this._siteFolderItemsCache.set(key, loadedEntry);
+      this._scheduleForceUpdate();
+    }).catch(() => {
+      // A failed background refresh shouldn't wipe out contents that were
+      // already showing correctly — keep them rather than falling back to
+      // an error/empty state.
+      if (existing) {
+        this._siteFolderItemsCache.set(key, { ...existing, loading: false });
+      } else {
+        this._siteFolderItemsCache.set(key, { items: [], loading: false, parentPath: '', error: true });
+      }
+      this._scheduleForceUpdate();
+    });
+    this._scheduleForceUpdate();
   }
 
   private _usesBackendDocumentSite(): boolean {
     return false;
   }
 
-  public async _switchDocumentSite(siteKey: string): Promise<void> {
+  /** site_key of the site a "SharePoint Sites > <site> > <library> > …"
+   * breadcrumb points at, or null for any other breadcrumb shape. */
+  public _siteKeyForFolderStack(
+    stack: { id: string; name: string }[],
+    sites: Array<{ site_key: string; sp_site_name: string; site_id: string }> = this.state.documentSites,
+  ): string | null {
+    if (!stack || stack.length < 2 || stack[0]?.id !== 'sites_root') return null;
+    const siteNode = stack[1];
+    const rawId = String(siteNode?.id || '').replace(/^site:/, '');
+    const name = String(siteNode?.name || '').trim().toLowerCase();
+    const match = (sites || []).find(site =>
+      (!!rawId && (site.site_id === rawId || site.site_key === rawId)) ||
+      (!!name && ((site.sp_site_name || '').trim().toLowerCase() === name || (site.site_key || '').trim().toLowerCase() === name))
+    );
+    return match ? match.site_key : null;
+  }
+
+  /** Point this session's server-side active site at `siteKey` WITHOUT
+   * touching the folder view (unlike _switchDocumentSite, which resets the
+   * breadcrumb to the site's library root). */
+  public async _syncSessionActiveSite(siteKey: string): Promise<void> {
     const base = this._base();
-    const selectedSite = this.state.documentSites.find(site => site.site_key === siteKey);
-    if (!selectedSite) throw new Error(`SharePoint site '${siteKey}' is not available.`);
-    const response = await fetch(`${this._base()}/api/sites/active`, {
+    const response = await fetch(`${base}/api/sites/active`, {
       method: 'POST',
       headers: {
         ...(base.includes('localhost') ? this._headersForLocalFallback() : this._headers()),
@@ -2173,21 +3572,206 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       },
       body: JSON.stringify({ site_name: siteKey }),
     });
+    if (!response.ok) throw new Error(`Could not set active site (${response.status})`);
+  }
+
+  public async _switchDocumentSite(siteKey: string): Promise<void> {
+    const base = this._base();
+    const selectedSite = this.state.documentSites.find(site => site.site_key === siteKey);
+    if (!selectedSite) throw new Error(`SharePoint site '${siteKey}' is not available.`);
+
+    // Free up the browser's per-origin connection slots from any background
+    // subtree walk left over from the site being switched away from — its
+    // requests are for a site we're about to stop showing, and would
+    // otherwise compete with this switch's own requests for a connection
+    // (same reasoning as _getOrLoadSiteFolderChildren / _refreshSiteFolder).
+    this._cancelSiteSubtreePrefetch();
+
+    // Cancel any still-running earlier call to THIS function — none of the
+    // three requests below (the active-site POST, the drives lookup, the
+    // root `/children` fetch at the end) used to be cancellable, so picking
+    // a few sites from the dropdown in quick succession left every earlier
+    // pick's requests running to completion in the background, all
+    // competing with the latest pick's own requests for the browser's small
+    // per-origin connection pool. That's what showed up as a pile-up of
+    // "children" calls in the Network tab and a "Loading contents of
+    // Documents..." that took a long time (or never finished) after
+    // clicking through a few sites in a row. `generation` lets this call
+    // recognize it's been superseded and bail out quietly — including
+    // skipping the `throw` a plain abort would otherwise cause, which would
+    // surface as a spurious "Could not switch site" alert (DocumentsPage.tsx
+    // wraps every call to this function in `.catch(error => alert(...))`).
+    this._siteSwitchAbort?.abort();
+    const switchAbort = new AbortController();
+    this._siteSwitchAbort = switchAbort;
+    const generation = ++this._siteSwitchGeneration;
+    const superseded = (): boolean => switchAbort.signal.aborted || generation !== this._siteSwitchGeneration;
+
+    // The POST below only tells the backend which site is "active" for this
+    // session; it doesn't return anything this call needs to keep going, and
+    // resolving the site's live drives (below) only needs selectedSite.site_id,
+    // which is already known. These two requests were previously awaited one
+    // after the other — a second full network round-trip queued behind the
+    // first for no reason other than being written sequentially. Firing them
+    // together roughly halves the network wait before this site's folders
+    // can start loading.
+    const activeSitePromise = fetch(`${this._base()}/api/sites/active`, {
+      method: 'POST',
+      headers: {
+        ...(base.includes('localhost') ? this._headersForLocalFallback() : this._headers()),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ site_name: siteKey }),
+      signal: switchAbort.signal,
+    });
+
+    // Site drives rarely change — once resolved for a site this session,
+    // reuse that instead of re-fetching every time the user switches back to
+    // a site they've already visited.
+    const cachedDrives = this._siteDrivesCache.get(selectedSite.site_id);
+    const drivesPromise = cachedDrives && cachedDrives.length > 0
+      ? Promise.resolve(cachedDrives)
+      : this._loadSiteDrives(selectedSite.site_id, switchAbort.signal);
+
+    let response: Response;
+    let liveDrives: Array<{ id: string; name: string; web_url?: string; is_system?: boolean; item_count?: number | null }>;
+    try {
+      [response, liveDrives] = await Promise.all([activeSitePromise, drivesPromise]);
+    } catch (err: any) {
+      if (superseded() || err?.name === 'AbortError') return;
+      throw err;
+    }
+    if (superseded()) return;
     if (!response.ok) throw new Error(`Could not switch site (${response.status})`);
-    this._siteFolderItemsCache.clear();
-    this._siteFolderChildPrefetched.clear();
+    // _siteFolderItemsCache entries are keyed `${siteId}::${driveId}::${folderId}`
+    // (see _getOrLoadSiteFolderChildren), so they're already scoped to one
+    // site's data — clearing the WHOLE cache here on every switch used to
+    // force a full re-fetch of a site's folders even when switching straight
+    // back to a site already browsed this session. That's the other half of
+    // what made repeatedly toggling between a couple of sites pile up so
+    // many "children" calls: every single toggle re-fetched everything from
+    // scratch instead of the switch-back being instant. The `force: true`
+    // passed to _getOrLoadSiteFolderChildren below already guarantees a
+    // fresh look at the entering site's root; nothing here needs to touch
+    // any other site's cached entries.
+    let resolvedDriveId = selectedSite.drive_id;
+    let resolvedLibraryName = selectedSite.default_library_name || 'Documents';
+    try {
+      if (liveDrives.length > 0) {
+        this._siteDrivesCache.set(selectedSite.site_id, liveDrives);
+        const preferredDrive = liveDrives.find(d => /^(documents|shared documents)$/i.test(d.name.trim()));
+        const configuredDrive = liveDrives.find(d => d.id === selectedSite.drive_id);
+        // Backend now flags SharePoint's own auto-provisioned libraries
+        // (Site Assets, Style Library, Form Templates, ...) as `is_system`.
+        // Falling back to plain `liveDrives[0]` used to mean a site with no
+        // library literally named "Documents"/"Shared Documents" and no
+        // `drive_id` configured yet could silently land the whole Documents
+        // module on one of those system libraries — always empty, with
+        // nothing in the UI to say why. Prefer the first non-system drive
+        // (ideally one that actually has items) before falling back to
+        // whatever Graph returned first.
+        const nonSystemDrives = liveDrives.filter(d => !d.is_system);
+        const bestNonSystemDrive = nonSystemDrives.find(d => (d.item_count ?? 0) > 0) || nonSystemDrives[0];
+        const activeDrive = preferredDrive || configuredDrive || bestNonSystemDrive || liveDrives[0];
+        resolvedDriveId = activeDrive.id;
+        resolvedLibraryName = activeDrive.name || resolvedLibraryName;
+      }
+    } catch (driveError) {
+      console.warn('[VesselDMS] Could not resolve live document drive while switching sites:', driveError);
+    }
+    const siteName = selectedSite.sp_site_name || selectedSite.site_key;
+    const libraryNode = { id: `drive:${resolvedDriveId}`, name: resolvedLibraryName };
+    const siteNode = { id: `site:${selectedSite.site_id}`, name: siteName };
+    const selectedRoot = [
+      { id: 'sites_root', name: 'SharePoint Sites' },
+      siteNode,
+      libraryNode,
+    ];
+    // Previously this also called `await this._loadData(true)` here, then
+    // re-applied this exact setState a second time afterwards to "restore"
+    // the breadcrumb root because that reload's async vessel/rows updates
+    // could race and clobber it. Two problems with that:
+    //  1. `_loadData` re-fetches `/api/vessels` with no site_key (see
+    //     backend/app/services/real_backend.py:838-859 `list_vessels`),
+    //     which returns vessels from EVERY configured site, not just the one
+    //     just switched to — populating `this.state.vessels` with
+    //     other-site vessels while the user is looking at this site's
+    //     folders. `_loadData`'s own fallback walk (`_flattenAll`) can also
+    //     fire the same "children" call fan-out described in
+    //     `_refreshSingleVesselRows`'s comment above.
+    //  2. It is entirely wasted work: `docScopeType: 'sites'` means the
+    //     vessel-based Documents table isn't even the active view.
+    // Dropping the full reload removes both the redundant call burst and the
+    // window where other-site vessel data could leak into state while
+    // browsing this site's folders. The direct, explicitly-scoped
+    // `_getOrLoadSiteFolderChildren(selectedSite.site_id, selectedSite.drive_id, ...)`
+    // call below is the only fetch this view actually needs.
     this.setState({
       activeDocumentSite: siteKey,
+      documentSites: this.state.documentSites.map(site => site.site_key === siteKey
+        ? { ...site, drive_id: resolvedDriveId, default_library_name: resolvedLibraryName }
+        : site),
       documentLiveFolders: [],
       documentLiveFoldersLoading: false,
       rows: [],
       uploadedFilesByFolder: {},
-      folderPathStack: [],
-      docMainFolder: null,
-      folderNavHistory: [{ folderPathStack: [], docMainFolder: null }],
+      docScopeType: 'sites',
+      docViewMode: 'folder',
+      folderPathStack: selectedRoot,
+      docMainFolder: 'SharePoint Sites',
+      folderNavHistory: [{ folderPathStack: selectedRoot, docMainFolder: 'SharePoint Sites' }],
       folderNavIndex: 0,
+      // Vessel options are site-specific; a vessel picked on the previous
+      // site must not stay selected after switching.
+      vesselFilter: 'all',
+      // Main folder / sub-folder / category filters point at folder NAMES
+      // from whichever site was active before this switch. Those names
+      // don't necessarily exist in the new site's folder tree — leaving
+      // them set stranded the Main folder dropdown on a name the new site
+      // has no match for, which made the Sub-folder dropdown compute zero
+      // options and show the disabled "No folder found" state even though
+      // the new site does have sub-folders, and could also drive the
+      // stuck-drive-root folder id resolution off the wrong path. Reset
+      // every one of these alongside vesselFilter so the new site starts
+      // from "All main folders" / "All sub-folders", same as opening
+      // Documents fresh.
+      docGroupFilter: 'all',
+      docCategoryFilter: 'all',
+      docGroupLevelFilter: 'all',
+      docLeafCategoryFilter: 'all',
+      docSubCategoryFilter: 'all',
+      docSubfolderOtherFilter: 'all',
+      catFilter: 'all',
+      textFilter: '',
+      docListPage: 0,
     });
-    await this._loadData(true);
+    this._getOrLoadSiteFolderChildren(selectedSite.site_id, resolvedDriveId, 'root', true, switchAbort.signal);
+    // Kick off the Home/search dashboard's per-site scan (real_backend.py
+    // _dashboard_site_scan) in the background as soon as the switch lands,
+    // instead of waiting for the user's first keystroke in the Documents
+    // search box to trigger it (see _triggerGlobalSearch's call to
+    // /api/dashboard/documents). That scan can take a while the first time
+    // a site is opened this session — especially when the site's SharePoint
+    // search index lags and the backend falls back to a recursive folder
+    // walk — and starting it now overlaps that wait with the time the user
+    // spends looking at the folder view that just loaded. A search fired a
+    // few seconds later then hits an already-warm (or already in-flight)
+    // cache instead of a cold scan_pending=true start, which is what made
+    // "switch site, then search" feel much slower than searching again on
+    // a site already browsed this session. page_size=5 (the backend's
+    // minimum — see page_size: Query(..., ge=5) in dashboard_documents)
+    // keeps this request as cheap as the API allows — its only job is to
+    // populate the shared per-site cache that _triggerGlobalSearch and the
+    // Home dashboard both read from. page_size=1 used to be passed here,
+    // but that fails backend validation (422) and made this priming call a
+    // silent no-op since the response was never awaited/read.
+    this._fetchJson(
+      `${this._base()}/api/dashboard/documents?site_key=${encodeURIComponent(siteKey)}&page=1&page_size=5`,
+      switchAbort.signal
+    ).catch(() => undefined);
+    if (this._siteSwitchAbort === switchAbort) {
+      this._siteSwitchAbort = null;
+    }
   }
 
   // ── Alert Bell (top-header) ────────────────────────────────────────────────
@@ -2206,48 +3790,149 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               a => !backendIds.has(a.id) &&
                 (a.alert_type === 'vessel_unrecognised' || a.alert_type === 'file_outside_structure' || a.alert_type === 'vessel_deleted' || a.alert_type === 'document_deleted')
             );
-            return { alertsList: [...localOnly, ...(res as AlertItem[])] };
+            // Once an alert is marked read locally (optimistic update in
+            // _markAlertRead / _markAllAlertsRead), keep it read even if this
+            // poll (every 30s) lands before the backend's own POST .../read
+            // has been persisted. Without this, the top-bar bell badge could
+            // briefly revert to unread/reappear after the person had already
+            // dismissed it.
+            const prevReadById = new Map(prev.alertsList.map(a => [a.id, a.read]));
+            const merged = (res as AlertItem[]).map(a =>
+              prevReadById.get(a.id) === true && !a.read ? { ...a, read: true } : a,
+            );
+            return { alertsList: [...localOnly, ...merged], alertsLoaded: true };
           });
+        } else {
+          this.setState({ alertsLoaded: true });
         }
       })
       .catch(() => undefined);
   };
 
-  /** Add a local activity alert and immediate recycle-bin popup for a deleted SPO item. */
-  public _handleSpoDocumentDeletion(node: import('./deltaSync').SpoFolderNode): void {
+  /** Who/where a deleted item came from — resolved from the backend's
+   *  deletion_log (via GET /api/recycle-bin/nodes), not guessed on the client. */
+  public _lookupDeletionAttribution = async (
+    nodeId: string,
+    nameHint?: string,
+  ): Promise<{ deletedByEmail: string | null; deletedByName: string | null; siteName: string | null; originalPath: string | null } | null> => {
+    try {
+      const items = await this._fetchJson(`${this._base()}/api/recycle-bin/nodes`);
+      const list = Array.isArray(items) ? items : [];
+      const hit =
+        list.find((x: any) => String(x?.id || '') === String(nodeId)) ||
+        (nameHint ? list.find((x: any) => String(x?.name || '').toLowerCase() === nameHint.toLowerCase()) : undefined);
+      if (!hit) return null;
+      return {
+        deletedByEmail: hit.deleted_by_email || null,
+        deletedByName: hit.deleted_by_name || null,
+        siteName: hit.site_name || null,
+        originalPath: hit.original_path || hit.spo_path || null,
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  /** Add a local activity alert and immediate recycle-bin popup for a deleted SPO item.
+   *  `attribution`, when already known (e.g. from the recycle-bin feed), is used
+   *  immediately; otherwise this fires an async lookup and patches the alert +
+   *  toast in place once the backend resolves who deleted it, from where, and
+   *  on which site — so the popup never falsely credits the viewing user. */
+  public _handleSpoDocumentDeletion(
+    node: import('./deltaSync').SpoFolderNode,
+    attribution?: { deletedByEmail?: string | null; deletedByName?: string | null; siteName?: string | null; originalPath?: string | null },
+  ): void {
+    // Already raised a popup for this exact SPO item — most commonly the
+    // root folder of a vessel that was already reported via
+    // _handleSpoVesselDeletion, or a delete already shown once from a
+    // retried scan. Skip rather than raise a second, duplicate popup.
+    if (this._shownDeletionToastIds.has(node.id)) return;
+    this._shownDeletionToastIds.add(node.id);
+
     const now = new Date().toISOString();
     const itemType = node.isFolder ? 'folder' : 'file';
+    const activeSiteObj = (this.state.documentSites || []).find(s => s.site_key === this.state.activeDocumentSite);
+    const path = attribution?.originalPath || node.serverRelativePath || 'SharePoint Online Documents';
+    const siteName = attribution?.siteName || activeSiteObj?.sp_site_name || this.props.siteUrl || null;
+    const deletedByName = attribution?.deletedByName || null;
+    const deletedByEmail = attribution?.deletedByEmail || null;
+
     const alert: AlertItem = {
       id: `document_deleted_${node.id}_${Date.now()}`,
       drive_item_id: node.id,
       folder_name: node.name,
-      folder_path: node.serverRelativePath || 'SharePoint Online Documents',
+      folder_path: path,
       parent_folder_id: node.parentId,
       vessel_name: null,
       department: 'Documents',
-      created_by_email: this.props.userEmail || '',
-      created_by_name: this.props.userDisplayName || 'SharePoint Online',
+      created_by_email: deletedByEmail || '',
+      created_by_name: deletedByName || 'Unknown user',
       alert_type: 'document_deleted',
-      alert_category: 'crud',
+      alert_category: 'dms',
       read: false,
       created_at: now,
       item_type: itemType,
-      spo_path: node.serverRelativePath,
+      spo_path: path,
+      site_name: siteName,
     };
 
+    let inserted = false;
     this.setState(prev => {
       const alreadyTracked = prev.alertsList.some(
         a => a.alert_type === 'document_deleted' && a.drive_item_id === node.id,
       );
       if (alreadyTracked) return null;
+      inserted = true;
       return {
         alertsList: [alert, ...prev.alertsList],
         spoDocumentDeletedToast: {
-          itemNames: [...(prev.spoDocumentDeletedToast?.itemNames || []), node.name],
           itemType,
+          items: [
+            ...(prev.spoDocumentDeletedToast?.items || []),
+            { id: node.id, name: node.name, path, siteName, deletedByName, deletedByEmail },
+          ],
         },
       };
     });
+    if (inserted) this._scheduleDocumentToastAutoClose();
+
+    // If we don't yet know who deleted this (the common case: the frontend
+    // only sees the delta-sync "it's gone" event, not the actor), ask the
+    // backend's recycle-bin feed — it's enriched from SharePoint's own
+    // recycle bin (DeletedByEmail/DeletedByName) once that's propagated.
+    if (inserted && !deletedByEmail && !deletedByName) {
+      void this._lookupDeletionAttribution(node.id, node.name).then(resolved => {
+        if (!resolved) return;
+        this.setState(prev => ({
+          alertsList: prev.alertsList.map(a =>
+            a.alert_type === 'document_deleted' && a.drive_item_id === node.id
+              ? {
+                  ...a,
+                  created_by_email: resolved.deletedByEmail || a.created_by_email,
+                  created_by_name: resolved.deletedByName || a.created_by_name,
+                  site_name: resolved.siteName || a.site_name,
+                  folder_path: resolved.originalPath || a.folder_path,
+                }
+              : a,
+          ),
+          spoDocumentDeletedToast: prev.spoDocumentDeletedToast && {
+            ...prev.spoDocumentDeletedToast,
+            items: prev.spoDocumentDeletedToast.items.map(entry =>
+              entry.id === node.id
+                ? {
+                    ...entry,
+                    path: resolved.originalPath || entry.path,
+                    siteName: resolved.siteName || entry.siteName,
+                    deletedByName: resolved.deletedByName || entry.deletedByName,
+                    deletedByEmail: resolved.deletedByEmail || entry.deletedByEmail,
+                  }
+                : entry,
+            ),
+          },
+        }));
+        if (this.state.spoDocumentDeletedToast) this._scheduleDocumentToastAutoClose();
+      });
+    }
   }
 
   /**
@@ -2271,7 +3956,12 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             serverRelativePath: (hit.original_path || hit.spo_path || 'SharePoint Online Documents').toString(),
             children: [],
           } as import('./deltaSync').SpoFolderNode;
-          this._handleSpoDocumentDeletion(node);
+          this._handleSpoDocumentDeletion(node, {
+            deletedByEmail: hit.deleted_by_email || null,
+            deletedByName: hit.deleted_by_name || null,
+            siteName: hit.site_name || null,
+            originalPath: hit.original_path || hit.spo_path || null,
+          });
           return;
         }
 
@@ -2342,7 +4032,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     this.setState({ alertFilter: filter });
   };
 
-  public _setAlertCategory = (category: 'dms' | 'unclassified' | 'classified' | 'crud' | 'email'): void => {
+  public _setAlertCategory = (category: 'dms' | 'crud' | 'email'): void => {
     this.setState({ alertCategory: category });
   };
 
@@ -2440,13 +4130,30 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       // Step 1: Always fetch vessel list from backend database first
       let vesselList: any = null;
       let vesselListFetched = false;
+      // Hoisted out of the try block below (was previously try-scoped-only)
+      // so Step 1a can also read it after the fetch.
+      const siteFilterValue = this.state.vesselSiteFilter && this.state.vesselSiteFilter !== 'all'
+        ? this.state.vesselSiteFilter
+        : '';
       try {
-        vesselList = await this._fetchJson(`${base}/api/vessels`, signal);
+        const vesselUrl = siteFilterValue
+          ? `${base}/api/vessels?site_key=${encodeURIComponent(siteFilterValue)}`
+          : `${base}/api/vessels`;
+        vesselList = await this._fetchJson(vesselUrl, signal);
         vesselListFetched = true;
       } catch {
         /* ignore */
       }
       if (signal.aborted) return;
+
+      // Step 1a: keep the vessel list current without a manual "Sync Vessels
+      // from SharePoint" click — auto-reconcile root folders / Term Store
+      // vessel terms in the background (throttled per site, see
+      // _maybeAutoSyncVesselsFromSharePoint), then silently refresh once if
+      // it actually found something new.
+      if (vesselListFetched) {
+        this._maybeAutoSyncVesselsFromSharePoint(siteFilterValue || null);
+      }
 
       let vessels: VesselRecord[] = [];
       const { spoDeletedVesselIds, recycleBin } = this.state;
@@ -2456,13 +4163,21 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           .map(r => r.name.toLowerCase())
       );
       if (vesselList && Array.isArray(vesselList) && vesselList.length > 0) {
-        vessels = vesselList
-          .map((v: any) => ({ ...v, name: cleanName(v.name), status: v.status || 'Active' }))
-          .filter((v: any) => !spoDeletedVesselIds.has(v.id) && !deletedNames.has((v.name || '').toLowerCase()));
+        vessels = this._filterDeletedVessels(
+          vesselList.map((v: any) => ({ ...v, name: cleanName(v.name), status: v.status || 'Active' })),
+          recycleBin,
+          spoDeletedVesselIds,
+          siteFilterValue || null,
+        );
       }
       // Preserve any locally created vessels currently in state that might not yet be returned by backend
       const fetchedNames = new Set(vessels.map(v => (v.name || '').trim().toLowerCase()));
+      // Only carry over optimistic, not-yet-persisted records. Rows that came
+      // from an earlier backend fetch (tagged _fetched_for_site) are
+      // superseded by this fetch — carrying them over is how a previously
+      // selected site's vessels leaked into the newly selected site.
       const pendingLocalVessels = (this.state.vessels || []).filter(v =>
+        !(v as any)._fetched_for_site &&
         !fetchedNames.has((v.name || '').trim().toLowerCase()) &&
         !spoDeletedVesselIds.has(v.id) &&
         !deletedNames.has((v.name || '').trim().toLowerCase())
@@ -2524,8 +4239,16 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               });
             }
 
-            // 2. Scan Technical & Crewing level
-            const spoVesselNodes = await this._getGraphChildren('Technical & Crewing', signal).catch(() => []);
+            // 2. Scan Technical & Crewing level — only if that folder
+            // actually exists at this site's root (step 1 already fetched
+            // the full root listing). Sites with a genuinely different
+            // top-level structure don't have it, and probing for it
+            // unconditionally on every load/site-switch was a guaranteed,
+            // repeated 404 for no benefit.
+            const technicalCrewingNode = mainRootNodes.find(node => node.isFolder && cleanName(node.name).trim().toLowerCase() === 'technical & crewing');
+            const spoVesselNodes = technicalCrewingNode
+              ? await this._getGraphChildren(technicalCrewingNode.name, signal).catch(() => [])
+              : [];
             if (signal.aborted) return;
             const stripVP = (name: string): string =>
               (name || '').trim().toLowerCase().replace(/^(mv|m\/v|m\.v\.|mt|m\/t|m\.t\.)\s+/i, '');
@@ -2636,7 +4359,21 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           // The flat tree contains folder structure only. Walk the active
           // SharePoint tree so parent folders with child folders (for example
           // Invoices & Payments > Invoice) are traversed to their file leaves.
-          this._refreshFilesFromBackendRows(0);
+          // Skipped while browsing a live-library scope ('sites' /
+          // 'shared_docs' / 'documents'): _loadData runs unconditionally
+          // (mount, an explicit Refresh click, reloadKey bumps, ...)
+          // regardless of which Documents view is currently open, but this
+          // walk resolves each DB row's folder via the legacy default
+          // department template (Technical & Crewing/Vessels/<vessel>,
+          // etc.), which doesn't match a real site's actual folder names and
+          // just floods Graph with 404s — the file listing in those scopes
+          // already comes from _getOrLoadSiteFolderChildren / the live
+          // folder tree, not from DB rows.
+          const isLiveLibraryScope = this.state.docScopeType === 'sites' ||
+            this.state.docScopeType === 'shared_docs' || this.state.docScopeType === 'documents';
+          if (!isLiveLibraryScope) {
+            this._refreshFilesFromBackendRows(0);
+          }
         });
         return;
       }
@@ -2810,8 +4547,13 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         };
       }, () => {
         // Use spoFolderMap-based refresh (fast) instead of full Graph tree walk.
-        this._lastRefreshedRowsKey = '';
-        this._refreshFilesFromBackendRows();
+        // Same live-library-scope gate as _loadData's Step 2 — see there.
+        const isLiveLibraryScope = this.state.docScopeType === 'sites' ||
+          this.state.docScopeType === 'shared_docs' || this.state.docScopeType === 'documents';
+        if (!isLiveLibraryScope) {
+          this._lastRefreshedRowsKey = '';
+          this._refreshFilesFromBackendRows();
+        }
       });
     } catch (err) {
       console.warn('[VesselDMS] failed to load the next vessel page:', err);
@@ -3188,7 +4930,53 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   }
 
   /** Open the exact SharePoint folder represented by a Documents list row. */
+  /** SharePoint Online URL of the folder that holds a List view row's files,
+   * resolved from folder listings already loaded into _siteFolderItemsCache
+   * (each Graph item there carries webUrl + parentReference). Returns '' when
+   * nothing cached identifies it. */
+  private _cachedFolderUrlForRow(row: GroupedRow): string {
+    const folderId = (row.uploadFolderId || '').trim();
+    const fileIds = new Set((row.files || []).map(f => f.id).filter(Boolean));
+    const isOfficeViewerUrl = (url: string): boolean => /\/_layouts\//i.test(url);
+    let folderUrl = '';
+    let parentIdFromFile = '';
+    let fileBasedUrl = '';
+    this._siteFolderItemsCache.forEach(entry => {
+      if (folderUrl || !entry || !Array.isArray(entry.items)) return;
+      entry.items.forEach((item: any) => {
+        if (folderUrl || !item?.id) return;
+        const url: string = item.webUrl || item.web_url || '';
+        if (item.folder && folderId && item.id === folderId && url) {
+          folderUrl = url;
+        } else if (!item.folder && fileIds.has(item.id)) {
+          if (!parentIdFromFile && item.parentReference?.id) parentIdFromFile = item.parentReference.id;
+          // A non-Office file's webUrl is ".../Folder/file.pdf" — its folder
+          // is that URL minus the last segment. Office files open through
+          // /_layouts/15/Doc.aspx, which carries no folder path.
+          if (!fileBasedUrl && url && !isOfficeViewerUrl(url) && url.lastIndexOf('/') > 8) {
+            fileBasedUrl = url.slice(0, url.lastIndexOf('/'));
+          }
+        }
+      });
+    });
+    if (!folderUrl && parentIdFromFile && parentIdFromFile !== folderId) {
+      this._siteFolderItemsCache.forEach(entry => {
+        if (folderUrl || !entry || !Array.isArray(entry.items)) return;
+        const hit = entry.items.find((item: any) => item?.folder && item.id === parentIdFromFile);
+        if (hit) folderUrl = hit.webUrl || hit.web_url || '';
+      });
+    }
+    return folderUrl || fileBasedUrl;
+  }
+
   public async _openSharePointFolder(row: GroupedRow): Promise<void> {
+    // Fast path: the folder's SharePoint URL is usually already known from
+    // the folder listings this row was built from — open it directly.
+    const cachedFolderUrl = this._cachedFolderUrlForRow(row);
+    if (cachedFolderUrl) {
+      window.open(cachedFolderUrl, '_blank');
+      return;
+    }
     // Open the new tab synchronously (inside the user-gesture frame) so the
     // browser does not treat the later navigation as a popup.  We deliberately
     // omit 'noopener' here because modern Chrome/Edge return null when noopener
@@ -3260,6 +5048,32 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       // Resolve by path in the active browser drive. Backend folder IDs and
       // delta item IDs can belong to an older drive even when their paths match.
       let item: any;
+      // First, the row's own folder/file item id on the row's own site/drive
+      // (SharePoint Sites rows carry Graph ids from that site's drive).
+      const itemIdCandidates = [row.uploadFolderId, ...(row.files || []).map(f => f.id)]
+        .map(id => String(id || '').trim())
+        .filter(id => id && !id.includes('/') && !/^(sf_|file_|category_|site:|drive:)/i.test(id) && !/^\d+$/.test(id));
+      for (const candidateId of Array.from(new Set(itemIdCandidates))) {
+        try {
+          const byId: any = await graphClient
+            .api(`/sites/${siteId}/drives/${driveId}/items/${encodeURIComponent(candidateId)}?$select=id,folder,file,webUrl,parentReference`)
+            .get();
+          if (byId?.folder && byId.webUrl) {
+            item = byId;
+          } else if (byId?.parentReference?.id) {
+            const parent: any = await graphClient
+              .api(`/sites/${siteId}/drives/${driveId}/items/${encodeURIComponent(byId.parentReference.id)}?$select=id,folder,webUrl`)
+              .get();
+            if (parent?.webUrl) item = parent;
+          }
+          if (item) {
+            logNavigation('graph_item_id_success', { itemId: candidateId, webUrl: item.webUrl });
+            break;
+          }
+        } catch (idError) {
+          logNavigation('graph_item_id_failed', { itemId: candidateId, error: String(idError) });
+        }
+      }
       const paths = [
         liveFolderPath,
         sharePointPath,
@@ -3269,6 +5083,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       ];
       let lastError: any;
       for (const candidatePath of Array.from(new Set(paths.filter(Boolean))) as string[]) {
+        if (item) break;
         try {
           const driveRelativePath = candidatePath.replace(/^\/+/, '');
           const encodedPath = driveRelativePath.split('/').map(part => encodeURIComponent(part)).join('/');
@@ -3594,9 +5409,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     targetSiteId?: string,
     targetDriveId?: string,
     baseSubFolderPath?: string,
-  ): Promise<{ fileId: string | null; statusPending: boolean; folderId: string | null; isGraphUpload: boolean }> {
+  ): Promise<{ fileId: string | null; statusPending: boolean; folderId: string | null; isGraphUpload: boolean; webUrl: string | null }> {
     const base = this._base();
-    if (!base) return { fileId: null, statusPending: false, folderId: null, isGraphUpload: false };
+    if (!base) return { fileId: null, statusPending: false, folderId: null, isGraphUpload: false, webUrl: null };
 
     const effectiveSiteId = targetSiteId || this.props.siteId;
     const effectiveDriveId = targetDriveId || this.props.driveId;
@@ -3802,6 +5617,17 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                 // Not found, create it
               }
 
+              // Never auto-create a department or Kaizen root folder
+              // (Technical & Crewing, Commercial & Chartering, Insurance,
+              // Kaizen - Knowledge Bank). If it isn't already in SharePoint,
+              // fail the upload instead of building the template tree.
+              if (!currentParentPath && (
+                this.MAIN_FOLDER_NAMES.some(mf => mf.toLowerCase() === seg.toLowerCase()) ||
+                /^kaizen - knowledge bank$/i.test(seg)
+              )) {
+                throw new Error(`Folder "${seg}" does not exist in SharePoint Online and will not be created automatically.`);
+              }
+
               const createUrl = currentParentPath
                 ? `/sites/${effectiveSiteId}/drives/${effectiveDriveId}/root:/${encodePath(currentParentPath)}:/children`
                 : `/sites/${effectiveSiteId}/drives/${effectiveDriveId}/root/children`;
@@ -3835,16 +5661,48 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           throw new Error(`Could not locate or create SharePoint folder for "${subFolderPath || uploadFolderId}".`);
         }
 
+        // 2.5 Block same-name duplicates within this folder/site. A vessel's
+        // folder lives on exactly one SharePoint site's drive, so this check
+        // is naturally scoped per site — the same file name is still allowed
+        // in a different site (or a different vessel folder on the same
+        // site) because that's a different `folder.id` entirely and this
+        // lookup never sees it. Previously nothing blocked this: a small
+        // file (<=4MB) silently overwrote the existing one via the default
+        // "replace" conflict behavior on the simple upload endpoint, and a
+        // large file (>4MB) got silently auto-renamed ("file (1).pdf") by
+        // the chunked upload session's conflictBehavior: 'rename' — neither
+        // path ever told the user a duplicate existed.
+        try {
+          const existingFile = await graphClient
+            .api(`/sites/${effectiveSiteId}/drives/${effectiveDriveId}/items/${folder.id}:/${encodeURIComponent(file.name)}?$select=id,name,file`)
+            .get();
+          if (existingFile?.id && existingFile.file) {
+            throw new Error(
+              `A file named "${file.name}" already exists in this folder. Rename the file, delete the existing one, or upload it to a different vessel/folder before trying again.`
+            );
+          }
+        } catch (dupCheckErr: any) {
+          // A thrown duplicate error above must propagate; a 404 ("Not
+          // found") from the existence check itself just means no
+          // conflict — let the upload proceed.
+          if (dupCheckErr instanceof Error && dupCheckErr.message.startsWith('A file named')) {
+            throw dupCheckErr;
+          }
+        }
+
         // 3. Upload file directly into the resolved SharePoint Online folder
         let item: any = null;
         if (file.size <= 4 * 1024 * 1024) {
-          const uploadUrl = `/sites/${effectiveSiteId}/drives/${effectiveDriveId}/items/${folder.id}:/${encodeURIComponent(file.name)}:/content`;
+          const uploadUrl = `/sites/${effectiveSiteId}/drives/${effectiveDriveId}/items/${folder.id}:/${encodeURIComponent(file.name)}:/content?@microsoft.graph.conflictBehavior=fail`;
           item = await graphClient.api(uploadUrl).put(file);
         } else {
-          // Large file chunked upload session (> 4 MB)
+          // Large file chunked upload session (> 4 MB). conflictBehavior is
+          // 'fail' (not the previous 'rename') so a race with another
+          // upload of the same name is rejected by SharePoint itself rather
+          // than silently creating "file (1).pdf".
           const sessionUrl = `/sites/${effectiveSiteId}/drives/${effectiveDriveId}/items/${folder.id}:/${encodeURIComponent(file.name)}:/createUploadSession`;
           const session = await graphClient.api(sessionUrl).post({
-            item: { '@microsoft.graph.conflictBehavior': 'rename', name: file.name },
+            item: { '@microsoft.graph.conflictBehavior': 'fail', name: file.name },
           });
           const uploadSessionUrl = session.uploadUrl;
           const CHUNK_SIZE = 320 * 1024 * 10; // 3.2 MB chunks
@@ -3895,7 +5753,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         }
         void this._refreshSiteFolder(effectiveSiteId, effectiveDriveId, folder.id);
 
-        return { fileId: item.id as string, statusPending: false, folderId: folder.id as string, isGraphUpload: true };
+        return { fileId: item.id as string, statusPending: false, folderId: folder.id as string, isGraphUpload: true, webUrl: item.webUrl || null };
       } catch (graphErr) {
         const detail = graphErr instanceof Error ? graphErr.message : String(graphErr);
         console.error('[VesselDMS] Graph direct upload error:', detail);
@@ -3907,6 +5765,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     const form = new FormData();
     form.append('file', file);
     if (this.props.userEmail) form.append('uploader_email', this.props.userEmail);
+    if (this.state.activeDocumentSite) form.append('site_key', this.state.activeDocumentSite);
 
     const liveFolderId = this._getLiveSharePointFolderId(canonicalSharePointPath) || this._getLiveSharePointFolderId(subFolderPath);
     const restFolderId = liveFolderId || (uploadFolderId && !uploadFolderId.startsWith('sf_') ? uploadFolderId : canonicalSharePointPath);
@@ -3936,7 +5795,13 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     // REST upload: folderId is a backend DB ID (NOT a SharePoint drive item ID),
     // so isGraphUpload must be false — a downstream refresh must resolve the real
     // SPO folder ID from the path rather than querying Graph with this DB ID.
-    return { fileId: data?.id || null, statusPending: data?.status === 'pending', folderId: restFolderId || null, isGraphUpload: false };
+    return {
+      fileId: data?.id || null,
+      statusPending: data?.status === 'pending',
+      folderId: restFolderId || null,
+      isGraphUpload: false,
+      webUrl: data?.webUrl || data?.web_url || null,
+    };
   }
 
   /**
@@ -4281,20 +6146,37 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     // Graph 404s and cannot produce files for the requested vessel.
     if (foundSupportedStructure) return allRows;
 
+    // Root-level names already confirmed to exist (from the single
+    // rootChildren fetch above, via mainFolderNodes at the top of this
+    // function). A mainFolderName NOT in this set is proven absent from the
+    // site's root, so `{mainFolderName}/...` legacy guesses below can only
+    // ever 404 — skip them instead of spending 2 guaranteed-404 Graph calls
+    // per main folder per vessel on a site that doesn't use that layout at
+    // all (this is what was flooding sites with a genuinely different
+    // top-level structure, e.g. no Technical & Crewing/Commercial &
+    // Chartering/Insurance folders at root).
+    const confirmedRootMainFolders = new Set(mainFolderNodes.map(node => normaliseName(node.name)));
+
     // Walk each main folder in parallel
     await this._mapLimit(
       this.MAIN_FOLDER_NAMES,
       3,
       async mainFolderName => {
         if (signal.aborted) return;
-        let vesselPath = `${this.VESSEL_ROOT}/${vesselName}/${mainFolderName}`;
-        // Get top-level categories inside this vessel's main folder
-        let topCats = await this._getGraphChildren(vesselPath, signal).catch(() => []);
-        // Keep existing pre-migration vessel folders readable.
-        if (topCats.length === 0) {
+        // Real layout is always {main}/{vessel} (docs/folder-structure-mode.md
+        // "Layout"; matches every other path built in this file, e.g. L5690,
+        // L5733, L5745). We reach this branch only when `foundSupportedStructure`
+        // is false, which means `confirmedRootMainFolders` is already known to
+        // be empty (it's derived from the same root scan) — so *no* probe for
+        // this mainFolderName can ever succeed. Skip Graph entirely instead of
+        // firing guaranteed-404 requests; the template fallback below (topCats
+        // empty) renders the placeholder rows either way.
+        let vesselPath = `${this.VESSEL_ROOT}/${mainFolderName}/${vesselName}`;
+        let topCats: Awaited<ReturnType<typeof this._getGraphChildren>> = [];
+        if (confirmedRootMainFolders.has(normaliseName(mainFolderName))) {
           const legacyPaths = [
-            `${mainFolderName}/Vessels/${vesselName}`,
             `${mainFolderName}/${vesselName}`,
+            `${mainFolderName}/Vessels/${vesselName}`,
           ];
           for (const legacyPath of legacyPaths) {
             const legacyCats = await this._getGraphChildren(legacyPath, signal).catch(() => []);
@@ -4456,77 +6338,6 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     return out;
   }
 
-  /**
-   * Ensures the complete Kaizen - Knowledge Bank folder hierarchy exists
-   * directly in the active SharePoint Online document library.
-   */
-  public async _ensureKaizenSharePointFolders(): Promise<void> {
-    const { graphClient, siteId, driveId } = this.props;
-    if (!graphClient || !siteId || !driveId) return;
-
-    const ensureFolderInDrive = async (parentPath: string, folderName: string): Promise<string | null> => {
-      const cleanParent = (parentPath || '').replace(/^\/+|\/+$/g, '');
-      const fullPath = cleanParent ? `${cleanParent}/${folderName}` : folderName;
-      const encodedFullPath = fullPath.split('/').map(s => encodeURIComponent(s)).join('/');
-      try {
-        const existing = await graphClient
-          .api(`/sites/${siteId}/drives/${driveId}/root:/${encodedFullPath}?$select=id,name,folder`)
-          .get();
-        if (existing?.id) return existing.id;
-      } catch {
-        // Not found, proceed to create
-      }
-
-      const createUrl = cleanParent
-        ? `/sites/${siteId}/drives/${driveId}/root:/${cleanParent.split('/').map(s => encodeURIComponent(s)).join('/')}:/children`
-        : `/sites/${siteId}/drives/${driveId}/root/children`;
-
-      try {
-        const created = await graphClient.api(createUrl).post({
-          name: folderName,
-          folder: {},
-          '@microsoft.graph.conflictBehavior': 'fail',
-        });
-        return created?.id || null;
-      } catch {
-        try {
-          const fallback = await graphClient
-            .api(`/sites/${siteId}/drives/${driveId}/root:/${encodedFullPath}?$select=id,name,folder`)
-            .get();
-          return fallback?.id || null;
-        } catch {
-          return null;
-        }
-      }
-    };
-
-    try {
-      // 1. Root folder
-      await ensureFolderInDrive('', 'Kaizen - Knowledge Bank');
-
-      // 2. Sections
-      await ensureFolderInDrive('Kaizen - Knowledge Bank', 'Templates');
-      await ensureFolderInDrive('Kaizen - Knowledge Bank', 'Procedures and Work Instructions');
-      await ensureFolderInDrive('Kaizen - Knowledge Bank', 'Lessons Learned');
-      await ensureFolderInDrive('Kaizen - Knowledge Bank', 'Circulars and Guidance');
-
-      // 3. Sub-categories under Circulars and Guidance
-      const circularsSubs = [
-        'Equipment Maker',
-        'Class',
-        'Flag - Port State',
-        'SIRE-OCIMF-RightShip',
-        'Shipyard',
-      ];
-      for (const sub of circularsSubs) {
-        await ensureFolderInDrive('Kaizen - Knowledge Bank/Circulars and Guidance', sub);
-      }
-      console.log('[VesselDMS] _ensureKaizenSharePointFolders: verified and created Kaizen folders in SharePoint Online');
-    } catch (e) {
-      console.warn('[VesselDMS] _ensureKaizenSharePointFolders error:', e);
-    }
-  }
-
   // ── Navigation & Views ────────────────────────────────────────────────────
 
   /** Push a new folder navigation entry, truncating any forward history. */
@@ -4534,12 +6345,6 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     folderPathStack: { id: string; name: string }[],
     docMainFolder: State['docMainFolder'],
   ): void {
-    if (
-      docMainFolder === 'Kaizen - Knowledge Bank' ||
-      (folderPathStack.length > 0 && (folderPathStack[0]?.name === 'Kaizen - Knowledge Bank' || folderPathStack[0]?.id === 'kaizen_root'))
-    ) {
-      void this._ensureKaizenSharePointFolders();
-    }
     this.setState(prev => {
       const truncated = prev.folderNavHistory.slice(0, prev.folderNavIndex + 1);
       const next = [...truncated, { folderPathStack, docMainFolder }];
@@ -4548,26 +6353,177 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   }
 
   public _goToView = async (view: AppView): Promise<void> => {
+    // Settings → Module Management can hide a module app-wide; refuse to
+    // navigate into one even if the caller (a stale bookmark, a dashboard
+    // shortcut, direct state) still asks for it. Settings/Profile are never
+    // in hiddenModules (module_settings_api excludes them), so this never
+    // blocks getting back to Settings to re-enable something.
+    if (this.state.hiddenModules.indexOf(view) !== -1) {
+      view = 'dashboard';
+    }
+    const previousView = this.state.view;
     this.setState({ view });
     if (view === 'dashboard') {
       void this._loadDashboardStats();
+    } else if (view === 'list') {
+      // 'list' is the Documents module (Sidebar.tsx navItems: { id: 'list',
+      // label: 'Documents' }). This branch only ever runs from that one
+      // sidebar button (renderNavBtn's onClick -> _goToView(item.id)) — no
+      // other call site in the app passes 'list', and none of Documents'
+      // OWN internal navigation (breadcrumbs, clicking into a subfolder,
+      // Folder<->List view toggle, "load more vessels") goes through
+      // _goToView at all, so this can't fire mid-browse. That's what makes
+      // it safe to treat as "fresh entry into the module" and reset the
+      // filter bar: a vessel/group/category/attachment/search filter left
+      // over from a previous visit was showing a stale filtered view (and
+      // a vessel dropdown pinned to a vessel the user wasn't even looking
+      // at) the next time Documents was opened, because this component is
+      // a single persistent instance for the whole web part — switching
+      // sidebar sections never unmounts/remounts it, so nothing was ever
+      // clearing these fields on its own.
+      //
+      // activeDocumentSite is left alone here — the "SharePoint site"
+      // dropdown selection isn't part of the root breadcrumb and switching
+      // it has its own dedicated flow (_switchDocumentSite) that resets its
+      // own filters. folderPathStack / docMainFolder / docScopeType /
+      // docViewMode ARE reset below (see the note further down): a click on
+      // this sidebar button is meant to be a clean re-entry into the module.
+      //
+      // No separate refetch is needed to show the unfiltered contents:
+      // `rows` already holds the unfiltered data (filtering happens
+      // entirely client-side, computed fresh on every render — see
+      // DocumentsPage.tsx's `filtered`), so clearing these fields is
+      // sufficient for the next render to show the current folder's real
+      // contents instead of the stale filtered subset.
+      //
+      // folderPathStack / docMainFolder / docScopeType / docViewMode ARE
+      // reset here too (this used to be the one exception, see the removed
+      // comment above this block in an earlier revision): the sidebar
+      // "Documents" button is meant to be a clean re-entry point into the
+      // module, not a "resume where I left off" shortcut. The sessionStorage
+      // restore in the constructor (_readPersistedFolderNav) still runs on
+      // an actual page refresh, so `view` starts back at 'dashboard' with
+      // the last folder pre-loaded in state — but nothing ever surfaces that
+      // restored folder until this branch runs (view only ever becomes
+      // 'list' via this function), so leaving these fields untouched here
+      // meant a page refresh + a single click into Documents always dropped
+      // the user back into whatever deep folder they'd last browsed instead
+      // of the module's root. Resetting them here makes the click
+      // deterministic; componentDidUpdate's persistence effect clears the
+      // now-stale sessionStorage entry as soon as folderPathStack changes.
+      //
+      // EXCEPTION: when the user was actively browsing a live SharePoint
+      // site/library ('sites' / 'shared_docs' / 'documents' — real Graph
+      // folder data behind activeDocumentSite, not the legacy vessels DB
+      // tree), stomping folderPathStack/docScopeType back to the vessels
+      // root threw that browsing session away on every single re-entry —
+      // after a page refresh (sessionStorage restores the live scope into
+      // state, then the first "Documents" click here wiped it straight back
+      // out) and after switching to any other sidebar module and back. The
+      // user saw this as "files never load" / "only folders show up": they
+      // were dropped into the generic vessels-DB root (department tiles,
+      // no live files) instead of the real site/folder they were just
+      // looking at, and had to re-pick the site from the dropdown every
+      // time. A live scope's own navigation (_switchDocumentSite, folder
+      // clicks) already resets its own filters/breadcrumb when the user
+      // deliberately changes site or drills in, so it doesn't need this
+      // reset to avoid a "stale filtered view" — only the legacy
+      // vessels/kaizen/common scopes do.
+      //
+      // FURTHER EXCEPTION TO THE EXCEPTION: the live-scope state above can
+      // also be true on the very *first* "Documents" click after a hard
+      // refresh, purely because the constructor seeded it straight from
+      // sessionStorage (_readPersistedFolderNav) — the user never actually
+      // browsed anywhere this page load, they just had a deep folder/site
+      // left over from before the refresh. Treating that as "resume my live
+      // browsing session" drops them right back into a folder that may no
+      // longer have anything freshly loaded for it (empty-looking view) and
+      // defeats the point of a hard refresh. _hasEnteredDocumentsSinceMount
+      // distinguishes the two cases: false only until the user's own first
+      // click into Documents since this component was constructed, so a
+      // page-load-only restore never counts as "was live browsing," while
+      // switching sidebar tabs and coming back mid-session still does.
+      const isFirstEntrySinceMount = !this._hasEnteredDocumentsSinceMount;
+      this._hasEnteredDocumentsSinceMount = true;
+      const isLiveScope =
+        this.state.docScopeType === 'sites' ||
+        this.state.docScopeType === 'shared_docs' || this.state.docScopeType === 'documents';
+      // On the very first click, only trust a live scope that
+      // _loadDocumentSites has actually finished verifying against live
+      // Graph data (_initialDocumentsRootReady) — otherwise it really could
+      // be an unverified sessionStorage restore, and the reset below is
+      // still the right call. If _loadDocumentSites already finished, this
+      // is either a freshly live-verified root or a re-synced restore
+      // (see its comments), so treat it the same as later re-entries
+      // instead of throwing it away and landing on the empty vessels root.
+      const wasLiveLibraryScope = isLiveScope && (!isFirstEntrySinceMount || this._initialDocumentsRootReady);
+      if (wasLiveLibraryScope) {
+        this.setState({
+          textFilter: '',
+          vesselFilter: 'all',
+          docGroupFilter: 'all',
+          docCategoryFilter: 'all',
+          docGroupLevelFilter: 'all',
+          docLeafCategoryFilter: 'all',
+          docSubCategoryFilter: 'all',
+          catFilter: 'all',
+          attachmentFilter: 'all',
+          docListPage: 0,
+        });
+      } else {
+        this.setState({
+          textFilter: '',
+          vesselFilter: 'all',
+          docGroupFilter: 'all',
+          docCategoryFilter: 'all',
+          docGroupLevelFilter: 'all',
+          docLeafCategoryFilter: 'all',
+          docSubCategoryFilter: 'all',
+          catFilter: 'all',
+          attachmentFilter: 'all',
+          docListPage: 0,
+          folderPathStack: [],
+          docMainFolder: null,
+          docScopeType: 'vessels',
+          docViewMode: 'folder',
+          folderNavHistory: [{ folderPathStack: [], docMainFolder: null }],
+          folderNavIndex: 0,
+        });
+      }
     } else if (view === 'vessels') {
-      this.setState({ panelLoading: true });
+      // "Manage vessels →" on the Home dashboard sends the user here while
+      // they have a specific SharePoint site selected there
+      // (dashboardSiteFilter, e.g. NissenKaiunExternal) — land on that same
+      // site instead of whatever vesselSiteFilter was last left at (often
+      // the default Communication Site, which has no vessel folders, so
+      // this page looked empty even though the dashboard tile they just saw
+      // said otherwise). Only do this when actually arriving FROM the
+      // dashboard (previousView === 'dashboard'); plain sidebar navigation
+      // into Vessels leaves vesselSiteFilter — and any site the user
+      // deliberately picked on this page — alone.
+      const incomingSiteFilter =
+        previousView === 'dashboard' && this.state.dashboardSiteFilter && this.state.dashboardSiteFilter !== 'all'
+          ? this.state.dashboardSiteFilter
+          : this.state.vesselSiteFilter;
+      this.setState({ panelLoading: true, vesselSiteFilter: incomingSiteFilter || 'all' });
       try {
-        const data = await this._fetchJson(`${this._base()}/api/vessels`);
+        const vesselUrl = incomingSiteFilter && incomingSiteFilter !== 'all'
+          ? `${this._base()}/api/vessels?site_key=${encodeURIComponent(incomingSiteFilter)}`
+          : `${this._base()}/api/vessels`;
+        const data = await this._fetchJson(vesselUrl);
         if (data && Array.isArray(data)) {
           const { spoDeletedVesselIds, recycleBin } = this.state;
           // Filter out vessels that were soft-deleted via SPO delta sync
-          // (backend DELETE may still be in-flight or the DB may not have updated yet)
-          const deletedNames = new Set(
-            recycleBin
-              .filter(r => r.kind === 'vessel' || r.item_type === 'vessel')
-              .map(r => r.name.toLowerCase())
-          );
+          // (backend DELETE may still be in-flight or the DB may not have
+          // updated yet) — see _filterDeletedVessels for how live
+          // SharePoint-discovered rows are treated differently.
           this.setState({
-            vessels: data
-              .map((v: any) => ({ ...v, name: cleanName(v.name), status: v.status || 'Active' }))
-              .filter((v: any) => !spoDeletedVesselIds.has(v.id) && !deletedNames.has((v.name || '').toLowerCase())),
+            vessels: this._filterDeletedVessels(
+              data.map((v: any) => ({ ...v, name: cleanName(v.name), status: v.status || 'Active' })),
+              recycleBin,
+              spoDeletedVesselIds,
+              incomingSiteFilter || null,
+            ),
             panelLoading: false,
           });
         } else {
@@ -4579,77 +6535,31 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     } else if (view === 'recycle') {
       void this._loadRecycleBin();
     } else if (view === 'archive') {
-      this.setState({ panelLoading: true, archiveList: [] });
-      try {
-        const data = await this._fetchJson(`${this._base()}/api/archive/nodes`);
-        this.setState({ archiveList: (data || []).map((v: any) => ({ ...v, name: cleanName(v.name || '') })), panelLoading: false });
-      } catch {
-        this.setState({ archiveList: [], panelLoading: false });
-      }
-    } else if (view === 'approvals') {
-      this.setState({ panelLoading: true });
-      try {
-        const userEmail = this.props.userEmail || '';
-        const base = this._base();
-
-        const myDataPromise = userEmail
-          ? this._fetchJson(`${base}/api/my-approvals`).catch(() => null)
-          : Promise.resolve(null);
-
-        const adminDataPromise = userEmail
-          ? this._fetchJson(`${base}/api/approvals?admin=${encodeURIComponent(userEmail)}`).catch(() => null)
-          : Promise.resolve(null);
-
-        const [myData, adminData] = await Promise.all([myDataPromise, adminDataPromise]);
-
-        const combined: any[] = [];
-        const seen = new Set<string>();
-        for (const a of [
-          ...(Array.isArray(adminData) ? adminData : []),
-          ...(Array.isArray(myData) ? myData : []),
-        ]) {
-          const key = String(a.id || a._id || '');
-          if (!seen.has(key)) { seen.add(key); combined.push(a); }
-        }
-
-        const mapDate = (v: any): string => {
-          const raw = v?.created_at || v?.uploaded_at || v?.requestedOn || v?.requested_on;
-          if (!raw) return '—';
-          try { return new Date(raw).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return raw; }
-        };
-
-        const mapped: ApprovalItem[] = combined
-          // Strip out any 'cancelled' or 'completed' entries (activity logs) that slip through
-          .filter((a: any) => !['cancelled', 'completed'].includes((a.status || '').toLowerCase()))
-          .map((a: any) => ({
-          id: String(a.id || a._id || Date.now()),
-          documentName: a.document_name || a.filename || a.file_name || a.fileName || a.target_description || a.message || a.document_name || (a.action_type ? a.action_type.replace(/_/g, ' ') : 'Unknown'),
-          vessel: a.vessel_name || a.vesselName || a.vessel || '—',
-          requestedBy: a.uploaded_by_email || a.uploaded_by_name || a.requested_by || a.requestedBy || a.uploader_email || a.uploader || a.user_email || '—',
-          requestedOn: mapDate(a),
-          status: a.status === 'approved' ? 'Approved' : a.status === 'rejected' ? 'Rejected' : 'Pending',
-          actionType: a.action_type || 'upload',
-        }));
-        // Merge: keep any locally-added pending items not yet in the backend response
-        const backendIds = new Set(mapped.map(m => m.id));
-        const localOnly = this.state.approvalsList.filter(a => !backendIds.has(a.id));
-        this.setState({ approvalsList: [...mapped, ...localOnly], panelLoading: false });
-      } catch {
-        this.setState({ panelLoading: false });
-      }
+      await this._loadArchiveList();
     } else if (view === 'users') {
       this.setState({ panelLoading: true });
       try {
         const data = await this._fetchJson(`${this._base()}/api/users`);
+        // Backend's real role model (db/models.py UserProfile.role +
+        // services/authorization.py) is Admin/User only — the old mock
+        // roster's 4-tier scheme (Administrator/Manager/Reviewer/User) no
+        // longer matches what /api/users returns ("Admin"/"User"), so
+        // 'admin' used to fall through to the 'User' default and every
+        // admin displayed as a plain user.
         const asRole = (value: any): UserItem['role'] => {
-          const role = String(value || '').toLowerCase();
-          if (role === 'administrator') return 'Administrator';
-          if (role === 'manager') return 'Manager';
-          if (role === 'reviewer') return 'Reviewer';
-          return 'User';
+          return String(value || '').toLowerCase() === 'admin' ? 'Admin' : 'User';
         };
         const asStatus = (value: any): UserItem['status'] => {
           return String(value || '').toLowerCase() === 'active' ? 'Active' : 'Inactive';
+        };
+        const asPermissions = (value: any): UserItem['permissions'] => {
+          if (!Array.isArray(value)) return [];
+          return value.map((p: any) => ({
+            site_key: String(p?.site_key || ''),
+            can_view: Boolean(p?.can_view),
+            can_upload: Boolean(p?.can_upload),
+            can_tag_on_upload: Boolean(p?.can_tag_on_upload),
+          })).filter(p => p.site_key);
         };
         const users: UserItem[] = Array.isArray(data)
           ? data.map((row: any, idx: number) => {
@@ -4662,6 +6572,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                 role: asRole(row?.role),
                 status: asStatus(row?.status),
                 lastLogin: String(row?.lastLogin || 'Never'),
+                permissions: asPermissions(row?.permissions),
               };
             })
           : [];
@@ -4680,10 +6591,45 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     }
   };
 
+  /** Admin-only: purges every AI Bento Email log/attachment row via
+   * DELETE /api/email-logs (server-gated by settings.admin_email_set —
+   * a non-admin gets a 403 and the message below surfaces it). Clears
+   * the grid to empty on success without touching the schema/columns. */
+  public _clearAllBentoLogs = async (): Promise<void> => {
+    if (this.state.bentoClearAllBusy) return;
+    this.setState({ bentoClearAllBusy: true, bentoClearAllErr: null });
+    try {
+      await this._fetchJson(`${this._base()}/api/email-logs`, {
+        method: 'DELETE',
+        headers: this._headers(),
+      });
+      this.setState({ bentoLogs: [], bentoClearAllBusy: false, bentoClearAllErr: null });
+    } catch (e: any) {
+      this.setState({
+        bentoClearAllBusy: false,
+        bentoClearAllErr: e?.message || 'Failed to clear AI Bento Email logs.',
+      });
+    }
+  };
+
+  public _refreshCurrentModule = async (): Promise<void> => {
+    const currentView = this.state.view;
+    this.setState(prev => ({ reloadKey: prev.reloadKey + 1 }));
+    if (currentView === 'dashboard') {
+      await this._loadDashboardStats(true);
+      return;
+    }
+    if (currentView === 'list' || currentView === 'vessels') {
+      await this._loadData(true);
+      return;
+    }
+    await this._goToView(currentView);
+  };
+
   // ── CRUD Handlers ─────────────────────────────────────────────────────────
 
-   public _openCreate = (): void => {
-    this.setState({ modal: 'create', selectedVessel: null, form: { ...BLANK_FORM }, modalMsg: null, modalError: null, formFieldErrors: {} });
+   public _openCreate = (prefillName?: string): void => {
+    this.setState({ modal: 'create', selectedVessel: null, form: { ...BLANK_FORM, name: prefillName || '' }, modalMsg: null, modalError: null, formFieldErrors: {} });
   };
 
   public _openEditVessel = (v: VesselRecord): void => {
@@ -4726,9 +6672,318 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     this.setState({ vesselActionPicker: action, modalError: null, deleteAutoCloseSeconds: null });
   };
 
+  // Stable per-card key for a not-yet-confirmed "Found in SharePoint" vessel
+  // (it has no DB id yet), used to key discoveredVesselDrafts / confirmingVesselKey.
+  public _discoveredVesselKey = (v: VesselRecord): string => {
+    return `${v.provisioned_site_key || ''}::${v.vessel_folder_path || v.name}`;
+  };
+
+  public _updateDiscoveredVesselDraft = (
+    v: VesselRecord,
+    field: 'imo' | 'hull_number',
+    value: string,
+  ): void => {
+    const key = this._discoveredVesselKey(v);
+    this.setState(prev => {
+      const existing = prev.discoveredVesselDrafts[key] || { imo: v.imo || '', hull_number: v.hull_number || '' };
+      return {
+        discoveredVesselDrafts: {
+          ...prev.discoveredVesselDrafts,
+          [key]: { ...existing, [field]: value },
+        },
+      };
+    });
+  };
+
+  // Local (not-yet-saved) typing state for a regular DB vessel card's
+  // IMO / Hull No. / Shipyard / Type field — offered only while that field
+  // is empty (see renderVesselsPage). Committed to the database by
+  // _saveVesselField, unlike discoveredVesselDrafts which waits for an
+  // explicit "Confirm" click.
+  public _updateVesselFieldDraft = (
+    v: VesselRecord,
+    field: 'imo' | 'hull_number' | 'shipyard' | 'vessel_type',
+    value: string,
+  ): void => {
+    this.setState(prev => ({
+      vesselFieldDrafts: {
+        ...prev.vesselFieldDrafts,
+        [v.id]: { ...(prev.vesselFieldDrafts[v.id] || {}), [field]: value },
+      },
+    }));
+  };
+
+  // Human label for the one-time-save confirmation dialog.
+  private static readonly VESSEL_FIELD_LABELS: Record<string, string> = {
+    imo: 'IMO',
+    hull_number: 'Hull Number',
+    shipyard: 'Shipyard',
+    vessel_type: 'Type',
+  };
+
+  // Called on blur/select instead of saving straight away. A vessel-card
+  // field is only ever offered once (while it's still empty — see
+  // renderVesselsPage/renderEditableField), and it is locked immediately
+  // after a successful save, so this is the one and only chance to write
+  // it. Opens the confirmation dialog rather than PATCHing directly;
+  // no-ops on an unchanged/empty value or while a save for the same field
+  // is already in flight.
+  public _requestSaveVesselField = (
+    v: VesselRecord,
+    field: 'imo' | 'hull_number' | 'shipyard' | 'vessel_type',
+    rawValue: string,
+  ): void => {
+    const value = (rawValue || '').trim();
+    if (!value || value === ((v as any)[field] || '')) return;
+    const fieldKey = `${v.id}:${field}`;
+    if (this.state.vesselFieldSaving[fieldKey]) return;
+    this.setState({
+      vesselFieldConfirm: {
+        vesselId: v.id,
+        vesselName: v.name,
+        field,
+        fieldLabel: VesselEmail.VESSEL_FIELD_LABELS[field] || field,
+        value,
+      },
+    });
+  };
+
+  // Confirm button on the vessel-field confirmation dialog: commits the
+  // pending edit (dialog state) via _saveVesselField, then closes it.
+  public _confirmSaveVesselField = (): void => {
+    const pending = this.state.vesselFieldConfirm;
+    if (!pending) return;
+    const v = this.state.vessels.find(row => row.id === pending.vesselId);
+    this.setState({ vesselFieldConfirm: null });
+    if (!v) return;
+    this._saveVesselField(v, pending.field, pending.value).catch(() => undefined);
+  };
+
+  // Cancel/close on the vessel-field confirmation dialog: discards the
+  // pending edit and reverts the field back to its (still empty) draft.
+  public _cancelSaveVesselField = (): void => {
+    const pending = this.state.vesselFieldConfirm;
+    if (!pending) return;
+    this.setState(prev => {
+      const drafts = { ...prev.vesselFieldDrafts };
+      if (drafts[pending.vesselId]) {
+        const d = { ...drafts[pending.vesselId] };
+        delete (d as any)[pending.field];
+        drafts[pending.vesselId] = d;
+      }
+      return { vesselFieldConfirm: null, vesselFieldDrafts: drafts };
+    });
+  };
+
+  // PATCH /api/vessels/{id} — saves a single IMO/Hull Number/Shipyard/Type
+  // value the user filled in on a vessel card, after they've confirmed it
+  // via the dialog (_requestSaveVesselField / _confirmSaveVesselField).
+  // Only ever called for a field that was empty (the card only renders the
+  // input in that case), and only touches the one field named —
+  // _execute_update_vessel only renames SharePoint folders when `name`
+  // itself changes, so this is a plain, side-effect-free DB write. No-ops
+  // on an unchanged/empty value, and ignores a second save already in
+  // flight for the same field. Once this succeeds, the field's saved value
+  // makes renderEditableField render it as locked, read-only text instead
+  // of an input — a vessel-card field can be saved exactly once.
+  public _saveVesselField = async (
+    v: VesselRecord,
+    field: 'imo' | 'hull_number' | 'shipyard' | 'vessel_type',
+    rawValue: string,
+  ): Promise<void> => {
+    const value = (rawValue || '').trim();
+    if (!value || value === ((v as any)[field] || '')) return;
+    const fieldKey = `${v.id}:${field}`;
+    if (this.state.vesselFieldSaving[fieldKey]) return;
+    this.setState(prev => ({
+      vesselFieldSaving: { ...prev.vesselFieldSaving, [fieldKey]: true },
+      vesselFieldError: { ...prev.vesselFieldError, [fieldKey]: '' },
+    }));
+    try {
+      const res = await fetch(`${this._base()}/api/vessels/${v.id}`, {
+        method: 'PATCH',
+        headers: this._headers(),
+        body: JSON.stringify({ [field]: value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.detail || data?.message || `Save failed (${res.status})`);
+      this.setState(prev => {
+        const vessels = prev.vessels.map(row => row.id === v.id
+          ? {
+              ...row,
+              imo: data.imo ?? row.imo,
+              shipyard: data.shipyard ?? row.shipyard,
+              hull_number: data.hull_number ?? row.hull_number,
+              vessel_type: data.vessel_type ?? row.vessel_type,
+            }
+          : row);
+        const drafts = { ...prev.vesselFieldDrafts };
+        if (drafts[v.id]) {
+          const d = { ...drafts[v.id] };
+          delete (d as any)[field];
+          drafts[v.id] = d;
+        }
+        return {
+          vessels,
+          vesselFieldDrafts: drafts,
+          vesselFieldSaving: { ...prev.vesselFieldSaving, [fieldKey]: false },
+        };
+      });
+    } catch (e: any) {
+      this.setState(prev => ({
+        vesselFieldSaving: { ...prev.vesselFieldSaving, [fieldKey]: false },
+        vesselFieldError: { ...prev.vesselFieldError, [fieldKey]: e?.message || 'Save failed.' },
+      }));
+    }
+  };
+
+  // POST /api/vessels/sync-from-sharepoint — scans connected SharePoint sites'
+  // root folders, reconciles against the DB + Term Store, and flags conflicts.
+  // Runs across all sites unless a specific site is currently selected in the filter.
+  // Called from _loadData on every vessel-list fetch, but throttled to at
+  // most once per AUTO_SYNC_MIN_INTERVAL_MS per site_key so it doesn't
+  // re-scan SharePoint on every reload. Silent — errors are swallowed here
+  // (there's no manual "Sync" button anymore to surface them to), and the
+  // vessel list is only reloaded if the sync actually found something new.
+  // Drop vessels the user has just deleted from a freshly fetched vessel
+  // list, and tag each remaining row with the site it was fetched for.
+  //
+  // Deleted rows are hidden by id (spoDeletedVesselIds) always, and by name
+  // only when that name was deleted in the last RECENT_DELETE_GRACE_MS —
+  // enough to cover a backend DELETE still in flight / the backend's short
+  // scan cache right after an in-app delete. The backend never returns
+  // deleted DB vessels or folders that no longer exist, so matching names
+  // against the WHOLE Recycle Bin was wrong: old deleted records share names
+  // with vessels that are active today, which is what hid 23 of NKSDocMan's
+  // 25 vessels and 23 of NissenKaiunExternal's 28.
+  //
+  // fetchedForSite: the site_key this list was requested with
+  // (/api/vessels?site_key=...). The backend already scoped the list using
+  // the configured site registry (including sites that share a document
+  // library under two keys), so VesselsPage trusts this tag instead of
+  // re-matching each row against the partial site list the client knows.
+  private static readonly RECENT_DELETE_GRACE_MS = 10 * 60 * 1000; // 10 minutes
+  public _filterDeletedVessels = (
+    list: any[],
+    recycleBin: DeletedNode[],
+    spoDeletedVesselIds: Set<string>,
+    fetchedForSite?: string | null,
+  ): any[] => {
+    const now = Date.now();
+    const deletedRecently = new Set<string>();
+    for (const r of recycleBin || []) {
+      if (r.kind !== 'vessel' && r.item_type !== 'vessel') continue;
+      const key = (r.name || '').trim().toLowerCase();
+      if (!key) continue;
+      // Backend timestamps are naive UTC ("2026-09-18T17:00:08.75"); without
+      // a zone suffix JS would parse them as local time, skewing the window.
+      const rawDeletedAt = r.deleted_at ? String(r.deleted_at) : '';
+      const deletedAt = rawDeletedAt
+        ? Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/.test(rawDeletedAt) ? rawDeletedAt : `${rawDeletedAt}Z`)
+        : NaN;
+      if (!isNaN(deletedAt) && now - deletedAt < VesselEmail.RECENT_DELETE_GRACE_MS) {
+        deletedRecently.add(key);
+      }
+    }
+    // 'all' when the list was fetched without a site filter.
+    const siteTag = fetchedForSite && fetchedForSite !== 'all' ? fetchedForSite : 'all';
+    return list
+      .filter((v: any) => !spoDeletedVesselIds.has(v.id) && !deletedRecently.has((v.name || '').trim().toLowerCase()))
+      .map((v: any) => ({ ...v, _fetched_for_site: siteTag }));
+  };
+
+  public _maybeAutoSyncVesselsFromSharePoint = (siteKey: string | null): void => {
+    const throttleKey = siteKey || 'all';
+    const now = Date.now();
+    const last = this._lastAutoSyncAt[throttleKey] || 0;
+    if (now - last < VesselEmail.AUTO_SYNC_MIN_INTERVAL_MS) return;
+    this._lastAutoSyncAt[throttleKey] = now;
+    void (async () => {
+      try {
+        const res = await fetch(`${this._base()}/api/vessels/sync-from-sharepoint`, {
+          method: 'POST',
+          headers: this._headers(),
+          body: JSON.stringify(siteKey ? { site_key: siteKey } : {}),
+        });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => ({}));
+        const found = (data?.new ?? 0) > 0 || (data?.updated ?? 0) > 0;
+        if (found && !this._isUnmounted) {
+          await this._loadData(true);
+        }
+      } catch {
+        /* best-effort background sync */
+      }
+    })();
+  };
+
+  // POST /api/vessels/confirm-discovered — turns a "Found in SharePoint" card
+  // into a real DB-backed vessel record at its existing SharePoint folder path
+  // (no new folder is created; see confirm_discovered_vessel in real_backend.py).
+  public _confirmDiscoveredVessel = async (v: VesselRecord): Promise<void> => {
+    const key = this._discoveredVesselKey(v);
+    if (this.state.confirmingVesselKey) return;
+    const draft = this.state.discoveredVesselDrafts[key] || { imo: v.imo || '', hull_number: v.hull_number || '' };
+    const setCardError = (message: string | null): void => {
+      this.setState(prev => {
+        const errors = { ...prev.discoveredVesselConfirmError };
+        if (message) errors[key] = message; else delete errors[key];
+        return { discoveredVesselConfirmError: errors };
+      });
+    };
+    if (!v.provisioned_site_key || !v.vessel_folder_path) {
+      setCardError('Missing SharePoint site/path for this vessel — refresh the vessel list and try again.');
+      return;
+    }
+    // The backend silently fills in a random placeholder IMO when this is
+    // left blank (see _validate_vessel_input in real_backend.py), so a
+    // click here used to "succeed" with a made-up IMO the user never typed
+    // — which then never matched what they'd entered, making it look like
+    // their input was never saved. Require a real 7-digit IMO up front
+    // instead, and surface the problem right under the button rather than
+    // only in the page-level banner above the vessel grid, which is easy
+    // to miss once the user has scrolled down to this card.
+    const imoValue = (draft.imo || '').trim();
+    if (!/^\d{7}$/.test(imoValue)) {
+      setCardError('Enter a valid 7-digit IMO number before confirming.');
+      return;
+    }
+    setCardError(null);
+    this.setState({ confirmingVesselKey: key, vesselSyncError: null });
+    try {
+      const res = await fetch(`${this._base()}/api/vessels/confirm-discovered`, {
+        method: 'POST',
+        headers: this._headers(),
+        body: JSON.stringify({
+          name: v.name,
+          imo: imoValue,
+          hull_number: draft.hull_number || null,
+          site_key: v.provisioned_site_key,
+          original_path: v.vessel_folder_path,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        this.setState({ confirmingVesselKey: null });
+        setCardError(data?.message || 'A vessel with this name already exists.');
+        return;
+      }
+      if (!res.ok) throw new Error(data?.detail || data?.error || data?.message || `Confirm failed (${res.status})`);
+      this.setState(prev => {
+        const drafts = { ...prev.discoveredVesselDrafts };
+        delete drafts[key];
+        return { confirmingVesselKey: null, discoveredVesselDrafts: drafts };
+      });
+      await this._goToView('vessels');
+    } catch (error: any) {
+      this.setState({ confirmingVesselKey: null });
+      setCardError(error?.message || 'Confirming this vessel failed.');
+    }
+  };
+
   public _closeModal = (): void => {
     this._clearDeleteAutoCloseTimer();
-    if (!this.state.modalBusy) this.setState({ modal: 'none', vesselActionPicker: null, modalMsg: null, modalError: null, deleteVesselProgress: {}, deleteAutoCloseSeconds: null });
+    if (!this.state.modalBusy) this.setState({ modal: 'none', vesselActionPicker: null, modalMsg: null, modalError: null, deleteVesselProgress: {}, deleteVesselReason: '', deleteAutoCloseSeconds: null });
   };
 
   public _submitCreate = async (): Promise<void> => {
@@ -4745,8 +7000,11 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     }
     if (!form.imo.trim()) { this.setState({ modalError: 'IMO number is required.' }); return; }
     if (!/^\d{7}$/.test(form.imo.trim())) { this.setState({ modalError: 'IMO number must be exactly 7 digits.' }); return; }
+    if (!form.site_key) { this.setState({ modalError: 'Select a SharePoint site.' }); return; }
+    if (form.parent_folder_path === undefined) { this.setState({ modalError: 'Choose a parent folder in SharePoint.' }); return; }
     this.setState({ modalBusy: true, modalError: null, modalMsg: null });
 
+    const defaultSiteKey = this.state.activeDocumentSite || form.site_key || this.state.documentSites[0]?.site_key;
     const newVesselRecord: VesselRecord = {
       id: `v_${Date.now()}`,
       name: form.name.trim(),
@@ -4756,8 +7014,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       vessel_type: form.vessel_type || undefined,
       status: 'Active',
       image_url: pickRandomVesselImage(form.vessel_type),
-      // Include target site IDs so link generation works immediately before backend refresh
-      provisioned_site_ids: form.target_site_ids && form.target_site_ids.length > 0 ? form.target_site_ids : undefined,
+      provisioned_site_ids: form.site_key ? [form.site_key] : defaultSiteKey ? [defaultSiteKey] : [],
+      provisioned_site_key: form.site_key || defaultSiteKey || undefined,
     };
 
         try {
@@ -4769,7 +7027,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           shipyard: form.shipyard.trim() || null,
           hull_number: form.hull_number.trim() || null,
           vessel_type: form.vessel_type || null,
-          provisioned_site_ids: form.target_site_ids && form.target_site_ids.length > 0 ? form.target_site_ids : undefined,
+          site_key: form.site_key,
+          parent_folder_path: form.parent_folder_path,
+          subfolders: form.subfolders || [],
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -4803,10 +7063,17 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         folderCreationError: null,
       }));
 
+      // The vessel folder was just created directly in this site's drive
+      // (POST /api/vessels awaits the SharePoint folder creation for a
+      // custom site/parent path before responding). Drop the cached live
+      // folder tree for that site so the Documents module shows the new
+      // folder immediately instead of a stale pre-creation snapshot.
+      this._invalidateDocumentLiveTree(form.site_key);
+
       // Transition modal to success screen immediately
       this.setState({
         modalBusy: false,
-        modalMsg: `🎉 Vessel "${form.name}" Created & Provisioned Successfully!`,
+        modalMsg: `🎉 Vessel "${form.name}" created successfully!`,
         modalError: null,
         formFieldErrors: {},
       });
@@ -4816,7 +7083,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       this.setState(prev => ({
         vessels: [newVesselRecord, ...prev.vessels.filter(v => v.name.toLowerCase() !== newVesselRecord.name.toLowerCase())],
         modalBusy: false,
-        modalMsg: `🎉 Vessel "${form.name}" Created & Provisioned Successfully!`,
+        modalMsg: `🎉 Vessel "${form.name}" created successfully!`,
         modalError: null,
         folderCreationResults: null,
         folderCreationError: null,
@@ -4884,7 +7151,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   };
 
   public _submitDelete = async (): Promise<void> => {
-    const { deleteVesselIds, vessels } = this.state;
+    const { deleteVesselIds, vessels, deleteVesselReason } = this.state;
     const selected = vessels.filter(v => deleteVesselIds.has(v.id));
     if (selected.length === 0) {
       this.setState({ modalError: 'Select at least one vessel to delete.' });
@@ -4913,7 +7180,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 45000);
       try {
-        const res = await fetch(`${this._base()}/api/vessels/${vessel.id}?vessel_name=${encodeURIComponent(vessel.name)}`, {
+        const reasonParam = deleteVesselReason.trim() ? `&reason=${encodeURIComponent(deleteVesselReason.trim())}` : '';
+        const res = await fetch(`${this._base()}/api/vessels/${vessel.id}?vessel_name=${encodeURIComponent(vessel.name)}${reasonParam}`, {
           method: 'DELETE', headers: this._headers(), signal: controller.signal,
         });
         const raw = await res.text();
@@ -4976,22 +7244,35 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     // Build immediate recycle bin entries for deleted vessels so they appear
     // in the Recycle Bin page right away without waiting for the backend poll.
     const now = new Date().toISOString();
+    const activeSiteObj = (this.state.documentSites || []).find(s => s.site_key === this.state.activeDocumentSite);
     const immediateRecycleBinEntries: DeletedNode[] = selected
       .filter(v => deletedIds.includes(v.id))
-      .map(v => ({
-        id: v.id,
-        name: v.name,
-        kind: 'vessel' as const,
-        item_type: 'vessel',
-        main_folder: 'Vessels',
-        original_path: `Vessels/Specific Vessels/${v.name}`,
-        vessel_name: '',
-        category: '',
-        sub_category: '',
-        deleted_at: now,
-        vessel_imo: v.imo,
-        vessel_type: v.vessel_type,
-      }));
+      .map(v => {
+        const siteNames = (v.provisioned_site_ids || []).map(sk => {
+          const matched = (this.state.documentSites || []).find(s => s.site_key === sk);
+          return matched?.sp_site_name || sk;
+        }).filter(Boolean);
+        const resolvedSiteName = siteNames.length > 0
+          ? siteNames.join(', ')
+          : (activeSiteObj?.sp_site_name || this.props.siteUrl || 'SharePoint');
+
+        return {
+          id: v.id,
+          name: v.name,
+          kind: 'vessel' as const,
+          item_type: 'vessel',
+          main_folder: 'Vessels',
+          original_path: `Vessels/Specific Vessels/${v.name}`,
+          vessel_name: '',
+          category: '',
+          sub_category: '',
+          deleted_at: now,
+          vessel_imo: v.imo,
+          vessel_type: v.vessel_type,
+          site_name: resolvedSiteName,
+          site_key: (v.provisioned_site_ids || [])[0] || this.state.activeDocumentSite || undefined,
+        };
+      });
 
     this.setState(prev => ({
       modalBusy: false,
@@ -5066,6 +7347,43 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
   // SharePoint Folder Provisioning ─────────────────────────────────────────
 
+  /**
+   * Refreshes just-provisioned folder rows for ONE vessel via the fast,
+   * per-vessel flat-tree DB query (backend/app/main.py list_vessels_flat_tree,
+   * the `vessel_name` branch — a targeted query, not the full-fleet scan).
+   *
+   * Replaces the previous post-provision `rows: []` + `_loadData(true)`,
+   * which reset the whole Documents list and forced a full reload across
+   * EVERY vessel. When the DB-backed flat-tree briefly returns nothing for
+   * a brand-new vessel (provisioning hasn't finished indexing yet), `_loadData`
+   * falls through its Graph fallback straight to `_flattenAll`, which walks
+   * every vessel's every main-folder and every category with its own
+   * `/api/folders/{id}/children` call — i.e. exactly the "creating one vessel
+   * triggers a burst/looping of children calls" symptom. Fetching only the
+   * new vessel's rows here avoids that fan-out entirely; the full multi-vessel
+   * fallback walk is never invoked as a side effect of provisioning.
+   */
+  public async _refreshSingleVesselRows(vesselName: string): Promise<void> {
+    const base = this._base();
+    if (!base) return;
+    try {
+      const url = `${base}/api/vessels/flat-tree?vessel_name=${encodeURIComponent(vesselName)}&force_refresh=true`;
+      const data = await this._fetchJson(url);
+      const freshRows = Array.isArray(data) ? this._normalize(data) : [];
+      const targetName = cleanName(vesselName).trim().toLowerCase();
+      this.setState(prev => {
+        const keptRows = prev.rows.filter(r => cleanName(r.vesselName).trim().toLowerCase() !== targetName);
+        const merged = this._mergeWithUploadCache([...keptRows, ...freshRows]);
+        return { rows: merged.rows, uploadedFilesByFolder: merged.uploadedFilesByFolder };
+      });
+      void this._loadDashboardStats();
+    } catch {
+      // Targeted refresh failed (e.g. transient network error) — fall back
+      // to the previous full-reload behavior rather than leaving stale rows.
+      await this._loadData(true);
+    }
+  }
+
   public async _provisionVesselFolders(
     vesselName: string,
     vesselId?: string,
@@ -5104,9 +7422,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           folderCreationError: null,
           folderCreationResults: null,
           provisionedVesselIds: new Set(Array.from(this.state.provisionedVesselIds).concat(vesselId)),
-          rows: [],
         });
-        await this._loadData(true);
+        await this._refreshSingleVesselRows(vesselName);
         return { success: true, results: [] };
       } catch (error: any) {
         const message = error?.message || 'Folder provisioning failed.';
@@ -5133,9 +7450,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           folderCreationError: null,
           folderCreationResults: null,
           provisionedVesselIds: new Set(Array.from(this.state.provisionedVesselIds).concat(vesselId)),
-          rows: [],
         });
-        await this._loadData(true);
+        await this._refreshSingleVesselRows(vesselName);
         return { success: true, results: [] };
       } catch (error: any) {
         const message = error?.message || 'Folder provisioning failed.';
@@ -5144,108 +7460,33 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       }
     }
 
-    const { graphClient, siteId, driveId } = this.props;
-    console.log(`[VesselDMS] _provisionVesselFolders vessel="${vesselName}" graphClient=${!!graphClient} siteId="${siteId}" driveId="${driveId}"`);
-    if (!graphClient || !siteId || !driveId) {
-      console.error('[VesselDMS] _provisionVesselFolders aborted — missing graphClient/siteId/driveId. Props:', { graphClient: !!graphClient, siteId, driveId });
-      this.setState({ folderCreationError: 'SharePoint context not ready. Please refresh the page and try again.' });
-      return { success: false, results: [] };
-    }
-
-        this.setState({ folderCreationBusy: true, folderCreationResults: [], folderCreationError: null, folderProvisioningVesselId: vesselId || null });
-    try {
-      const OVERALL_TIMEOUT_MS = 4 * 60 * 1000;
-      const onProgress = (progressResult: FolderResult): void => {
-        this.setState(prev => ({ folderCreationResults: [...(prev.folderCreationResults || []), progressResult] }));
-      };
-      const result = await Promise.race([
-        createVesselFolders(graphClient, siteId, driveId, vesselName, onProgress, this._rootFoldersEnsured),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(
-            'Folder provisioning is taking much longer than expected and may have stalled. ' +
-            'Please close this dialog and try again, or check SharePoint directly to see what was created so far.',
-          )), OVERALL_TIMEOUT_MS),
-        ),
-      ]);
-      this._rootFoldersEnsured = true;
-
-      // ── Auto-retry any failed folders ───────────────────────────────────
-      // If some folders failed on the first pass (throttling / transient Graph
-      // errors), automatically retry them up to 3 more times (3 s between
-      // rounds) before giving up.  Each round updates folderCreationResults so
-      // the live ticker in the dialog reflects current status.
-      let finalResults = result.results;
-      const initialFailCount = finalResults.filter(r => r.status === 'failed').length;
-      if (initialFailCount > 0) {
-        console.log(`[VesselDMS] ${initialFailCount} folder(s) failed — starting auto-retry loop`);
-        finalResults = await retryUntilComplete(
-          graphClient,
-          siteId,
-          driveId,
-          finalResults,
-          /* maxAttempts */ 3,
-          /* delayMs     */ 3000,
-          (_attempt, _total, updated) => {
-            // Push updated results to state so the ticker reflects each round
-            this.setState({ folderCreationResults: updated });
-          },
-        );
-      }
-      // ────────────────────────────────────────────────────────────────────
-
-      const allSuccess = finalResults.every(r => r.status !== 'failed');
-      const provisionedSet = new Set(this.state.provisionedVesselIds);
-      if (vesselId) {
-        provisionedSet.add(vesselId);
-        // Persist provisioned status in database
-        void fetch(`${this._base()}/api/vessels/${vesselId}/provision`, {
-          method: 'POST',
-          headers: this._headers(),
-        }).catch(() => undefined);
-      }
-      this.setState(prev => {
-        const nextState: any = {
-          folderCreationBusy: false,
-          folderProvisioningVesselId: null,
-          folderCreationResults: finalResults,
-          folderCreationError: allSuccess ? null : 'Some folders could not be created after retrying. Check the creation log.',
-          provisionedVesselIds: provisionedSet,
-        };
-        // If the provision dialog is currently open for this vessel, transition it to DONE state
-        if (prev.spoProvisionDialog) {
-          const failedCount = finalResults.filter(r => r.status === 'failed').length;
-          nextState.spoProvisionDialog = {
-            ...prev.spoProvisionDialog,
-            provisioning: false,
-            done: true,
-            error: allSuccess ? null : `${failedCount} folder${failedCount === 1 ? '' : 's'} could not be created — see details below.`,
-          };
-        }
-        return nextState;
-      });
-      // Trigger an immediate delta sync so the new folders appear in the tree
-      void this._syncScheduler?.triggerNow().catch(() => undefined);
-      return { success: allSuccess, results: finalResults };
-    } catch (err: any) {
-      const msg = err?.message ?? 'Folder provisioning failed.';
-      this.setState(prev => {
-        const nextState: any = {
-          folderCreationBusy: false,
-          folderProvisioningVesselId: null,
-          folderCreationError: msg,
-        };
-        if (prev.spoProvisionDialog) {
-          nextState.spoProvisionDialog = {
-            ...prev.spoProvisionDialog,
-            provisioning: false,
-            done: true,
-            error: msg,
-          };
-        }
-        return nextState;
-      });
-      return { success: false, results: [] };
-    }
+    // Every real caller provides a numeric vesselId (a genuine DB-backed
+    // vessel always has one), so the branches above always handle normal
+    // provisioning via the backend's flat-root /provision-sites endpoint.
+    // Reaching this point means we were called without a valid vesselId
+    // and/or without a resolvable SharePoint site — there is nothing left
+    // to fall back to. This used to silently drop into a client-side Graph
+    // builder (graphFolderService.ts's createVesselFolders(), now retired)
+    // that recreated the old multi-department nested folder tree — wrong
+    // for the current flat-root design, and it could write unwanted
+    // folders straight into the customer's SharePoint. Surface a clear,
+    // actionable error instead.
+    const missing = !vesselId
+      ? 'no vessel ID was provided'
+      : !/^\d+$/.test(vesselId)
+        ? `vessel ID "${vesselId}" is not a valid database ID`
+        : 'no SharePoint site is selected';
+    console.error(`[VesselDMS] _provisionVesselFolders: cannot provision — ${missing}. vesselName="${vesselName}" vesselId="${vesselId}" selectedSite="${selectedSite}"`);
+    const message = `Could not provision folders for "${vesselName}": ${missing}. Please ensure the vessel was created successfully and a SharePoint site is selected, then try again.`;
+    this.setState(prev => ({
+      folderCreationBusy: false,
+      folderProvisioningVesselId: null,
+      folderCreationError: message,
+      spoProvisionDialog: prev.spoProvisionDialog
+        ? { ...prev.spoProvisionDialog, provisioning: false, done: true, error: message }
+        : prev.spoProvisionDialog,
+    }));
+    return { success: false, results: [] };
   }
 
   // ── Load Files for Vessel ─────────────────────────────────────────────────
@@ -5264,6 +7505,146 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         (livePath === expectedPath || livePath.endsWith(`/${expectedPath}`));
     });
     return row?.groupKey || '';
+  }
+
+  // Debounced entry point for the Documents search box (see
+  // DocumentsPage.tsx's textFilter onChange). The box itself only filters
+  // `rows` already in state, which are loaded lazily per-vessel — so a
+  // term matching a vessel the user hasn't opened yet would otherwise find
+  // nothing. This asks the backend /api/search (which now also matches
+  // Folder.path, i.e. group/category/vessel segments, not just the leaf
+  // name — see real_backend.py/store.py search()) which vessels contain a
+  // match, and lazily loads those vessels' rows so the existing local
+  // filter picks them up on the next render.
+  public _scheduleGlobalSearch = (term: string): void => {
+    if (this._globalSearchTimer) {
+      clearTimeout(this._globalSearchTimer);
+      this._globalSearchTimer = null;
+    }
+    const trimmed = (term || '').trim();
+    // Same floor as the field's own tokenized matching (a 1-char query is
+    // rarely useful and would fan out a request per keystroke); the local
+    // filter still runs immediately regardless of this floor.
+    if (trimmed.length < 2) return;
+    this._globalSearchTimer = setTimeout(() => {
+      void this._triggerGlobalSearch(trimmed).catch(() => undefined);
+    }, 400);
+  };
+
+  public async _triggerGlobalSearch(term: string): Promise<void> {
+    const activeSiteKey = (this.state.activeDocumentSite || '').trim().toLowerCase();
+    const key = `${activeSiteKey}|${this.state.docScopeType}|${term.toLowerCase()}`;
+    // Once a term has been resolved to a set of vessels this session, it
+    // never needs to hit the backend again — the matching vessels' rows
+    // stay loaded (_filesLoadedForVessels), and the box's own local filter
+    // handles re-filtering as the user keeps typing/editing the term.
+    if (this._globalSearchSeenTerms.has(key)) return;
+
+    const { vesselFilter, vessels } = this.state;
+    const selectedSiteKey = (this.state.activeDocumentSite || '').trim();
+    // Whether the just-switched-to site's dashboard scan hadn't finished
+    // even once yet (see get_dashboard_documents on the backend) — an empty
+    // `items` response in that state is a cold-cache placeholder, not a
+    // real "no matches" answer. Marking `key` as seen below is skipped
+    // while this is true, and the search is retried shortly instead, so a
+    // term searched right after switching sites (before its background scan
+    // completes) doesn't get stuck showing no results for the rest of the
+    // session even once the real data lands — this is what made "search
+    // right after switching the SharePoint site dropdown" look broken
+    // while the same search worked fine once the site had been browsed a
+    // little (e.g. via the Sites tile list) and its scan had time to finish.
+    let sitePending = false;
+    if (selectedSiteKey && selectedSiteKey !== 'all') {
+      const params = new URLSearchParams({
+        site_key: selectedSiteKey,
+        q: term,
+        page: '1',
+        page_size: '200',
+      });
+      const siteSearch = await this._fetchJson(
+        `${this._base()}/api/dashboard/documents?${params.toString()}`
+      ).catch(() => null);
+      sitePending = siteSearch?.scan_pending === true;
+      const siteItems = Array.isArray(siteSearch?.items) ? siteSearch.items : [];
+      if (siteItems.length > 0) {
+        const site = this.state.documentSites.find(item => item.site_key === selectedSiteKey);
+        const siteName = site?.sp_site_name || site?.site_key || selectedSiteKey;
+        const libraryName = site?.default_library_name || 'Shared Documents';
+        const searchRows: FlatRow[] = siteItems.map((item: any, index: number) => {
+          const relativePath = String(item.subFolderPath || item.name || '').trim();
+          const path = `SharePoint Sites > ${siteName} > ${libraryName} > ${relativePath}`;
+          const pathParts = relativePath.split('>').map((part: string) => part.trim()).filter(Boolean);
+          return {
+            srNo: `site-search-${index}`,
+            vesselName: item.vessel || 'Not Listed',
+            group: pathParts[0] || libraryName,
+            category: pathParts[1] || '',
+            subCategory: pathParts[2] || '',
+            subFolderPath: path,
+            fileName: item.name || null,
+            fileId: item.id || null,
+            fileSize: item.fileSize,
+            fileUploadedAt: item.createdEpoch || item.modifiedEpoch,
+            canUpload: false,
+            groupKey: `live:${selectedSiteKey}:search`,
+            uploadFolderId: '',
+            monthDriven: false,
+            documentSection: pathParts[1] || '',
+            tags: {},
+            siteKey: selectedSiteKey,
+          } as FlatRow;
+        });
+        this.setState(previous => {
+          const existingIds = new Set(previous.rows.map(row => row.fileId).filter(Boolean));
+          const newRows = searchRows.filter(row => row.fileId && !existingIds.has(row.fileId));
+          return newRows.length > 0 ? { rows: [...previous.rows, ...newRows] } : null as any;
+        });
+        this._scheduleForceUpdate();
+      }
+    }
+
+    if (sitePending) {
+      // The real per-site scan is still running in the background —
+      // try this exact term again shortly instead of leaving it marked
+      // "seen" with a stale, placeholder-empty result for the rest of the
+      // session. Not added to _globalSearchSeenTerms, so this call is
+      // itself safe to repeat.
+      window.setTimeout(() => {
+        void this._triggerGlobalSearch(term).catch(() => undefined);
+      }, 3000);
+    } else {
+      this._globalSearchSeenTerms.add(key);
+    }
+
+    let url = `${this._base()}/api/search?q=${encodeURIComponent(term)}`;
+    if (vesselFilter && vesselFilter !== 'all') {
+      const scopedVessel = vessels.find(v => v.name === vesselFilter);
+      if (scopedVessel?.id) url += `&vessel_id=${encodeURIComponent(scopedVessel.id)}`;
+    }
+
+    const data = await this._fetchJson(url).catch(() => null);
+    if (!Array.isArray(data) || data.length === 0) return;
+
+    // Folder.path is "<group>/<vessel>/<category>/…", and _trail() (backend)
+    // returns one {id,name} per path segment — so trail[1] is the vessel
+    // folder name whenever a result sits under one (trail.length <= 1 means
+    // the match is a top-level group/main folder itself, not vessel-scoped).
+    const vesselNames = new Set<string>();
+    data.forEach((item: any) => {
+      const trail = Array.isArray(item.trail) ? item.trail : [];
+      const vesselSeg = trail.length > 1 ? trail[1]?.name : null;
+      if (vesselSeg) vesselNames.add(vesselSeg);
+    });
+
+    let loadedAny = false;
+    vesselNames.forEach(name => {
+      if (!this._filesLoadedForVessels.has(name)) {
+        this._filesLoadedForVessels.add(name);
+        loadedAny = true;
+        void this._loadFilesForVessel(name).catch(() => undefined);
+      }
+    });
+    if (loadedAny) this._scheduleForceUpdate();
   }
 
   public async _loadFilesForVessel(vesselName: string): Promise<void> {
@@ -5381,17 +7762,50 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   public _refreshFolderFilesInFlight: Set<string> = new Set(); // prevents concurrent duplicate fetches
   private _graphChildrenInFlight: Map<string, Promise<any>> = new Map();
   private _graphChildrenCache: Map<string, { value: any; expiresAt: number }> = new Map();
+  // "This path doesn't exist" results, separate from _graphChildrenCache
+  // (which only ever holds successes — a thrown request never reaches its
+  // cache.set). _refreshFolderFiles's path-lookup fallback (below) guesses
+  // several candidate folder layouts per vessel and fires a real Graph
+  // request for each one, in order, stopping at the first that resolves.
+  // Every call that DOESN'T hit the layout on the first guess re-fires every
+  // losing guess again from scratch — repeatedly 404ing the same known-bad
+  // URLs against Graph every time a folder is refreshed, which is both the
+  // noisy 404 console spam and real load against Graph/SharePoint's rate
+  // limits. Remembering a 404 here for a few minutes lets repeat calls skip
+  // straight past guesses already known to be wrong.
+  private _graphChildrenNotFound: Map<string, number> = new Map();
+  private static readonly GRAPH_NOT_FOUND_TTL_MS = 3 * 60 * 1000;
 
   /** Share one Graph children request across overlapping refreshes. */
   private async _getGraphChildrenResponse(url: string): Promise<any> {
     const cached = this._graphChildrenCache.get(url);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
+    const notFoundAt = this._graphChildrenNotFound.get(url);
+    if (notFoundAt !== undefined) {
+      if (Date.now() - notFoundAt < VesselEmail.GRAPH_NOT_FOUND_TTL_MS) {
+        const err: any = new Error('itemNotFound (cached)');
+        err.statusCode = 404;
+        err.code = 'itemNotFound';
+        throw err;
+      }
+      this._graphChildrenNotFound.delete(url);
+    }
     const active = this._graphChildrenInFlight.get(url);
     if (active) return active;
     const request = (async () => {
-      const result: any = await this.props.graphClient!.api(url).get();
-      this._graphChildrenCache.set(url, { value: result, expiresAt: Date.now() + 5000 });
-      return result;
+      try {
+        const result: any = await this.props.graphClient!.api(url).get();
+        this._graphChildrenCache.set(url, { value: result, expiresAt: Date.now() + 5000 });
+        return result;
+      } catch (err: any) {
+        // Only remember genuine "doesn't exist" results — a transient
+        // network/5xx error should still be retried next time, not
+        // permanently (well, for GRAPH_NOT_FOUND_TTL_MS) treated as 404.
+        if (err?.statusCode === 404 || err?.code === 'itemNotFound') {
+          this._graphChildrenNotFound.set(url, Date.now());
+        }
+        throw err;
+      }
     })();
     this._graphChildrenInFlight.set(url, request);
     try {
@@ -5873,7 +8287,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
   /** Open the file-delete confirmation dialog for one or more files in a folder. */
   public _openFileDeleteDialog(
-    files: Array<{ id: string; name: string; folderId: string; folderPath: string }>
+    files: Array<{ id: string; name: string; folderId: string; folderPath: string; vesselName?: string }>
   ): void {
     const validFiles = files.filter(f => f.id && f.name);
     if (validFiles.length === 0) {
@@ -5947,7 +8361,15 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             }
           } catch { /* non-critical */ }
         }
-                const deletedNode: import('./types/ui').DeletedNode = {
+                const activeSiteObj = (this.state.documentSites || []).find(s => s.site_key === this.state.activeDocumentSite);
+        const fileVessel = this.state.vessels.find(v => (v.name || '').toLowerCase() === (file.vesselName || '').toLowerCase());
+        const siteNames = (fileVessel?.provisioned_site_ids || []).map(sk => {
+          const matched = (this.state.documentSites || []).find(s => s.site_key === sk);
+          return matched?.sp_site_name || sk;
+        }).filter(Boolean);
+        const resolvedSiteName = activeSiteObj?.sp_site_name || (siteNames.length > 0 ? siteNames.join(', ') : (this.props.siteUrl || 'SharePoint'));
+
+        const deletedNode: import('./types/ui').DeletedNode = {
           id: file.id,
           name: file.name,
           kind: 'file',
@@ -5957,7 +8379,18 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           ext: file.name.split('.').pop(),
           in_spo_recycle_bin: Boolean(usedGraph),
           recycle_bin_item_id: recycleBinItemId,
+          site_name: resolvedSiteName,
+          site_key: activeSiteObj?.site_key || this.state.activeDocumentSite || undefined,
         };
+        this._logDeletion({
+          item_type: 'file',
+          drive_item_id: file.id,
+          name: file.name,
+          original_path: file.folderPath,
+          site_name: resolvedSiteName,
+          site_key: activeSiteObj?.site_key || this.state.activeDocumentSite || null,
+          reason: dialog.reason || null,
+        });
         if (usedGraph) this._appDeletedItemIds.add(file.id);
         this._handleSpoDocumentDeletion({
           id: file.id,
@@ -5966,6 +8399,13 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           isFolder: false,
           serverRelativePath: file.folderPath,
           children: [],
+        }, {
+          // Deleted from inside the app by the current session — attribution
+          // is already known, no need to wait on the backend lookup.
+          deletedByEmail: this.props.userEmail || null,
+          deletedByName: this.props.userDisplayName || null,
+          siteName: resolvedSiteName,
+          originalPath: file.folderPath,
         });
         this.setState(prev => ({ recycleBin: [...prev.recycleBin, deletedNode] }));
       } catch (err: any) {
@@ -6043,14 +8483,20 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: isMobile ? 10 : 20,
       }}>
         <div style={{
-          background: '#fff', borderRadius: 16, padding: isMobile ? '16px 14px' : '28px 32px', width: isMobile ? '95vw' : 'auto', minWidth: isMobile ? 0 : 420, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto',
+          // Fallbacks (2nd arg to each var()) keep this popup fully opaque
+          // and legible even if it ever renders before/outside the
+          // [data-vessel-theme] scope that defines --vdms-* (see render()'s
+          // body-attribute sync above for the actual root-cause fix) —
+          // previously an unresolved var() left `background`/`color`
+          // unset, so the dialog blended into the dark backdrop overlay.
+          background: 'var(--vdms-surface, #ffffff)', borderRadius: 16, padding: isMobile ? '16px 14px' : '28px 32px', width: isMobile ? '95vw' : 'auto', minWidth: isMobile ? 0 : 420, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto',
           boxShadow: '0 8px 40px rgba(0,0,0,0.18)', fontFamily: "'Segoe UI', sans-serif",
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
             <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>🗑</div>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 16, color: '#0f172a' }}>Delete Files</div>
-              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Check files to move to Recycle Bin</div>
+              <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--vdms-text, #0f172a)' }}>Delete Files</div>
+              <div style={{ fontSize: 12, color: 'var(--vdms-text-muted, #64748b)', marginTop: 2 }}>Check files to move to Recycle Bin</div>
             </div>
           </div>
 
@@ -6058,8 +8504,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             {files.map(f => (
               <label key={f.id} style={{
                 display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
-                borderRadius: 8, border: `1.5px solid ${selected.has(f.id) ? '#ef4444' : '#e2e8f0'}`,
-                background: selected.has(f.id) ? '#fff5f5' : '#f8fafc', cursor: 'pointer',
+                borderRadius: 8, border: `1.5px solid ${selected.has(f.id) ? '#ef4444' : 'var(--vdms-border, #e2e8f0)'}`,
+                background: selected.has(f.id) ? '#fff5f5' : 'var(--vdms-surface-alt, #f8fafc)', cursor: 'pointer',
               }}>
                 <input
                   type="checkbox"
@@ -6068,7 +8514,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                   style={{ width: 16, height: 16, accentColor: '#ef4444', cursor: 'pointer' }}
                 />
                 <span style={{ fontSize: 16 }}>📄</span>
-                <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', flex: 1, wordBreak: 'break-all' }}>{f.name}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--vdms-text, #0f172a)', flex: 1, wordBreak: 'break-all' }}>{f.name}</span>
               </label>
             ))}
           </div>
@@ -6076,17 +8522,17 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           {/* Additional files from the same folder that can be added */}
           {additionalFiles.length > 0 && (
             <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: 6 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vdms-text-muted, #64748b)', textTransform: 'uppercase', marginBottom: 6 }}>
                 + Add more files from this folder
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 140, overflowY: 'auto' }}>
                 {additionalFiles.map(f => (
-                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 8, border: '1px dashed #cbd5e1', background: '#f8fafc' }}>
+                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 8, border: '1px dashed var(--vdms-border, #e2e8f0)', background: 'var(--vdms-surface-alt, #f8fafc)' }}>
                     <span style={{ fontSize: 14 }}>📄</span>
-                    <span style={{ fontSize: 12, color: '#334155', flex: 1, wordBreak: 'break-all' }}>{f.name}</span>
+                    <span style={{ fontSize: 12, color: 'var(--vdms-text, #0f172a)', flex: 1, wordBreak: 'break-all' }}>{f.name}</span>
                     <button
                       onClick={() => addFileToDialog(f)}
-                      style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#334155', whiteSpace: 'nowrap' }}
+                      style={{ border: '1px solid var(--vdms-border, #e2e8f0)', background: 'var(--vdms-surface, #ffffff)', borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: 'var(--vdms-text, #0f172a)', whiteSpace: 'nowrap' }}
                     >
                       + Add
                     </button>
@@ -6095,6 +8541,24 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               </div>
             </div>
           )}
+
+          <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--vdms-text-muted, #64748b)', textTransform: 'uppercase', marginBottom: 6 }}>
+            Reason for deletion (optional)
+          </label>
+          <textarea
+            value={fileDeleteDialog.reason || ''}
+            onChange={e => this.setState(prev => (
+              prev.fileDeleteDialog ? { fileDeleteDialog: { ...prev.fileDeleteDialog, reason: e.target.value } } : null as any
+            ))}
+            disabled={busy}
+            placeholder="Optional — why is this being deleted?"
+            rows={2}
+            style={{
+              width: '100%', boxSizing: 'border-box', borderRadius: 8, border: '1px solid var(--vdms-border, #e2e8f0)',
+              padding: '8px 10px', fontSize: 13, fontFamily: 'inherit', resize: 'vertical', marginBottom: 12,
+              background: 'var(--vdms-surface-alt, #f8fafc)', color: 'var(--vdms-text, #0f172a)',
+            }}
+          />
 
           {error && (
             <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#dc2626', marginBottom: 12 }}>
@@ -6110,7 +8574,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             <button
               onClick={() => this.setState({ fileDeleteDialog: null })}
               disabled={busy}
-              style={{ minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 20px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', color: '#334155' }}
+              style={{ minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 20px', borderRadius: 8, border: '1px solid var(--vdms-border, #e2e8f0)', background: 'var(--vdms-surface, #ffffff)', fontSize: 13, fontWeight: 600, cursor: 'pointer', color: 'var(--vdms-text, #0f172a)' }}
             >
               Cancel
             </button>
@@ -6123,6 +8587,208 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               }}
             >
               {busy ? '⏳ Deleting…' : `🗑 Delete ${selected.size} file${selected.size !== 1 ? 's' : ''}`}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Export vessels report (Phase 4): full vessel + folder summary as
+  // .xlsx, independent of any Documents/List View filters — see
+  // GET /api/reports/vessels-excel.
+  public _exportVesselsExcel = async (): Promise<void> => {
+    if (this.state.vesselsExcelExportBusy) return;
+    this.setState({ vesselsExcelExportBusy: true });
+    try {
+      const res = await fetch(`${this._base()}/api/reports/vessels-excel`, {
+        method: 'GET',
+        headers: this._headers(),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.detail || data?.message || `Export failed (HTTP ${res.status})`);
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition') || '';
+      const match = /filename="?([^";]+)"?/.exec(disposition);
+      const filename = match?.[1] || `vessel-dms-report-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert(e?.message || 'Could not export the vessels report. Check your connection and try again.');
+    } finally {
+      this.setState({ vesselsExcelExportBusy: false });
+    }
+  };
+
+  // ── Add Folder (Phase 3): create a named subfolder under any folder that
+  // already belongs to a vessel (flat root or any depth under it) or is
+  // month-driven. Backed by POST /api/folders/{folder_id}/subfolder —
+  // see RealBackend.create_subfolder / _execute_create_subfolder. Creates
+  // exactly the one folder the user names; no template is applied.
+  public _openAddFolderDialog = (options: {
+    folderId: string;
+    folderLabel: string;
+    vesselName: string;
+  }): void => {
+    const { folderId, folderLabel, vesselName } = options;
+    // create_subfolder needs a real SharePoint drive-item id, not a
+    // synthetic/breadcrumb key (those contain '/' or aren't resolvable yet).
+    if (!folderId || folderId.includes('/')) return;
+    this.setState({
+      addFolderDialog: { folderId, folderLabel, vesselName, name: '', busy: false, error: null, asVessel: false },
+    });
+  };
+
+  public _submitAddFolder = async (): Promise<void> => {
+    const dialog = this.state.addFolderDialog;
+    if (!dialog) return;
+    const name = dialog.name.trim();
+    if (!name) {
+      this.setState({ addFolderDialog: { ...dialog, error: 'Enter a folder name.' } });
+      return;
+    }
+    if (dialog.asVessel) {
+      // Vessel creation has its own validated flow (IMO, site/parent-folder
+      // picker, etc.) — reopen it instead of re-implementing it here, just
+      // pre-filling the name the user already typed.
+      this.setState({ addFolderDialog: null });
+      this._openCreate(name);
+      return;
+    }
+    this.setState({ addFolderDialog: { ...dialog, busy: true, error: null } });
+    try {
+      const res = await fetch(`${this._base()}/api/folders/${encodeURIComponent(dialog.folderId)}/subfolder`, {
+        method: 'POST',
+        headers: this._headers(),
+        body: JSON.stringify({ name, user_email: this.props.userEmail || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok && res.status !== 202) {
+        const msg: string = data?.detail || data?.message || `Error ${res.status}`;
+        this.setState(prev => ({
+          addFolderDialog: prev.addFolderDialog ? { ...prev.addFolderDialog, busy: false, error: msg } : null,
+        }));
+        return;
+      }
+      this.setState({ addFolderDialog: null });
+      void this._loadData(true);
+    } catch (e: any) {
+      this.setState(prev => ({
+        addFolderDialog: prev.addFolderDialog
+          ? { ...prev.addFolderDialog, busy: false, error: e?.message || 'Could not create the folder. Check your connection and try again.' }
+          : null,
+      }));
+    }
+  };
+
+  public _renderAddFolderDialog(): React.ReactElement | null {
+    const { addFolderDialog } = this.state;
+    if (!addFolderDialog) return null;
+    const { folderLabel, vesselName, name, busy, error } = addFolderDialog;
+    const isMobile = isMobileWidth(this.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
+
+    return (
+      <div style={{
+        position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', zIndex: 100001,
+        backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: isMobile ? 10 : 20,
+      }}>
+        <div style={{
+          background: clay.surface, borderRadius: clay.radiusCard, width: isMobile ? '95vw' : 440, maxWidth: '95vw', overflow: 'hidden',
+          boxShadow: '0 20px 50px rgba(15,45,45,0.28), ' + clay.shadowRaised, border: 'none',
+        }}>
+          <div style={{ padding: '20px 24px 16px', background: clay.accentSoft }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 46, height: 46, borderRadius: clay.radiusIcon, background: clay.iconBgGradient, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, boxShadow: clay.shadowIcon }}>
+                📁
+              </div>
+              <div>
+                <div style={{ fontSize: 17, fontWeight: 700, color: clay.text }}>Add Folder</div>
+                <div style={{ fontSize: 12, color: clay.accentDark, marginTop: 2, wordBreak: 'break-word' }}>
+                  Inside {vesselName ? <strong>{vesselName}</strong> : 'this folder'}{folderLabel ? ` — ${folderLabel}` : ''}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ padding: '20px 24px' }}>
+            {error && (
+              <div style={{ background: '#fde8e0', color: '#9a3f1f', padding: '10px 14px', borderRadius: 12, fontSize: 12, marginBottom: 14 }}>
+                ⚠️ {error}
+              </div>
+            )}
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: clay.text, marginBottom: 6 }}>
+              Folder name
+            </label>
+            <input
+              autoFocus
+              value={name}
+              disabled={busy}
+              onChange={e => this.setState(prev => ({
+                addFolderDialog: prev.addFolderDialog ? { ...prev.addFolderDialog, name: e.target.value, error: null } : null,
+              }))}
+              onKeyDown={e => { if (e.key === 'Enter' && !busy) void this._submitAddFolder(); }}
+              placeholder="e.g. Insurance Documents"
+              style={{
+                width: '100%', padding: '10px 14px', borderRadius: 14, border: 'none', fontSize: 14, outline: 'none',
+                boxSizing: 'border-box', color: clay.text, background: clay.bg,
+                boxShadow: 'inset 3px 3px 8px rgba(120,190,185,0.35), inset -3px -3px 6px rgba(255,255,255,0.7)',
+              }}
+            />
+            <div style={{ fontSize: 11, color: clay.textMuted, marginTop: 8 }}>
+              Only this one folder is created — no other folders are added automatically.
+            </div>
+
+            <label style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 12, marginTop: 14,
+              background: addFolderDialog.asVessel ? '#eff6ff' : clay.bg, cursor: busy ? 'default' : 'pointer',
+              boxShadow: clay.shadowRaised,
+            }}>
+              <input
+                type="checkbox"
+                checked={addFolderDialog.asVessel}
+                disabled={busy}
+                onChange={e => this.setState(prev => ({
+                  addFolderDialog: prev.addFolderDialog ? { ...prev.addFolderDialog, asVessel: e.target.checked } : null,
+                }))}
+                style={{ width: 15, height: 15, accentColor: '#2563eb', cursor: 'pointer' }}
+              />
+              <span style={{ fontSize: 12.5, color: clay.text }}>
+                🚢 This is a new vessel — open the Add Vessel form instead
+              </span>
+            </label>
+          </div>
+
+          <div style={{ padding: '14px 24px 20px', background: clay.bg, display: 'flex', justifyContent: 'flex-end', gap: 10, flexDirection: isMobile ? 'column' : 'row' }}>
+            <button
+              onClick={() => this.setState({ addFolderDialog: null })}
+              disabled={busy}
+              style={{
+                border: 'none', background: clay.surface, borderRadius: clay.radiusButton,
+                minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 18px', fontSize: 13, fontWeight: 600, color: clay.textMuted,
+                cursor: busy ? 'not-allowed' : 'pointer', boxShadow: clay.shadowRaised,
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => void this._submitAddFolder()}
+              disabled={busy || !name.trim()}
+              style={{
+                border: 'none', background: clay.accentGradient, color: '#fff', borderRadius: clay.radiusButton,
+                minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 20px', fontSize: 13, fontWeight: 700,
+                cursor: (busy || !name.trim()) ? 'not-allowed' : 'pointer', boxShadow: clay.shadowButton,
+                opacity: (busy || !name.trim()) ? 0.6 : 1,
+              }}
+            >
+              {busy ? 'Creating…' : addFolderDialog.asVessel ? 'Continue to Add Vessel' : '+ Create Folder'}
             </button>
           </div>
         </div>
@@ -6417,15 +9083,24 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
     // 2. Notify backend (pass driveItemId if available, or path/target.id)
     const backendFolderKey = spoItemId || canonicalSharePointPath || target.id;
+    const folderReasonParam = dialog.reason?.trim() ? `&reason=${encodeURIComponent(dialog.reason.trim())}` : '';
     try {
       if (backendFolderKey && !backendFolderKey.startsWith('sf_')) {
-        await fetch(`${this._base()}/api/folders/${encodeURIComponent(backendFolderKey)}?folder_name=${encodeURIComponent(target.name)}`, {
+        await fetch(`${this._base()}/api/folders/${encodeURIComponent(backendFolderKey)}?folder_name=${encodeURIComponent(target.name)}${folderReasonParam}`, {
           method: 'DELETE', headers: this._headers(),
         }).catch(() => undefined);
       }
     } catch { /* non-critical */ }
 
     // 3. Create Recycle Bin entry
+    const activeSiteObj = (this.state.documentSites || []).find(s => s.site_key === this.state.activeDocumentSite);
+    const folderVessel = this.state.vessels.find(v => (v.name || '').toLowerCase() === (vesselName || '').toLowerCase());
+    const siteNames = (folderVessel?.provisioned_site_ids || []).map(sk => {
+      const matched = (this.state.documentSites || []).find(s => s.site_key === sk);
+      return matched?.sp_site_name || sk;
+    }).filter(Boolean);
+    const resolvedSiteName = activeSiteObj?.sp_site_name || (siteNames.length > 0 ? siteNames.join(', ') : (this.props.siteUrl || 'SharePoint'));
+
     const deletedNode: import('./types/ui').DeletedNode = {
       id: spoItemId || target.id || `folder_${Date.now()}`,
       name: target.name,
@@ -6439,7 +9114,22 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       deleted_at: new Date().toISOString(),
       in_spo_recycle_bin: deletedSPO,
       recycle_bin_item_id: recycleBinItemId,
+      site_name: resolvedSiteName,
+      site_key: activeSiteObj?.site_key || this.state.activeDocumentSite || undefined,
     };
+    // Graph-direct delete above already moved this to SharePoint's own
+    // Recycle Bin when deletedSPO is true — the backend call in step 2 is
+    // a best-effort notify, so log deletion attribution here regardless of
+    // which path actually performed the delete.
+    this._logDeletion({
+      item_type: 'folder',
+      drive_item_id: spoItemId || target.id || null,
+      name: target.name,
+      original_path: canonicalSharePointPath,
+      site_name: resolvedSiteName,
+      site_key: activeSiteObj?.site_key || this.state.activeDocumentSite || null,
+      reason: dialog.reason || null,
+    });
 
     // 4. Update state: add to recycleBin, remove from spoFolderMap, rows, and uploadedFilesByFolder
     const targetNorm = target.name.toLowerCase();
@@ -6529,7 +9219,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: isMobile ? 10 : 20,
       }}>
         <div style={{
-          background: '#fff', borderRadius: 16, width: isMobile ? '95vw' : 480, maxWidth: '95vw', maxHeight: '90vh', overflow: 'hidden',
+          background: 'var(--vdms-surface)', borderRadius: 16, width: isMobile ? '95vw' : 480, maxWidth: '95vw', maxHeight: '90vh', overflow: 'hidden',
           boxShadow: '0 20px 60px rgba(15,23,42,0.3)', border: '1px solid #fee2e2',
         }}>
           {/* Header */}
@@ -6557,7 +9247,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               </div>
             )}
 
-            <div style={{ fontSize: 13, color: '#334155', fontWeight: 600, marginBottom: 8 }}>
+            <div style={{ fontSize: 13, color: 'var(--vdms-text)', fontWeight: 600, marginBottom: 8 }}>
               Select folder to delete:
             </div>
 
@@ -6572,8 +9262,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                     }))}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
-                      borderRadius: 10, border: `1.5px solid ${isChecked ? '#e11d48' : '#e2e8f0'}`,
-                      background: isChecked ? '#fff1f2' : '#f8fafc', cursor: 'pointer',
+                      borderRadius: 10, border: `1.5px solid ${isChecked ? '#e11d48' : 'var(--vdms-border)'}`,
+                      background: isChecked ? '#fff1f2' : 'var(--vdms-surface-alt)', cursor: 'pointer',
                       transition: 'all 0.15s',
                     }}
                   >
@@ -6586,10 +9276,10 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                     />
                     <span style={{ fontSize: 20 }}>📁</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a' }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--vdms-text)' }}>
                         {folder.name} {folder.isCurrent ? <span style={{ fontSize: 11, color: '#e11d48', fontWeight: 600 }}>(Current Folder)</span> : ''}
                       </div>
-                      <div style={{ fontSize: 11, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={folder.path}>
+                      <div style={{ fontSize: 11, color: 'var(--vdms-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={folder.path}>
                         {folder.path}
                       </div>
                     </div>
@@ -6598,19 +9288,37 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               })}
             </div>
 
-            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
-              ℹ️ Moving <strong style={{ color: '#0f172a' }}>{selectedFolder?.name}</strong> to the Recycle Bin will also delete its contained files in SharePoint Online. You can restore this folder anytime from the <strong style={{ color: '#0f172a' }}>Recycle Bin</strong> page.
+            <div style={{ background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-border)', borderRadius: 10, padding: 12, fontSize: 12, color: 'var(--vdms-text-muted)', lineHeight: 1.5, marginBottom: 16 }}>
+              ℹ️ Moving <strong style={{ color: 'var(--vdms-text)' }}>{selectedFolder?.name}</strong> to the Recycle Bin will also delete its contained files in SharePoint Online. You can restore this folder anytime from the <strong style={{ color: 'var(--vdms-text)' }}>Recycle Bin</strong> page.
             </div>
+
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--vdms-text-muted)', textTransform: 'uppercase', marginBottom: 6 }}>
+              Reason for deletion (optional)
+            </label>
+            <textarea
+              value={folderDeleteDialog.reason || ''}
+              onChange={e => this.setState(prev => (
+                prev.folderDeleteDialog ? { folderDeleteDialog: { ...prev.folderDeleteDialog, reason: e.target.value } } : null as any
+              ))}
+              disabled={busy}
+              placeholder="Optional — why is this being deleted?"
+              rows={2}
+              style={{
+                width: '100%', boxSizing: 'border-box', borderRadius: 8, border: '1px solid var(--vdms-border)',
+                padding: '8px 10px', fontSize: 13, fontFamily: 'inherit', resize: 'vertical',
+                background: 'var(--vdms-surface)', color: 'var(--vdms-text)',
+              }}
+            />
           </div>
 
           {/* Footer */}
-          <div style={{ padding: '14px 24px 20px', background: '#f8fafc', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'flex-end', gap: 10, flexDirection: isMobile ? 'column' : 'row' }}>
+          <div style={{ padding: '14px 24px 20px', background: 'var(--vdms-surface-alt)', borderTop: '1px solid var(--vdms-border)', display: 'flex', justifyContent: 'flex-end', gap: 10, flexDirection: isMobile ? 'column' : 'row' }}>
             <button
               onClick={() => this.setState({ folderDeleteDialog: null })}
               disabled={busy}
               style={{
-                border: '1px solid #cbd5e1', background: '#fff', borderRadius: 8,
-                minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 18px', fontSize: 13, fontWeight: 600, color: '#475569',
+                border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface)', borderRadius: 8,
+                minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 18px', fontSize: 13, fontWeight: 600, color: 'var(--vdms-text-secondary)',
                 cursor: busy ? 'not-allowed' : 'pointer',
               }}
             >
@@ -6775,6 +9483,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         });
         lastFolderId = result.folderId || lastFolderId;
         lastIsGraphUpload = result.isGraphUpload || lastIsGraphUpload;
+        lastWebUrl = result.webUrl || lastWebUrl;
         successfulUploadEntries.push({
           filename: file.name,
           drive_item_id: result.fileId || null,
@@ -6828,7 +9537,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     return (
       <div style={{
         position: 'fixed', bottom: isMobile ? 10 : 28, right: isMobile ? 10 : 28, zIndex: 100002,
-        background: '#fff', borderRadius: 16, boxShadow: '0 8px 40px rgba(0,0,0,0.18)',
+        background: 'var(--vdms-surface)', borderRadius: 16, boxShadow: '0 8px 40px rgba(0,0,0,0.18)',
         border: '1.5px solid #86efac', padding: isMobile ? '12px' : '20px 24px 18px', width: isMobile ? 'calc(100vw - 20px)' : 'auto', minWidth: isMobile ? 0 : 340, maxWidth: isMobile ? 'calc(100vw - 20px)' : 420,
         fontFamily: "'Segoe UI', sans-serif", animation: 'slideInRight 0.3s ease',
       }}>
@@ -6847,26 +9556,26 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               {p.isPending ? '⏳' : '✅'}
             </div>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a' }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)' }}>
                 {p.isPending ? 'Submitted for Approval' : 'Upload Successful!'}
               </div>
-              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+              <div style={{ fontSize: 11, color: 'var(--vdms-text-muted)', marginTop: 2 }}>
                 Auto-closes in {p.secondsLeft}s
               </div>
             </div>
           </div>
           <button
             onClick={() => { clearInterval(this._uploadSuccessTimer!); this.setState({ uploadSuccessPopup: null }); }}
-            style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#94a3b8', minHeight: 44, minWidth: 44, fontSize: 18, padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
+            style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--vdms-text-faint)', minHeight: 44, minWidth: 44, fontSize: 18, padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
             title="Close"
           >✕</button>
         </div>
         {/* File info */}
-        <div style={{ background: '#f8fafc', borderRadius: 8, padding: '8px 12px', marginBottom: 12 }}>
-          <div style={{ fontSize: 12, color: '#64748b', marginBottom: 3 }}>📄 File</div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', wordBreak: 'break-all' }}>{p.fileName}</div>
-          <div style={{ fontSize: 11, color: '#64748b', marginTop: 6 }}>📁 Path</div>
-          <div style={{ fontSize: 12, color: '#334155', marginTop: 2, wordBreak: 'break-all' }}>{p.destinationPath}</div>
+        <div style={{ background: 'var(--vdms-surface-alt)', borderRadius: 8, padding: '8px 12px', marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginBottom: 3 }}>📄 File</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--vdms-text)', wordBreak: 'break-all' }}>{p.fileName}</div>
+          <div style={{ fontSize: 11, color: 'var(--vdms-text-muted)', marginTop: 6 }}>📁 Path</div>
+          <div style={{ fontSize: 12, color: 'var(--vdms-text)', marginTop: 2, wordBreak: 'break-all' }}>{p.destinationPath}</div>
           {Array.isArray(p.unidentifiedFiles) && p.unidentifiedFiles.length > 0 && (
             <div style={{ marginTop: 10, background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '8px 10px' }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#9a3412' }}>⚠ Vessel name not identified files</div>
@@ -6893,8 +9602,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               this._fetchAlerts();
             }}
             style={{
-              flex: 1, background: '#0078d4', color: '#fff', border: 'none', borderRadius: 8,
+              flex: 1, background: clay.accentGradient, color: '#fff', border: 'none', borderRadius: 8,
               minHeight: 44, padding: '8px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              boxShadow: clay.shadowButton,
             }}
           >
             View Alerts
@@ -6906,9 +9616,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               rel="noopener noreferrer"
               style={{
                 flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                background: '#0078d4', color: '#fff', borderRadius: 8,
+                background: clay.accentGradient, color: '#fff', borderRadius: 8,
                 minHeight: 44, padding: '8px 12px', fontSize: 12, fontWeight: 600, textDecoration: 'none',
-                cursor: 'pointer',
+                cursor: 'pointer', boxShadow: clay.shadowButton,
               }}
             >
               🔗 Open in SharePoint
@@ -6917,7 +9627,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           <button
             onClick={() => { clearInterval(this._uploadSuccessTimer!); this.setState({ uploadSuccessPopup: null }); }}
             style={{
-              flex: 1, background: '#f1f5f9', color: '#334155', border: 'none', borderRadius: 8,
+              flex: 1, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text)', border: 'none', borderRadius: 8,
               minHeight: 44, padding: '8px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
             }}
           >
@@ -6925,7 +9635,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           </button>
         </div>
         {/* Countdown progress bar */}
-        <div style={{ marginTop: 12, height: 3, background: '#f1f5f9', borderRadius: 2, overflow: 'hidden' }}>
+        <div style={{ marginTop: 12, height: 3, background: 'var(--vdms-surface-alt)', borderRadius: 2, overflow: 'hidden' }}>
           <div style={{
             height: '100%', borderRadius: 2,
             background: p.isPending ? '#f59e0b' : '#16a34a',
@@ -8132,7 +10842,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         vesselSuggestionDialog: null,
         pendingVesselSuggestions: prev.pendingVesselSuggestions.filter(sug => this._normalizeVesselName(sug.vesselName || '') !== this._normalizeVesselName(newVessel.name || '')),
       }));
-      void this._provisionVesselFolders(newVessel.name, newVessel.id).catch(() => undefined);
+      // Vessel creation must remain record-only. Do not create the default
+      // Technical & Crewing / DMS folder template automatically after creation.
     } catch (e: any) {
       this.setState(prev => ({
         vesselSuggestionDialog: prev.vesselSuggestionDialog
@@ -8173,24 +10884,97 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     return renderVesselsPage(this);
   }
 
-  public _renderTemplatesPage(): React.ReactElement {
-    return renderTemplatesPage(this);
-  }
-
-  public _renderApprovalsPage(): React.ReactElement {
-    return renderApprovalsPage(this);
-  }
-
-  public _renderReportsPage(): React.ReactElement {
-    return renderReportsPage(this);
-  }
-
   public _renderUsersPage(): React.ReactElement {
     return renderUsersPage(this);
   }
 
+  /** Re-fetches the User Management list after a role/permission change so
+   * the table reflects the just-saved state instead of the stale row the
+   * edit started from. Mirrors the fetch in _goToView's 'users' branch. */
+  private async _reloadUsersList(): Promise<void> {
+    try {
+      const data = await this._fetchJson(`${this._base()}/api/users`);
+      const asRole = (value: any): UserItem['role'] => (String(value || '').toLowerCase() === 'admin' ? 'Admin' : 'User');
+      const asStatus = (value: any): UserItem['status'] => (String(value || '').toLowerCase() === 'active' ? 'Active' : 'Inactive');
+      const asPermissions = (value: any): UserItem['permissions'] => Array.isArray(value)
+        ? value.map((p: any) => ({
+          site_key: String(p?.site_key || ''),
+          can_view: Boolean(p?.can_view),
+          can_upload: Boolean(p?.can_upload),
+          can_tag_on_upload: Boolean(p?.can_tag_on_upload),
+        })).filter(p => p.site_key)
+        : [];
+      const users: UserItem[] = Array.isArray(data)
+        ? data.map((row: any, idx: number) => {
+          const email = String(row?.email || '').trim().toLowerCase();
+          const fallbackName = email ? email.split('@')[0] : `user-${idx + 1}`;
+          return {
+            id: String(row?.id || email || `user-${idx + 1}`),
+            name: String(row?.name || fallbackName),
+            email,
+            role: asRole(row?.role),
+            status: asStatus(row?.status),
+            lastLogin: String(row?.lastLogin || 'Never'),
+            permissions: asPermissions(row?.permissions),
+          };
+        })
+        : [];
+      this.setState({ usersList: users });
+    } catch {
+      // Leave the existing list in place — a failed refresh shouldn't wipe
+      // the table the admin is looking at.
+    }
+  }
+
+  /** Admin-only: PATCH /api/admin/users/{email}/role (backend/app/main.py).
+   * Requires the caller's own session to already be Admin — the endpoint
+   * enforces that server-side via require_admin_session and 403s otherwise. */
+  public async _updateUserRole(email: string, role: 'Admin' | 'User'): Promise<void> {
+    this.setState({ usersPermissionsBusy: true });
+    try {
+      await this._fetchJson(`${this._base()}/api/admin/users/${encodeURIComponent(email)}/role`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role }),
+      });
+      await this._reloadUsersList();
+    } catch (err: any) {
+      alert(err?.message === 'SESSION_EXPIRED' ? 'Your session expired — please sign in again.' : `Could not update role: ${err?.message || err}`);
+    } finally {
+      this.setState({ usersPermissionsBusy: false });
+    }
+  }
+
+  /** Admin-only: PUT /api/admin/users/{email}/permissions (backend/app/main.py).
+   * Replaces that user's entire site-permission set — the endpoint deletes
+   * all existing UserSitePermission rows for the user and re-inserts the
+   * given list, so `permissions` must be the full desired set, not a diff.
+   * The backend also re-enforces the can_upload⊆can_view and
+   * can_tag_on_upload⊆can_upload dependency server-side regardless of what
+   * is sent here. */
+  public async _updateUserSitePermissions(email: string, permissions: UserSitePermissionItem[]): Promise<void> {
+    this.setState({ usersPermissionsBusy: true });
+    try {
+      await this._fetchJson(`${this._base()}/api/admin/users/${encodeURIComponent(email)}/permissions`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permissions }),
+      });
+      await this._reloadUsersList();
+      this.setState({ usersExpandedEmail: null });
+    } catch (err: any) {
+      alert(err?.message === 'SESSION_EXPIRED' ? 'Your session expired — please sign in again.' : `Could not update permissions: ${err?.message || err}`);
+    } finally {
+      this.setState({ usersPermissionsBusy: false });
+    }
+  }
+
   public _renderSettingsPage(): React.ReactElement {
     return renderSettingsPage(this);
+  }
+
+  public _renderProfilePage(): React.ReactElement {
+    return renderProfilePage(this);
   }
 
   public _renderBentoEmailDashboardPage(): React.ReactElement {
@@ -8256,7 +11040,6 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     const vLower = vesselName.trim().toLowerCase();
 
     try {
-      const base = this._base();
       const names: string[] = [];
 
       // 1. Trigger on-demand loading of files for this vessel if not already loaded
@@ -8265,24 +11048,10 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         await this._mergeLiveSharePointFiles([vesselName]).catch(() => undefined);
       }
 
-      // 2. Fetch from /api/my-approvals?status=approved (or /api/approvals?status=approved)
-      const approvals = await this._fetchJson(`${base}/api/my-approvals?status=approved`).catch(() =>
-        this._fetchJson(`${base}/api/approvals?status=approved`).catch(() => [] as any[])
-      );
+      // Approvals module removed — uploads are filed to SharePoint immediately
+      // for every user, so files are already covered by step 1 (live merge)
+      // and step 3 (rows/uploadedFilesByFolder) below.
       const fileIdUpdates: Record<string, string> = {};
-      if (Array.isArray(approvals)) {
-        approvals.forEach((a: any) => {
-          const aVessel = (a.vessel_name || a.vesselName || '').trim().toLowerCase();
-          const fname = a.file_name || a.fileName || a.filename || a.name;
-          if (fname && (aVessel === vLower || !aVessel) && names.indexOf(fname) === -1) {
-            names.push(fname);
-          }
-          const realFileId = a.drive_item_id || a.driveItemId || a.file_id || a.fileId;
-          if (fname && realFileId) {
-            fileIdUpdates[`${vLower}||${fname}`] = realFileId;
-          }
-        });
-      }
 
       // 3. Collect from updated rows & uploadedFilesByFolder state after loading
       const { rows, uploadedFilesByFolder } = this.state;
@@ -8338,10 +11107,57 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   // ── Existing Views: Recycle Bin ───────────────────────────────────────────
 
   /**
+   * Helper to resolve the most accurate SharePoint site display name for any DeletedNode,
+   * checking explicit properties, site_key match against documentSites, vessel associations, or active site fallback.
+   */
+  public _resolveSiteNameForDeletedNode = (node: DeletedNode): string => {
+    if (node.site_name && node.site_name.trim()) return node.site_name.trim();
+
+    // 1. Try matching node.site_key
+    if (node.site_key) {
+      const matched = (this.state.documentSites || []).find(s =>
+        s.site_key === node.site_key || s.site_id === node.site_key || s.sp_site_name === node.site_key
+      );
+      if (matched?.sp_site_name || matched?.site_key) {
+        return matched.sp_site_name || matched.site_key;
+      }
+    }
+
+    // 2. If node is a vessel, check provisioned sites of matching vessel
+    const isVesselKind = node.kind === 'vessel' || node.item_type === 'vessel';
+    const targetVesselName = (isVesselKind ? node.name : node.vessel_name || '').trim().toLowerCase();
+    if (targetVesselName) {
+      const v = (this.state.vessels || []).find(ves => cleanName(ves.name).trim().toLowerCase() === cleanName(targetVesselName).trim().toLowerCase());
+      if (v && v.provisioned_site_ids && v.provisioned_site_ids.length > 0) {
+        const names = v.provisioned_site_ids.map(sk => {
+          const m = (this.state.documentSites || []).find(s => s.site_key === sk || s.site_id === sk);
+          return m?.sp_site_name || sk;
+        }).filter(Boolean);
+        if (names.length > 0) return names.join(', ');
+      }
+    }
+
+    // 3. Check if path indicates a specific site
+    const pathLower = (node.original_path || '').toLowerCase();
+    for (const site of (this.state.documentSites || [])) {
+      if (site.sp_site_name && pathLower.includes(site.sp_site_name.toLowerCase())) {
+        return site.sp_site_name;
+      }
+      if (site.site_key && pathLower.includes(site.site_key.toLowerCase())) {
+        return site.sp_site_name || site.site_key;
+      }
+    }
+
+    // 4. Default to current active site or siteTitle
+    const activeSiteObj = (this.state.documentSites || []).find(s => s.site_key === this.state.activeDocumentSite);
+    return activeSiteObj?.sp_site_name || this.props.siteUrl || 'SharePoint';
+  };
+
+  /**
    * Load all deleted items for the Recycle Bin page:
    * 1. Fetches backend deleted nodes database records.
-   * 2. Queries SharePoint Online Recycle Bin (web and site collection) to find deleted folders and files.
-   * 3. Merges and deduplicates with active in-memory session deletions.
+   * 2. Queries SharePoint Online Recycle Bin (web and site collection) across all configured sites.
+   * 3. Merges and deduplicates with active in-memory session deletions, populating site_name and site_key.
    */
   public _loadRecycleBin = async (): Promise<void> => {
     this.setState({ panelLoading: true });
@@ -8353,10 +11169,35 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       } catch {}
 
       const spoRecycledNodes: DeletedNode[] = [];
-      if (this.props.siteUrl) {
+
+      // Collect all configured SharePoint sites to query (primary site from props + documentSites)
+      const sitesToQuery: Array<{ url: string; siteKey?: string; siteName?: string }> = [];
+      const primarySiteUrl = this.props.siteUrl;
+      if (primarySiteUrl) {
+        const primarySiteObj = (this.state.documentSites || []).find(s =>
+          s.is_primary || (s.web_url && s.web_url.toLowerCase() === primarySiteUrl.toLowerCase())
+        );
+        sitesToQuery.push({
+          url: primarySiteUrl.replace(/\/+$/, ''),
+          siteKey: primarySiteObj?.site_key,
+          siteName: primarySiteObj?.sp_site_name || this.props.siteUrl || 'SharePoint',
+        });
+      }
+      for (const ds of (this.state.documentSites || [])) {
+        const wUrl = (ds.web_url || '').replace(/\/+$/, '');
+        if (wUrl && !sitesToQuery.some(s => s.url.toLowerCase() === wUrl.toLowerCase())) {
+          sitesToQuery.push({
+            url: wUrl,
+            siteKey: ds.site_key,
+            siteName: ds.sp_site_name || ds.site_key,
+          });
+        }
+      }
+
+      for (const targetSite of sitesToQuery) {
         const endpoints = [
-          `${this.props.siteUrl}/_api/web/RecycleBin?$select=Id,LeafName,Title,DirName,ItemType,DeletedDate,DeletedByName&$top=500`,
-          `${this.props.siteUrl}/_api/site/RecycleBin?$select=Id,LeafName,Title,DirName,ItemType,DeletedDate,DeletedByName&$top=500`,
+          `${targetSite.url}/_api/web/RecycleBin?$select=Id,LeafName,Title,DirName,ItemType,DeletedDate,DeletedByName&$top=500`,
+          `${targetSite.url}/_api/site/RecycleBin?$select=Id,LeafName,Title,DirName,ItemType,DeletedDate,DeletedByName&$top=500`,
         ];
         for (const ep of endpoints) {
           try {
@@ -8417,11 +11258,13 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                   deleted_at: it.DeletedDate || it.deletedDate || new Date().toISOString(),
                   in_spo_recycle_bin: true,
                   recycle_bin_item_id: String(id),
+                  site_name: targetSite.siteName,
+                  site_key: targetSite.siteKey,
                 });
               }
             }
           } catch (err) {
-            console.warn('[VesselDMS] Fetching SPO RecycleBin items warning:', err);
+            console.warn(`[VesselDMS] Fetching SPO RecycleBin items warning for ${targetSite.url}:`, err);
           }
         }
       }
@@ -8429,25 +11272,48 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       this.setState(prev => {
         const prevLocal = prev.recycleBin || [];
         const combined = [...backendItems];
+        const sameRecycleItem = (left: DeletedNode, right: DeletedNode): boolean => {
+          const sameSite = !left.site_key || !right.site_key || left.site_key === right.site_key;
+          return sameSite && (
+            left.id === right.id ||
+            (!!left.recycle_bin_item_id && left.recycle_bin_item_id === right.recycle_bin_item_id) ||
+            (left.name.toLowerCase() === right.name.toLowerCase() && left.original_path === right.original_path)
+          );
+        };
 
         // Add SPO recycled nodes not already present in combined
         for (const spoNode of spoRecycledNodes) {
-          const exists = combined.some(b =>
-            b.id === spoNode.id ||
-            b.recycle_bin_item_id === spoNode.id ||
-            (b.name.toLowerCase() === spoNode.name.toLowerCase() && b.original_path === spoNode.original_path)
-          );
-          if (!exists) combined.push(spoNode);
+          const exists = combined.some(b => sameRecycleItem(b, spoNode));
+          if (!exists) {
+            combined.push(spoNode);
+          } else {
+            const match = combined.find(b => sameRecycleItem(b, spoNode));
+            if (match && spoNode.site_name) {
+              match.site_name = spoNode.site_name;
+              match.site_key = spoNode.site_key || match.site_key;
+            }
+          }
         }
 
         // Add locally tracked items not in combined
         for (const locNode of prevLocal) {
-          const exists = combined.some(c =>
-            c.id === locNode.id ||
-            (c.recycle_bin_item_id && locNode.recycle_bin_item_id && c.recycle_bin_item_id === locNode.recycle_bin_item_id) ||
-            (c.name.toLowerCase() === locNode.name.toLowerCase() && c.original_path === locNode.original_path)
-          );
-          if (!exists) combined.push(locNode);
+          const exists = combined.some(c => sameRecycleItem(c, locNode));
+          if (!exists) {
+            combined.push(locNode);
+          } else {
+            const match = combined.find(c => sameRecycleItem(c, locNode));
+            if (match && locNode.site_name) {
+              match.site_name = locNode.site_name;
+              match.site_key = locNode.site_key || match.site_key;
+            }
+          }
+        }
+
+        // Backfill site_name for any nodes that still lack it
+        for (const node of combined) {
+          if (!node.site_name) {
+            node.site_name = this._resolveSiteNameForDeletedNode(node);
+          }
         }
 
         return { recycleBin: combined, panelLoading: false };
@@ -8467,11 +11333,23 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     const rawItemName = (item.name || '').replace(/\/+$/, '').trim().toLowerCase();
     const isVessel = item.kind === 'vessel' || item.item_type === 'vessel';
 
+    // Resolve target site URL and site ID
+    let targetSiteUrl = this.props.siteUrl;
+    let targetSiteId = this.props.siteId;
+    if (item.site_key || item.site_name) {
+      const matchedSite = (this.state.documentSites || []).find(s =>
+        (item.site_key && (s.site_key === item.site_key || s.site_id === item.site_key)) ||
+        (item.site_name && (s.sp_site_name?.toLowerCase() === item.site_name.toLowerCase() || s.site_key?.toLowerCase() === item.site_name.toLowerCase()))
+      );
+      if (matchedSite?.web_url) targetSiteUrl = matchedSite.web_url;
+      if (matchedSite?.site_id) targetSiteId = matchedSite.site_id;
+    }
+
     try {
       // 1. Get CSRF digest
       let digest = '';
       try {
-        const digestRes = await fetch(`${this.props.siteUrl}/_api/contextinfo`, {
+        const digestRes = await fetch(`${targetSiteUrl}/_api/contextinfo`, {
           method: 'POST',
           headers: { Accept: 'application/json;odata=nometadata' },
         });
@@ -8484,8 +11362,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       // 2. Query both web and site Recycle Bin collections without $filter (which is unsupported on SPRecycleBin)
       const allRecycledItems: any[] = [];
       const endpointsToQuery = [
-        `${this.props.siteUrl}/_api/web/RecycleBin?$select=Id,LeafName,Title,DirName,ItemType&$top=500`,
-        `${this.props.siteUrl}/_api/site/RecycleBin?$select=Id,LeafName,Title,DirName,ItemType&$top=500`,
+        `${targetSiteUrl}/_api/web/RecycleBin?$select=Id,LeafName,Title,DirName,ItemType&$top=500`,
+        `${targetSiteUrl}/_api/site/RecycleBin?$select=Id,LeafName,Title,DirName,ItemType&$top=500`,
       ];
 
       for (const endpoint of endpointsToQuery) {
@@ -8535,10 +11413,10 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         let restoredThis = false;
         // Try web and site restore endpoints with both guid'...' and string syntax
         const restoreCalls = [
-          `${this.props.siteUrl}/_api/web/RecycleBin(guid'${guid}')/restore()`,
-          `${this.props.siteUrl}/_api/site/RecycleBin(guid'${guid}')/restore()`,
-          `${this.props.siteUrl}/_api/web/RecycleBin('${guid}')/restore()`,
-          `${this.props.siteUrl}/_api/site/RecycleBin('${guid}')/restore()`,
+          `${targetSiteUrl}/_api/web/RecycleBin(guid'${guid}')/restore()`,
+          `${targetSiteUrl}/_api/site/RecycleBin(guid'${guid}')/restore()`,
+          `${targetSiteUrl}/_api/web/RecycleBin('${guid}')/restore()`,
+          `${targetSiteUrl}/_api/site/RecycleBin('${guid}')/restore()`,
         ];
 
         for (const restoreUrl of restoreCalls) {
@@ -8561,10 +11439,10 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         }
 
         // Try Graph API as fallback if available
-        if (!restoredThis && this.props.graphClient && this.props.siteId) {
+        if (!restoredThis && this.props.graphClient && targetSiteId) {
           try {
             await this.props.graphClient
-              .api(`/sites/${this.props.siteId}/recycleBin/items/${guid}/restore`)
+              .api(`/sites/${targetSiteId}/recycleBin/items/${guid}/restore`)
               .post({});
             restoredThis = true;
             console.log(`[VesselDMS] Successfully restored SPO item ${guid} via Graph API`);
@@ -8578,14 +11456,19 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         }
       }
 
-      // 5. If it's a vessel, also ensure the folder structure is intact via provisioning fallback
-      if (isVessel && this.props.graphClient && this.props.siteId && this.props.driveId) {
-        try {
-          void this._provisionVesselFolders(item.name).catch(() => undefined);
-        } catch {
-          // Ignore
-        }
-      }
+      // 5. (Removed) This used to call _provisionVesselFolders(item.name) as a
+      // "just in case" fallback to recreate the vessel's folder structure.
+      // With no vesselId/targetSiteIds available here, _provisionVesselFolders
+      // always fell through to the legacy client-side createVesselFolders()
+      // path (graphFolderService.ts), which builds the OLD multi-department
+      // nested tree (Technical & Crewing / Commercial & Chartering / Insurance
+      // + full perVesselTree) — not the single flat root folder this app now
+      // uses. Because createFolder() treats a 409 as "already exists" and
+      // just resolves it, this silently created the old department folders
+      // in real SharePoint on every recycle-bin restore. Step 4 above already
+      // restores whatever was actually deleted from the Recycle Bin, which is
+      // the correct/complete behavior — no additional provisioning fallback
+      // is needed or wanted.
 
       return {
         success: true,
@@ -8617,6 +11500,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         item_name: item.name,
         department: item.main_folder || '',
         vessel_name: item.vessel_name || '',
+        site_key: item.site_key || '',
+        site_name: item.site_name || '',
       });
       const res = await fetch(`${this._base()}/api/recycle-bin/restore/${encodeURIComponent(item.id)}?${query.toString()}`, {
         method: 'POST', headers: this._headers(),
@@ -8641,6 +11526,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             imo: item.imo && item.imo !== '—' ? item.imo : (item.vessel_imo && item.vessel_imo !== '—' ? item.vessel_imo : null),
             shipyard: item.shipyard || 'Restored',
             vessel_type: item.vessel_type || 'Bulk Carrier',
+            site_key: item.site_key || undefined,
+            site_name: item.site_name || undefined,
           }),
         });
         if (created?.id) restoredId = String(created.id);
@@ -8656,6 +11543,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         status: 'Active',
         image_url: pickRandomVesselImage(item.vessel_type || 'Bulk Carrier'),
         is_provisioned: true,
+        provisioned_site_ids: item.site_key ? [item.site_key] : [],
       };
 
       // Remove from spoDeletedVesselIds so it's no longer filtered out of vessel lists
@@ -8682,16 +11570,26 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     const isRealGraphId = item.id && !/^\d+$/.test(item.id) && !/^file_/.test(item.id) &&
       !/^vessel_/.test(item.id) && !/^anomaly_/.test(item.id) && !/^db_vessel_/.test(item.id);
 
+    // Resolve target site URL
+    let targetSiteUrl = this.props.siteUrl;
+    if (item.site_key || item.site_name) {
+      const matchedSite = (this.state.documentSites || []).find(s =>
+        (item.site_key && (s.site_key === item.site_key || s.site_id === item.site_key)) ||
+        (item.site_name && (s.sp_site_name?.toLowerCase() === item.site_name.toLowerCase() || s.site_key?.toLowerCase() === item.site_name.toLowerCase()))
+      );
+      if (matchedSite?.web_url) targetSiteUrl = matchedSite.web_url;
+    }
+
     try {
       if (graphClient && siteId && driveId && isRealGraphId) {
         try {
           // Graph /recycleBin is not supported in v1.0 - use SharePoint REST API instead.
           const findInRecycleBin = async (): Promise<string | null> => {
-            if (!this.props.siteUrl) return null;
+            if (!targetSiteUrl) return null;
             try {
               const nameLower = item.name.toLowerCase();
               const rbRes = await fetch(
-                `${this.props.siteUrl}/_api/site/RecycleBin?$filter=LeafName eq '${encodeURIComponent(item.name)}'&$select=Id,LeafName&$top=10`,
+                `${targetSiteUrl}/_api/site/RecycleBin?$filter=LeafName eq '${encodeURIComponent(item.name)}'&$select=Id,LeafName&$top=10`,
                 { headers: { Accept: 'application/json;odata=nometadata' } }
               );
               if (!rbRes.ok) return null;
@@ -8704,7 +11602,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           // Use SharePoint REST API to delete from recycle bin (Graph /recycleBin not supported in v1.0).
           // SPO REST mutating calls require X-RequestDigest for CSRF validation.
           const getSpoDigest = async (): Promise<string> => {
-            const r = await fetch(`${this.props.siteUrl}/_api/contextinfo`, {
+            const r = await fetch(`${targetSiteUrl}/_api/contextinfo`, {
               method: 'POST',
               headers: { Accept: 'application/json;odata=nometadata' },
             });
@@ -8712,10 +11610,10 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             return d?.FormDigestValue ?? d?.['odata.metadata'] ?? '';
           };
           const deleteFromRecycleBin = async (rbId: string): Promise<void> => {
-            if (!this.props.siteUrl) return;
+            if (!targetSiteUrl) return;
             const digest = await getSpoDigest();
             const res = await fetch(
-              `${this.props.siteUrl}/_api/site/RecycleBin('${rbId}')`,
+              `${targetSiteUrl}/_api/site/RecycleBin('${rbId}')`,
               { method: 'POST', headers: { Accept: 'application/json;odata=nometadata', 'X-HTTP-Method': 'DELETE', 'IF-MATCH': '*', 'X-RequestDigest': digest } }
             );
             if (!res.ok && res.status !== 204) throw new Error(`RecycleBin delete failed (${res.status})`);
@@ -8737,6 +11635,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                 item_name: item.name,
                 department: item.main_folder || '',
                 vessel_name: item.vessel_name || '',
+                site_key: item.site_key || '',
+                site_name: item.site_name || '',
               });
               const res = await fetch(`${this._base()}/api/recycle-bin/${encodeURIComponent(item.id)}?${query.toString()}`, {
                 method: 'DELETE', headers: this._headers(),
@@ -8761,6 +11661,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           item_name: item.name,
           department: item.main_folder || '',
           vessel_name: item.vessel_name || '',
+          site_key: item.site_key || '',
+          site_name: item.site_name || '',
         });
         const res = await fetch(`${this._base()}/api/recycle-bin/${encodeURIComponent(item.id)}?${query.toString()}`, {
           method: 'DELETE', headers: this._headers(),
@@ -8811,36 +11713,59 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     return renderRecycleBinPage(this);
   }
 
-  public _renderArchivePage(): React.ReactElement {
-    return renderArchivePage(this);
+  // Self-contained module — see components/migrationAssistant/README.md.
+  // Unlike the render* methods above (which take `host` and read/write the
+  // root component's own state), this module owns its own state entirely;
+  // the root component only supplies which backend to talk to and as whom.
+  public _renderMigrationAssistant(): React.ReactElement {
+    return (
+      <PageErrorBoundary pageName="Migration Assistant">
+        <MigrationAssistantModule
+          apiBaseUrl={this.props.migrationApiBaseUrl || ''}
+          actingEmail={this.props.userEmail}
+          isNight={this.state.themeMode === 'night'}
+        />
+      </PageErrorBoundary>
+    );
   }
 
   public _renderSpoVesselDeletedToast(): React.ReactElement | null {
     const { spoVesselDeletedToast } = this.state;
     if (!spoVesselDeletedToast) return null;
     const isMobile = isMobileWidth(this.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
+    const { vesselName, siteName, originalPath, deletedByName, deletedByEmail } = spoVesselDeletedToast;
+    const deletedBy = deletedByName || deletedByEmail || 'Unknown user (pending SharePoint confirmation)';
     return (
-      <div style={{
-        position: 'fixed', bottom: isMobile ? 10 : 28, left: '50%', transform: 'translateX(-50%)',
-        zIndex: 100003, background: '#1e293b', color: '#fff',
-        borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.28)',
-        padding: isMobile ? '12px' : '16px 24px', display: 'flex', alignItems: 'center', gap: 12,
-        flexDirection: isMobile ? 'column' : 'row', width: isMobile ? 'calc(100vw - 20px)' : 'auto', minWidth: isMobile ? 0 : 360, maxWidth: isMobile ? 'calc(100vw - 20px)' : 520, fontFamily: "'Segoe UI', sans-serif",
-        border: '1.5px solid #ef4444',
-      }}>
+      <div
+        onMouseEnter={this._pauseVesselToastAutoClose}
+        onMouseLeave={this._scheduleVesselToastAutoClose}
+        style={{
+          pointerEvents: 'auto',
+          background: '#1e293b', color: '#fff',
+          borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.28)',
+          padding: isMobile ? '12px' : '16px 24px', display: 'flex', alignItems: 'center', gap: 12,
+          flexDirection: isMobile ? 'column' : 'row', width: isMobile ? 'calc(100vw - 20px)' : 'auto', minWidth: isMobile ? 0 : 360, maxWidth: isMobile ? 'calc(100vw - 20px)' : 560, fontFamily: "'Segoe UI', sans-serif",
+          border: '1.5px solid #ef4444',
+        }}>
         <div style={{
           width: 36, height: 36, borderRadius: 10, background: '#fee2e2',
           display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0,
         }}>🗑</div>
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14, color: '#fca5a5' }}>Vessel deleted in SharePoint</div>
-          <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 3 }}>
-            <strong style={{ color: '#fff' }}>{spoVesselDeletedToast.vesselName}</strong> was removed from SharePoint Online and has been moved to the Recycle Bin.
+          <div style={{ fontSize: 12, color: 'var(--vdms-text-faint)', marginTop: 3 }}>
+            <strong style={{ color: '#fff' }}>{vesselName}</strong> was removed from SharePoint Online and has been moved to the Recycle Bin.
+          </div>
+          <div style={{ marginTop: 8, display: 'grid', gap: 3, fontSize: 11, color: 'var(--vdms-text-faint)' }}>
+            <div><strong style={{ color: '#fff' }}>Deleted by:</strong> {deletedBy}</div>
+            {siteName && <div><strong style={{ color: '#fff' }}>Site:</strong> {siteName}</div>}
+            {originalPath && <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><strong style={{ color: '#fff' }}>Path:</strong> {originalPath}</div>}
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: isMobile ? 'row' : 'column', gap: 6, flexShrink: 0, width: isMobile ? '100%' : 'auto' }}>
           <button
             onClick={() => {
+              this._pauseVesselToastAutoClose();
               this.setState({ spoVesselDeletedToast: null });
               void this._goToView('recycle');
             }}
@@ -8850,9 +11775,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             }}
           >View Recycle Bin</button>
           <button
-            onClick={() => this.setState({ spoVesselDeletedToast: null })}
+            onClick={() => { this._pauseVesselToastAutoClose(); this.setState({ spoVesselDeletedToast: null }); }}
             style={{
-              background: 'transparent', color: '#94a3b8', border: '1px solid #475569',
+              background: 'transparent', color: 'var(--vdms-text-faint)', border: '1px solid var(--vdms-text-secondary)',
               minHeight: 44, flex: isMobile ? 1 : undefined, borderRadius: 7, padding: '5px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer',
             }}
           >Dismiss</button>
@@ -8865,30 +11790,91 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     const { spoDocumentDeletedToast } = this.state;
     if (!spoDocumentDeletedToast) return null;
     const isMobile = isMobileWidth(this.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
-    const { itemNames, itemType } = spoDocumentDeletedToast;
+    const { items, itemType } = spoDocumentDeletedToast;
     const label = itemType === 'folder' ? 'Folder' : 'File';
-    const summary = itemNames.length === 1
-      ? itemNames[0]
-      : `${itemNames.length} ${itemType}s`;
+    const summary = items.length === 1
+      ? items[0].name
+      : `${items.length} ${itemType}s`;
+    // If every item in this batch shares the same actor/site, show it once
+    // as a summary line; otherwise fall back to a per-item breakdown so
+    // nothing gets misattributed to "the" deleter.
+    const uniqueBy = <T,>(pick: (i: typeof items[number]) => T | null | undefined): (T | null | undefined)[] =>
+      Array.from(new Set(items.map(pick)));
+    const deleters = uniqueBy(i => i.deletedByName || i.deletedByEmail || null);
+    const sites = uniqueBy(i => i.siteName || null);
+    const singleDeleter = deleters.length === 1 ? deleters[0] : null;
+    const singleSite = sites.length === 1 ? sites[0] : null;
+    return (
+      <div
+        onMouseEnter={this._pauseDocumentToastAutoClose}
+        onMouseLeave={this._scheduleDocumentToastAutoClose}
+        style={{
+          pointerEvents: 'auto',
+          background: '#1e293b', color: '#fff', borderRadius: 12,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.28)', padding: isMobile ? '12px' : '16px 24px',
+          display: 'flex', alignItems: 'flex-start', gap: 12, flexDirection: isMobile ? 'column' : 'row', width: isMobile ? 'calc(100vw - 20px)' : 'auto', minWidth: isMobile ? 0 : 360, maxWidth: isMobile ? 'calc(100vw - 20px)' : 560,
+          fontFamily: "'Segoe UI', sans-serif", border: '1.5px solid #ef4444',
+        }}>
+        <div style={{ width: 36, height: 36, borderRadius: 10, background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>🗑</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 14, color: '#fca5a5' }}>{items.length === 1 ? label : `${items.length} ${itemType}s`} moved to Recycle Bin</div>
+          <div style={{ fontSize: 12, color: 'var(--vdms-text-faint)', marginTop: 3 }}>
+            <strong style={{ color: '#fff' }}>{summary}</strong> {items.length === 1 ? 'was' : 'were'} deleted from SharePoint Online and moved to the Recycle Bin.
+          </div>
+
+          {items.length === 1 ? (
+            <div style={{ marginTop: 8, display: 'grid', gap: 3, fontSize: 11, color: 'var(--vdms-text-faint)' }}>
+              <div><strong style={{ color: '#fff' }}>Deleted by:</strong> {items[0].deletedByName || items[0].deletedByEmail || 'Unknown user (pending SharePoint confirmation)'}</div>
+              {items[0].siteName && <div><strong style={{ color: '#fff' }}>Site:</strong> {items[0].siteName}</div>}
+              {items[0].path && <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><strong style={{ color: '#fff' }}>Path:</strong> {items[0].path}</div>}
+            </div>
+          ) : (
+            <>
+              {(singleDeleter || singleSite) && (
+                <div style={{ marginTop: 8, display: 'grid', gap: 3, fontSize: 11, color: 'var(--vdms-text-faint)' }}>
+                  {singleDeleter && <div><strong style={{ color: '#fff' }}>Deleted by:</strong> {singleDeleter}</div>}
+                  {singleSite && <div><strong style={{ color: '#fff' }}>Site:</strong> {singleSite}</div>}
+                </div>
+              )}
+              <div style={{ marginTop: 8, maxHeight: 140, overflowY: 'auto', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8 }}>
+                {items.map(entry => (
+                  <div key={entry.id} style={{ padding: '6px 8px', borderBottom: '1px solid rgba(255,255,255,0.08)', fontSize: 11, color: 'var(--vdms-text-faint)' }}>
+                    <div style={{ color: '#fff', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.name}</div>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {!singleDeleter && `By ${entry.deletedByName || entry.deletedByEmail || 'Unknown user'} · `}
+                      {!singleSite && entry.siteName ? `${entry.siteName} · ` : ''}
+                      {entry.path || '—'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        <div style={{ display: 'flex', flexDirection: isMobile ? 'row' : 'column', gap: 6, flexShrink: 0, width: isMobile ? '100%' : 'auto' }}>
+          <button onClick={() => { this._pauseDocumentToastAutoClose(); this.setState({ spoDocumentDeletedToast: null }); void this._goToView('recycle'); }} style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: 7, minHeight: 44, flex: isMobile ? 1 : undefined, padding: '5px 12px', fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>View Recycle Bin</button>
+          <button onClick={() => { this._pauseDocumentToastAutoClose(); this.setState({ spoDocumentDeletedToast: null }); }} style={{ background: 'transparent', color: 'var(--vdms-text-faint)', border: '1px solid var(--vdms-text-secondary)', borderRadius: 7, minHeight: 44, flex: isMobile ? 1 : undefined, padding: '5px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Dismiss</button>
+        </div>
+      </div>
+    );
+  }
+
+  /** Shared fixed-position stack for the two SPO-deletion popups so a
+   *  vessel-deletion toast and a document-deletion toast that happen to be
+   *  active at the same time stack cleanly above one another instead of
+   *  both being pinned to the exact same spot and overlapping. */
+  public _renderSpoDeletionToasts(): React.ReactElement | null {
+    const { spoVesselDeletedToast, spoDocumentDeletedToast } = this.state;
+    if (!spoVesselDeletedToast && !spoDocumentDeletedToast) return null;
+    const isMobile = isMobileWidth(this.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
     return (
       <div style={{
         position: 'fixed', bottom: isMobile ? 10 : 28, left: '50%', transform: 'translateX(-50%)',
-        zIndex: 100003, background: '#1e293b', color: '#fff', borderRadius: 12,
-        boxShadow: '0 8px 32px rgba(0,0,0,0.28)', padding: isMobile ? '12px' : '16px 24px',
-        display: 'flex', alignItems: 'center', gap: 12, flexDirection: isMobile ? 'column' : 'row', width: isMobile ? 'calc(100vw - 20px)' : 'auto', minWidth: isMobile ? 0 : 360, maxWidth: isMobile ? 'calc(100vw - 20px)' : 520,
-        fontFamily: "'Segoe UI', sans-serif", border: '1.5px solid #ef4444',
+        zIndex: 100003, display: 'flex', flexDirection: 'column', gap: 10,
+        alignItems: isMobile ? 'stretch' : 'center', pointerEvents: 'none',
       }}>
-        <div style={{ width: 36, height: 36, borderRadius: 10, background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>🗑</div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 700, fontSize: 14, color: '#fca5a5' }}>{label} moved to Recycle Bin</div>
-          <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 3 }}>
-            <strong style={{ color: '#fff' }}>{summary}</strong> was deleted from SharePoint Online and moved to the Recycle Bin.
-          </div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: isMobile ? 'row' : 'column', gap: 6, flexShrink: 0, width: isMobile ? '100%' : 'auto' }}>
-          <button onClick={() => { this.setState({ spoDocumentDeletedToast: null }); void this._goToView('recycle'); }} style={{ background: '#ef4444', color: '#fff', border: 'none', borderRadius: 7, minHeight: 44, flex: isMobile ? 1 : undefined, padding: '5px 12px', fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>View Recycle Bin</button>
-          <button onClick={() => this.setState({ spoDocumentDeletedToast: null })} style={{ background: 'transparent', color: '#94a3b8', border: '1px solid #475569', borderRadius: 7, minHeight: 44, flex: isMobile ? 1 : undefined, padding: '5px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>Dismiss</button>
-        </div>
+        {this._renderSpoVesselDeletedToast()}
+        {this._renderSpoDocumentDeletedToast()}
       </div>
     );
   }
@@ -8943,28 +11929,50 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   }
 
   public render(): React.ReactElement {
-    const { sessionExpired, view } = this.state;
+    const { sessionExpired, view, authPage } = this.state;
+
+    // Keep <body> in sync with the active theme. The --vdms-* custom
+    // properties consumed by inline styles throughout the app (including
+    // this file's dialog renderers such as _renderFileDeleteDialog,
+    // _renderAddFolderDialog, and _renderFolderDeleteDialog) are only
+    // defined under the [data-vessel-theme="light"|"night"] selector in
+    // injectFullScreenStyles. That attribute is set on the themed
+    // .vessel-dms-app wrapper (see AppLayout.tsx renderLayout), but these
+    // dialogs are rendered as top-level siblings of that wrapper — not as
+    // its descendants — so the vars previously resolved to nothing there,
+    // leaving the popups with a transparent/undefined background and text
+    // color that blended into the backdrop overlay. Mirroring the
+    // attribute onto <body> makes the tokens resolve everywhere.
+    if (typeof document !== 'undefined') {
+      document.body.setAttribute('data-vessel-theme', this.state.themeMode);
+    }
+
+    if (authPage) {
+      return renderAuthPage(this, authPage);
+    }
 
     if (sessionExpired) {
+      const isNight = this.state.themeMode === 'night';
       return (
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          minHeight: '100vh', background: '#f8fafc', fontFamily: "'Segoe UI', sans-serif",
+          minHeight: '100vh', background: isNight ? '#211812' : clay.bg, fontFamily: "'Segoe UI', sans-serif", padding: 24,
         }}>
           <div style={{
-            background: '#fff', borderRadius: 12, padding: '40px 48px', maxWidth: 420,
-            textAlign: 'center', boxShadow: '0 4px 24px rgba(0,0,0,0.10)', border: '1px solid #e2e8f0',
+            background: isNight ? '#302219' : clay.surface, borderRadius: 24, padding: '44px 48px', maxWidth: 460,
+            textAlign: 'center', boxShadow: clay.shadowRaised, border: `1px solid ${isNight ? '#614331' : clay.accentSoft}`,
           }}>
-            <div style={{ fontSize: 48, marginBottom: 16 }}>🔒</div>
-            <h2 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#0f172a' }}>Session Expired</h2>
-            <p style={{ margin: '0 0 24px', fontSize: 14, color: '#64748b', lineHeight: 1.6 }}>
+            <div style={{ width: 64, height: 64, margin: '0 auto 18px', borderRadius: 20, background: clay.accentGradient, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30, boxShadow: clay.shadowButton }}>🔒</div>
+            <h2 style={{ margin: '0 0 10px', fontSize: 24, fontWeight: 800, color: isNight ? '#f8eee6' : clay.text }}>Session Expired</h2>
+            <p style={{ margin: '0 0 26px', fontSize: 15, color: isNight ? '#c7a58d' : clay.textMuted, lineHeight: 1.6 }}>
               Your session has expired or is no longer valid. Please sign out and sign back in to continue.
             </p>
             <button
               onClick={this._handleSignOut}
               style={{
-                background: '#0078d4', color: '#fff', border: 'none', borderRadius: 8,
+                background: clay.accentGradient, color: '#fff', border: 'none', borderRadius: 8,
                 padding: '10px 28px', fontSize: 14, fontWeight: 600, cursor: 'pointer',
+                boxShadow: clay.shadowButton,
               }}
             >
               Sign Out & Reload
@@ -8975,7 +11983,11 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     }
 
     let content: React.ReactElement;
-    switch (view) {
+    // Belt-and-braces for the same module-hiding guard as _goToView: covers
+    // `view` reaching render() via a path that doesn't go through
+    // _goToView (persisted/restored state, a future direct setState call).
+    const effectiveView: AppView = this.state.hiddenModules.indexOf(view) !== -1 ? 'dashboard' : view;
+    switch (effectiveView) {
       case 'dashboard':
         content = this._renderDashboard();
         break;
@@ -8988,20 +12000,17 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       case 'vessels':
         content = this._renderVesselsPage();
         break;
-      case 'templates':
-        content = this._renderTemplatesPage();
-        break;
-      case 'approvals':
-        content = this._renderApprovalsPage();
-        break;
-      case 'reports':
-        content = this._renderReportsPage();
-        break;
+      // 'templates' (Templates & OCR) removed — redundant with what's
+      // already on the SharePoint site. Any stale deep link / saved state
+      // pointing at it falls through to the default case below (dashboard).
       case 'users':
         content = this._renderUsersPage();
         break;
       case 'settings':
         content = this._renderSettingsPage();
+        break;
+      case 'profile':
+        content = this._renderProfilePage();
         break;
       case 'bento_email':
       case 'email_notify':
@@ -9011,10 +12020,13 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         content = this._renderRecycleBinPage();
         break;
       case 'archive':
-        content = this._renderArchivePage();
+        content = <ArchivePage host={this} />;
         break;
       case 'alerts':
         content = renderAlertsPage(this);
+        break;
+      case 'migration':
+        content = this._renderMigrationAssistant();
         break;
       default:
         content = this._renderDashboard();
@@ -9028,9 +12040,11 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         {this._renderUploadNavigationPrompt()}
         {this._renderBulkUploadModal()}
         {this._renderFileDeleteDialog()}
+        {this._renderArchivePickerDialog()}
+        {this._renderCreateFolderDialog()}
+        {this._renderAddFolderDialog()}
         {this._renderFolderDeleteDialog()}
-        {this._renderSpoVesselDeletedToast()}
-        {this._renderSpoDocumentDeletedToast()}
+        {this._renderSpoDeletionToasts()}
         {renderClassifyDialog(this)}
         {renderVesselSuggestionsModal(this)}
       </>

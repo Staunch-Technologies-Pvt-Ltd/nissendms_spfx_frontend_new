@@ -3,6 +3,7 @@
 export interface FlatRow {
   srNo: string;
   vesselName: string;
+  domain?: string;      // Tag Configuration "Domain" level, from the file's SharePoint tag/column
   group: string;        // Main folder: Technical & Crewing, Commercial & Chartering, Insurance, Kaizen
   category: string;    // First-level category under vessel: Month End Reports, Agreements, etc.
   subCategory: string; // Leaf folder: Main Engine, Charter Party, etc. (may equal category for single-level)
@@ -25,6 +26,7 @@ export interface FlatRow {
 export interface GroupedRow {
   srNo: string;
   vesselName: string;
+  domain?: string;      // Tag Configuration "Domain" level, from the file's SharePoint tag/column
   group: string;        // Main folder: Technical & Crewing, Commercial & Chartering, Insurance, Kaizen
   category: string;    // First-level category under vessel: Month End Reports, Agreements, etc.
   subCategory: string; // Leaf folder: Main Engine, Charter Party, etc.
@@ -50,6 +52,12 @@ export interface VesselRecord {
   image_url?: string;
   is_provisioned?: boolean;
   provisioned_site_ids?: string[];
+  provisioned_site_key?: string;
+  vessel_folder_path?: string;
   site_provisioning_status?: Record<string, string>;
+  // 'dms' = has a DMS vessel record; 'sharepoint' = discovered live from a
+  // SharePoint folder matching the site's Term Store vessel set, with no
+  // DMS record yet (see GET /api/vessels). Absent on older cached data.
+  source?: 'dms' | 'sharepoint' | string;
 }
 

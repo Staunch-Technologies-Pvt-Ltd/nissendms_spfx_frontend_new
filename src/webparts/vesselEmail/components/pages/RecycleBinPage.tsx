@@ -98,6 +98,7 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = React.useState<'vessels' | 'folders' | 'files'>('vessels');
   const [searchQuery, setSearchQuery] = React.useState('');
+  const [deletedByFilter, setDeletedByFilter] = React.useState('');
 
   React.useEffect(() => {
     void host._loadRecycleBin();
@@ -475,15 +476,23 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
   );
 
   const renderTable = (title: string, items: DeletedNode[], columns: string[], cells: (item: DeletedNode) => React.ReactNode[], empty: string): React.ReactElement => {
-    const filteredItems = searchQuery.trim()
+    let filteredItems = searchQuery.trim()
       ? items.filter(item => {
           const q = searchQuery.toLowerCase();
           const nameMatch = item.name.toLowerCase().includes(q);
           const pathMatch = (item.original_path || '').toLowerCase().includes(q);
           const vesselMatch = (item.vessel_name || '').toLowerCase().includes(q);
-          return nameMatch || pathMatch || vesselMatch;
+          const siteMatch = (item.site_name || item.site_key || '').toLowerCase().includes(q);
+          const deletedByMatch = ((item.deleted_by_name || '') + ' ' + (item.deleted_by_email || '')).toLowerCase().includes(q);
+          return nameMatch || pathMatch || vesselMatch || siteMatch || deletedByMatch;
         })
       : items;
+    if (deletedByFilter.trim()) {
+      const q = deletedByFilter.trim().toLowerCase();
+      filteredItems = filteredItems.filter(item =>
+        ((item.deleted_by_name || '') + ' ' + (item.deleted_by_email || '')).toLowerCase().includes(q)
+      );
+    }
 
     const sectionAllSelected = filteredItems.length > 0 && filteredItems.every(item => selectedIds.has(item.id));
     return (
@@ -492,16 +501,28 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
           <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: '#1e293b' }}>
             {title} ({filteredItems.length}{searchQuery.trim() && filteredItems.length !== items.length ? ` of ${items.length}` : ''})
           </h3>
-          <input
-            type="text"
-            placeholder={`Search ${title.toLowerCase()}...`}
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            style={{
-              padding: '6px 12px', borderRadius: 8, border: '1px solid #cbd5e1',
-              fontSize: 12, width: 220, outline: 'none',
-            }}
-          />
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              placeholder={`Search ${title.toLowerCase()}...`}
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{
+                padding: '6px 12px', borderRadius: 8, border: '1px solid #cbd5e1',
+                fontSize: 12, width: 220, outline: 'none',
+              }}
+            />
+            <input
+              type="text"
+              placeholder="Filter by Deleted By..."
+              value={deletedByFilter}
+              onChange={e => setDeletedByFilter(e.target.value)}
+              style={{
+                padding: '6px 12px', borderRadius: 8, border: '1px solid #cbd5e1',
+                fontSize: 12, width: 180, outline: 'none',
+              }}
+            />
+          </div>
         </div>
 
         <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
@@ -519,9 +540,12 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
                     </div>
                     <div style={{ marginTop: 8, fontSize: 12, color: '#475569', lineHeight: 1.5 }}>
                       <div><strong>Path:</strong> {location.folderPath}</div>
+                      <div><strong>Site:</strong> {item.site_name || item.site_key || '—'}</div>
                       <div><strong>Vessel:</strong> {location.vessel}</div>
                       <div><strong>Category:</strong> {location.category}</div>
                       <div><strong>Sub-category:</strong> {location.subCategory}</div>
+                      <div><strong>Deleted by:</strong> {item.deleted_by_name || item.deleted_by_email || '—'}</div>
+                      {item.reason && <div><strong>Reason:</strong> {item.reason}</div>}
                     </div>
                     <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                       <button onClick={() => openRestoreModal([item])} style={buttonStyle('#dff6dd', '#107c10', '#86efac')}>Restore</button>
@@ -538,17 +562,25 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
                 <input type="checkbox" checked={sectionAllSelected} onChange={() => toggleAllInSection(filteredItems)} disabled={!filteredItems.length} />
               </th>
               {columns.map(column => <th key={column} style={{ padding: 12 }}>{column}</th>)}
+              <th style={{ padding: 12 }}>Deleted By</th>
+              <th style={{ padding: 12 }}>Reason for deletion</th>
               <th style={{ padding: 12, textAlign: 'right' }}>Actions</th>
             </tr></thead>
             <tbody>
               {!filteredItems.length ? (
-                <tr><td colSpan={columns.length + 2} style={{ padding: 36, color: '#94a3b8', textAlign: 'center', fontSize: 13 }}>{empty}</td></tr>
+                <tr><td colSpan={columns.length + 4} style={{ padding: 36, color: '#94a3b8', textAlign: 'center', fontSize: 13 }}>{empty}</td></tr>
               ) : filteredItems.map(item => (
                 <tr key={item.id} style={{ borderTop: '1px solid #f1f5f9', background: selectedIds.has(item.id) ? '#f0f9ff' : '#fff' }}>
                   <td style={{ padding: 12, textAlign: 'center' }}>
                     <input type="checkbox" checked={selectedIds.has(item.id)} onChange={() => toggleOne(item.id)} />
                   </td>
                   {cells(item).map((cell, index) => <td key={index} style={{ padding: 12, color: index === 0 ? '#0f172a' : '#475569', fontWeight: index === 0 ? 600 : 400 }}>{cell}</td>)}
+                  <td style={{ padding: 12, color: '#475569' }} title={item.deleted_by_email || ''}>
+                    {item.deleted_by_name || item.deleted_by_email || '—'}
+                  </td>
+                  <td style={{ padding: 12, color: item.reason ? '#475569' : '#cbd5e1', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.reason || ''}>
+                    {item.reason || '—'}
+                  </td>
                   <td style={{ padding: 12 }}>{actionCell(item)}</td>
                 </tr>
               ))}
@@ -642,18 +674,18 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
           {activeTab === 'vessels' && renderTable(
             'Deleted vessels',
             vesselItems,
-            ['Vessel', 'Original path', 'Deleted'],
-            item => [item.name, item.original_path || '—', item.deleted_at ? new Date(item.deleted_at).toLocaleString() : '—'],
+            ['Vessel', 'Site', 'Original path', 'Deleted'],
+            item => [item.name, item.site_name || item.site_key || '—', item.original_path || '—', item.deleted_at ? new Date(item.deleted_at).toLocaleString() : '—'],
             'No deleted vessels found in Recycle Bin.'
           )}
 
           {activeTab === 'folders' && renderTable(
             'Deleted normal folders',
             folderItems,
-            ['Folder', 'Original path', 'Vessel', 'Category', 'Sub-category'],
+            ['Folder', 'Site', 'Original path', 'Vessel', 'Category', 'Sub-category'],
             item => {
               const location = getLocationDetails(item);
-              return [item.name, location.folderPath, location.vessel, location.category, location.subCategory];
+              return [item.name, item.site_name || item.site_key || '—', location.folderPath, location.vessel, location.category, location.subCategory];
             },
             'No deleted normal folders found in Recycle Bin.'
           )}
@@ -661,10 +693,10 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
           {activeTab === 'files' && renderTable(
             'Deleted individual files',
             fileItems,
-            ['File', 'Folder path', 'Vessel', 'Category', 'Sub-category'],
+            ['File', 'Site', 'Folder path', 'Vessel', 'Category', 'Sub-category'],
             item => {
               const location = getLocationDetails(item);
-              return [item.name, location.folderPath, location.vessel, location.category, location.subCategory];
+              return [item.name, item.site_name || item.site_key || '—', location.folderPath, location.vessel, location.category, location.subCategory];
             },
             'No deleted individual files found in Recycle Bin.'
           )}

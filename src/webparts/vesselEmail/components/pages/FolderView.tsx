@@ -4,6 +4,7 @@ import { renderClassifyDialog } from './VesselsPage';
 import { MAIN_FOLDERS, folderNamesByMainFolder, subfolderNamesByFolder } from '../vesselFolderTemplate';
 import { extractFilesFromDataTransfer } from '../BulkUploadModal';
 import { resolveDetectedVesselForFile } from '../constants';
+import { clay } from '../clayTheme';
 
 export type MainFolderKey =
   | 'Technical & Crewing'
@@ -32,10 +33,10 @@ function FileTable({ files, onDelete, selectedIds, onToggleSelect, host, vesselN
   sharePointPath?: string;
 }): React.ReactElement {
   return (
-    <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+    <div style={{ background: clay.surface, borderRadius: clay.radiusCard, border: `1px solid ${clay.accentSoft}`, overflow: 'hidden' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
-          <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
+          <tr style={{ background: clay.surfaceRaised, borderBottom: `1px solid ${clay.accentSoft}`, color: clay.textMuted, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
             {onToggleSelect && <th style={{ padding: '10px 16px', width: 40, textAlign: 'center' }}></th>}
             <th style={{ padding: '10px 16px' }}>FILE NAME</th>
             <th style={{ padding: '10px 16px' }}>SIZE</th>
@@ -48,7 +49,7 @@ function FileTable({ files, onDelete, selectedIds, onToggleSelect, host, vesselN
             const fileId = (file as any).id || file.name;
             const isSelected = selectedIds?.has(fileId) ?? false;
             return (
-              <tr key={file.name + idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+              <tr key={file.name + idx} style={{ borderBottom: `1px solid ${clay.accentSoft}` }}>
                 {onToggleSelect && (
                   <td style={{ padding: '12px 16px', textAlign: 'center', width: 40 }}>
                     <input
@@ -59,7 +60,7 @@ function FileTable({ files, onDelete, selectedIds, onToggleSelect, host, vesselN
                     />
                   </td>
                 )}
-                <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <td style={{ padding: '12px 16px', fontWeight: 600, color: clay.text, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 18 }}>{file.uploading ? '⏳' : (file.pending ? '🕒' : '📄')}</span>
                   <span>{file.name}</span>
                   {file.uploading && <span style={{ fontSize: 11, color: '#0369a1', fontWeight: 600, background: '#e0f2fe', borderRadius: 4, padding: '1px 6px' }}>Uploading...</span>}
@@ -111,11 +112,11 @@ function FileTable({ files, onDelete, selectedIds, onToggleSelect, host, vesselN
                     }
                   })()}
                 </td>
-                <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.size}</td>
-                <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.date}</td>
+                <td style={{ padding: '12px 16px', color: clay.textMuted }}>{file.size}</td>
+                <td style={{ padding: '12px 16px', color: clay.textMuted }}>{file.date}</td>
                 <td style={{ padding: '12px 16px', textAlign: 'right' }}>
                   <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                    <button style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#0078d4' }}>
+                    <button style={{ border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface)', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#0078d4' }}>
                       View / Download
                     </button>
                     {/* OCR Re-classify button for real (non-pending) files */}
@@ -171,17 +172,31 @@ function FileTable({ files, onDelete, selectedIds, onToggleSelect, host, vesselN
 function FolderCard({ name, sub, emoji, bg, onClick }: {
   name: string; sub: string; emoji: string; bg: string; onClick: () => void;
 }): React.ReactElement {
+  // Phase 6 "Ocean Clay" — puffy card: soft dual-tone shadow + generous
+  // radius on the teal-tinted surface, while keeping each category's own
+  // icon color (passed in as `bg`) so departments stay visually distinct.
+  const [hovered, setHovered] = React.useState(false);
   return (
     <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
-      style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        background: clay.surface, borderRadius: clay.radiusTile, border: 'none', padding: 18,
+        display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
+        boxShadow: hovered ? clay.shadowRaisedHover : clay.shadowRaised,
+        transition: 'box-shadow 0.15s ease',
+      }}
     >
-      <div style={{ width: 44, height: 44, borderRadius: 10, background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>{emoji}</div>
+      <div style={{ width: 46, height: 46, borderRadius: clay.radiusIcon, background: bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0, boxShadow: clay.shadowIcon }}>{emoji}</div>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
-        <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{sub}</div>
+        <div style={{ fontWeight: 700, fontSize: 14, color: clay.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</div>
+        <div style={{ fontSize: 12, color: clay.textMuted, marginTop: 2 }}>{sub}</div>
       </div>
-      <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
+      <span style={{ color: clay.accent, fontSize: 16 }}>›</span>
     </div>
   );
 }
@@ -207,8 +222,16 @@ export function renderFolderView(
   const {
     stackLevel, atVesselsRoot, atSpecificVessels, atVesselMainFolderSelect,
     vesselNodeInStack, currentVesselNameFromStack, currentFolderNode, currentFolderName,
-    vesselStackIdx, subfolderNames, allCurrentFolderFiles, displayVessels,
+    vesselStackIdx, subfolderNames, displayVessels,
   } = ctx;
+
+  // Archived files (Archive module, point #6) stay out of the working
+  // Documents/Folder view — they're only browsable/restorable from the
+  // Archive page — without being deleted or removed from ctx upstream.
+  const archivedFileIds = host.state.archivedFileIds;
+  const allCurrentFolderFiles = archivedFileIds && archivedFileIds.size > 0
+    ? ctx.allCurrentFolderFiles.filter(f => !f.id || !archivedFileIds.has(f.id))
+    : ctx.allCurrentFolderFiles;
 
   const handleFileDelete = (file: { id: string; name: string }): void => {
     host._openFileDeleteDialog([{
@@ -411,7 +434,7 @@ export function renderFolderView(
         {allCurrentFolderFiles && allCurrentFolderFiles.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: clay.text, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 18 }}>📄</span> Uploaded Documents ({allCurrentFolderFiles.length})
               </div>
             </div>
@@ -440,7 +463,7 @@ export function renderFolderView(
                 </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {mainFolderAnomalies.map(item => (
-                    <div key={item.id} style={{ background: '#fff', borderRadius: 10, border: '1px solid #fde68a', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                    <div key={item.id} style={{ background: 'var(--vdms-surface)', borderRadius: 10, border: '1px solid #fde68a', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 200 }}>
                         <span style={{ fontSize: 24 }}>📁</span>
                         <div>
@@ -454,7 +477,7 @@ export function renderFolderView(
                           🔍 Classify
                         </button>
                         <button onClick={() => host._dismissAnomaly(item.id)}
-                          style={{ background: '#fff', color: '#78716c', border: '1px solid #d6d3d1', borderRadius: 6, padding: '6px 10px', fontSize: 11, cursor: 'pointer' }}>
+                          style={{ background: 'var(--vdms-surface)', color: '#78716c', border: '1px solid #d6d3d1', borderRadius: 6, padding: '6px 10px', fontSize: 11, cursor: 'pointer' }}>
                           ✕ Dismiss
                         </button>
                       </div>
@@ -522,35 +545,36 @@ export function renderFolderView(
               }
             }}
             style={{
-              background: host.state.documentVesselsLoadingMore ? '#f8fafc' : '#f0f9ff',
-              borderRadius: 14,
-              border: '2px dashed #0284c7',
+              background: host.state.documentVesselsLoadingMore ? clay.surfaceRaised : clay.surface,
+              borderRadius: clay.radiusTile,
+              border: `2px dashed ${clay.accent}`,
               padding: 18,
               display: 'flex',
               alignItems: 'center',
               gap: 14,
               cursor: host.state.documentVesselsLoadingMore ? 'wait' : 'pointer',
-              boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+              boxShadow: clay.shadowRaised,
               transition: 'all 0.15s ease',
             }}
           >
             <div style={{
-              width: 44, height: 44, borderRadius: 10,
-              background: '#0284c7', color: '#fff',
+              width: 44, height: 44, borderRadius: clay.radiusIcon,
+              background: clay.accentGradient, color: '#fff',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               fontSize: 20, fontWeight: 700, flexShrink: 0,
+              boxShadow: clay.shadowIcon,
             }}>
               {host.state.documentVesselsLoadingMore ? '⏳' : '+'}
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, color: '#0284c7', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: clay.accentDark, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {host.state.documentVesselsLoadingMore ? 'Loading vessels...' : `More vessels (+${Math.min(8, host.state.vessels.length - host.state.documentVesselCount)})`}
               </div>
-              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+              <div style={{ fontSize: 12, color: clay.textMuted, marginTop: 2 }}>
                 {host.state.documentVesselsLoadingMore ? 'Please wait...' : `Load next batch (${host.state.documentVesselCount} of ${host.state.vessels.length} shown)`}
               </div>
             </div>
-            <span style={{ color: '#0284c7', fontSize: 18, fontWeight: 700 }}>›</span>
+            <span style={{ color: clay.accentDark, fontSize: 18, fontWeight: 700 }}>›</span>
           </div>
         )}
       </div>
@@ -628,6 +652,32 @@ export function renderFolderView(
           ))}
         </div>
 
+        {uploadedOnlySubfolderNames.length > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => {
+                const { currentVessel, subFolderPath } = resolveTargetUploadInfo();
+                host._openFolderDeleteDialog({
+                  folderId: '',
+                  folderName: '',
+                  folderPath: subFolderPath,
+                  vesselName: currentVessel,
+                  mainFolder: docMainFolder || 'Technical & Crewing',
+                  subfolderNames: uploadedOnlySubfolderNames,
+                });
+              }}
+              style={{
+                background: '#fff1f2', color: '#e11d48', border: '1px solid #fecdd3', borderRadius: 8,
+                padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 6px rgba(225,29,72,0.15)',
+              }}
+              title="Delete uploaded folders (non-template only)"
+            >
+              <span>🗑</span> Delete Uploaded Folder
+            </button>
+          </div>
+        )}
+
         {allCurrentFolderFiles.length > 0 && (
         <div style={{ marginTop: 8 }}>
             <FileTable
@@ -651,16 +701,16 @@ export function renderFolderView(
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {subAnomalies.map(item => (
-                <div key={item.id} style={{ background: '#fff', borderRadius: 8, border: '1px solid #fed7aa', padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <div key={item.id} style={{ background: 'var(--vdms-surface)', borderRadius: 8, border: '1px solid #fed7aa', padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <span style={{ fontSize: 18 }}>{item.item_type === 'folder' ? '📁' : '📄'}</span>
                     <div>
-                      <span style={{ fontWeight: 600, fontSize: 13, color: '#1e293b' }}>{item.name}</span>
-                      <span style={{ fontSize: 11, color: '#64748b', marginLeft: 8 }}>Path: {item.spo_path}</span>
+                      <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--vdms-text)' }}>{item.name}</span>
+                      <span style={{ fontSize: 11, color: 'var(--vdms-text-muted)', marginLeft: 8 }}>Path: {item.spo_path}</span>
                     </div>
                   </div>
                   <button onClick={() => host._dismissAnomaly(item.id)}
-                    style={{ background: '#fff', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}>
+                    style={{ background: 'var(--vdms-surface)', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}>
                     ✕ Dismiss
                   </button>
                 </div>
@@ -701,26 +751,26 @@ export function renderFolderView(
       style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '50px 20px' }}
     >
       <div style={{
-        background: '#fff', border: '2px dashed #93c5fd', borderRadius: 24,
+        background: clay.surface, border: `2px dashed ${clay.accentSoft}`, borderRadius: clay.radiusCard,
         padding: '40px 36px', maxWidth: 520, width: '100%', textAlign: 'center',
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14,
-        boxShadow: '0 4px 20px rgba(2,132,199,0.06)',
+        boxShadow: clay.shadowRaised,
       }}>
-        <div style={{ width: 64, height: 64, borderRadius: 18, background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30 }}>
+        <div style={{ width: 64, height: 64, borderRadius: clay.radiusIcon, background: clay.iconBgGradient, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30, boxShadow: clay.shadowIcon }}>
           ☁️
         </div>
         <div>
-          <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#0f172a' }}>This folder is empty</h3>
-          <p style={{ margin: 0, fontSize: 13, color: '#64748b', lineHeight: 1.5 }}>
+          <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: clay.text }}>This folder is empty</h3>
+          <p style={{ margin: 0, fontSize: 13, color: clay.textMuted, lineHeight: 1.5 }}>
             Drag and drop files or entire folders here, or use the buttons below.
           </p>
         </div>
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', marginTop: 6 }}>
           <label style={{
-            background: '#0284c7', color: '#fff', border: 'none', borderRadius: 8,
+            background: clay.accentGradient, color: '#fff', border: 'none', borderRadius: clay.radiusButton,
             padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 6px rgba(2,132,199,0.25)',
+            display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: clay.shadowButton,
           }}>
             <input
               type="file"
@@ -739,9 +789,9 @@ export function renderFolderView(
           </label>
 
           <label style={{
-            background: '#059669', color: '#fff', border: 'none', borderRadius: 8,
+            background: clay.surfaceRaised, color: clay.accentDark, border: `1px solid ${clay.accentSoft}`, borderRadius: clay.radiusButton,
             padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 6px rgba(5,150,105,0.25)',
+            display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: clay.shadowRaised,
           }}>
             <input
               type="file"

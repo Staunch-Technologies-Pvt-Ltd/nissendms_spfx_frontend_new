@@ -20,12 +20,88 @@ import {
   getCommonShipsFlatRows, getKaizenFlatRows, getVesselTemplateFlatRows,
 } from '../vesselFolderTemplate';
 import { extractFilesFromDataTransfer } from '../BulkUploadModal';
+import { CopilotSearchPanel } from '../copilot/CopilotSearchPanel';
+import { FolderTreeSelect, FolderTreeNode } from './FolderTreeSelect';
+import { DebouncedSearchInput } from './DebouncedSearchInput';
+
+// ── List view table styles ────────────────────────────────────────────────
+// Every cell is top-aligned with the same padding, and each file line in the
+// File name / Size / Date columns has the same fixed height, so a file's size
+// and upload time always sit on the same line as its name.
+const LIST_TH: React.CSSProperties = {
+  position: 'sticky', top: 0, zIndex: 1,
+  padding: '11px 12px', background: 'var(--vdms-surface-alt)',
+  borderBottom: '1px solid var(--vdms-border)',
+  color: 'var(--vdms-text-muted)', fontSize: 10.5, fontWeight: 700,
+  letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap',
+};
+const LIST_TD: React.CSSProperties = {
+  padding: '10px 12px', verticalAlign: 'top', fontSize: 12, lineHeight: '18px', overflow: 'hidden',
+};
+const LIST_FILE_LINE: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', height: 26, minWidth: 0, whiteSpace: 'nowrap',
+};
+const LIST_ELLIPSIS: React.CSSProperties = {
+  display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+};
+// Shows the value in full (wraps instead of truncating with "…") — used for
+// tag-derived columns (Vessel, Domain, Main folder, Group, Category, Sub
+// category) where a cut-off label like "Communicati…" is unreadable/ambiguous.
+const LIST_WRAP: React.CSSProperties = {
+  display: 'block', minWidth: 0, whiteSpace: 'normal', wordBreak: 'break-word', overflowWrap: 'anywhere',
+};
+const LIST_PILL: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 5, maxWidth: '100%',
+  borderRadius: 999, padding: '2px 9px', fontSize: 11, fontWeight: 600, lineHeight: '18px', whiteSpace: 'nowrap',
+};
+const LIST_X_DOT: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: 14, height: 14, borderRadius: '50%', background: '#c2410c', color: '#fff',
+  fontSize: 9, fontWeight: 800, lineHeight: 1, flexShrink: 0,
+};
+const LIST_ACTION_BTN: React.CSSProperties = {
+  height: 26, padding: '0 8px', borderRadius: 6, border: '1px solid var(--vdms-border)',
+  fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', boxSizing: 'border-box',
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+};
+
+/** Folder view Group/Category search: one backend recursive walk per
+ * `${siteId}::${driveId}::${folderId}`, kept for GROUP_CAT_TREE_TTL_MS so
+ * re-renders and filter changes don't refetch it. */
+interface GroupCatTreeEntry {
+  status: 'loading' | 'done' | 'error';
+  items: any[];
+  truncated: boolean;
+  at: number;
+}
+const GROUP_CAT_TREE_TTL_MS = 5 * 60 * 1000;
+const groupCatTreeCache: Map<string, GroupCatTreeEntry> = new Map();
+
+/** ✕ marker for a List view cell whose value isn't present in the path. */
+function ListMissingMark(props: { title: string }): React.ReactElement {
+  return (
+    <span
+      title={props.title}
+      aria-label={props.title}
+      style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 20, height: 20, borderRadius: 6,
+        background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca',
+        fontSize: 11, fontWeight: 800, lineHeight: 1,
+      }}
+    >
+      ✕
+    </span>
+  );
+}
 
 export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
     const {
       textFilter, vesselFilter, catFilter, attachmentFilter, docViewMode, showAllVesselsInFolderView,
-      vessels, rows, docListPage, docListSort, docGroupFilter, docCategoryFilter, docGroupLevelFilter, docLeafCategoryFilter, docSubCategoryFilter,
+      vessels, allVesselNamesForSearch, rows, docListPage, docListSort, docGroupFilter, docCategoryFilter, docGroupLevelFilter, docLeafCategoryFilter, docSubCategoryFilter,
+      docSubfolderOtherFilter,
+      docCompareMode, compareBoxSubPaths,
       docScopeType,
       documentVesselCount, documentVesselsLoadingMore, documentFilesLoading, vesselLoadingName,
       docUploadRowKey, docUploadBusy, docUploadMsg, documentsList,
@@ -35,6 +111,83 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     } = host.state;
 
     const vesselColumns = windowWidth <= 767 ? 1 : windowWidth <= 1024 ? 2 : 4;
+
+    // Shared tokenized search for the Documents module's search bar. Splits
+    // the query on whitespace so a combined query — e.g. a vessel name plus
+    // a (partial) file name typed together — still matches even though the
+    // two pieces live in different fields on the same row/item: every
+    // whitespace-separated token just has to appear *somewhere* across the
+    // given fields (any field, any file format/extension), and different
+    // tokens are free to match different fields. A single-clause query
+    // behaves exactly like a plain "contains" search as before.
+    // Strips combining diacritical marks after Unicode NFD decomposition
+    // (e.g. "é" -> "e" + U+0301, then the mark is dropped), so an accented
+    // vessel/file name matches an unaccented search term and vice versa.
+    // Falls back to the plain string if normalize() isn't available.
+    const foldDiacritics = (s: string): string => {
+      try {
+        return s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+      } catch {
+        return s;
+      }
+    };
+
+    // +, comma or semicolon separates OR clauses — mirrors the backend's
+    // /api/dashboard/documents matcher (_dashboard_doc_matches_text in
+    // main.py), so "Bow Fighter + Bow Fraternity" finds files under EITHER
+    // vessel in one search instead of finding nothing (no single row ever
+    // has both vessel names on it, so a plain AND-of-all-words search always
+    // came back empty for a multi-vessel query). A clause that names a known
+    // vessel only needs ONE such clause to match the row; any other
+    // (non-vessel) clause still narrows the result further, e.g.
+    // "Bow Fighter + Bow Fraternity safety" only returns Safety files under
+    // either vessel. A query with no +/,/; at all behaves exactly as before.
+    // `vessels` is the Vessels-module table — scoped to whichever site
+    // vesselSiteFilter currently points at, and deliberately NOT refetched
+    // when switching the "SharePoint site" dropdown here in Documents (see
+    // _switchDocumentSite's comment: reloading it on every site switch would
+    // leak other-site vessel data into the Vessels table). That means a
+    // clause naming a real vessel under the site currently being browsed can
+    // still be missing from `vessels` if it lives under a different site
+    // than vesselSiteFilter — allVesselNamesForSearch (tenant-wide, fetched
+    // once at mount, never used for anything but this) fills that gap so
+    // e.g. "Bow Fighter + plan" is still recognized as a vessel clause even
+    // when the Vessels table hasn't loaded Bow Fighter's site.
+    const knownVesselNamesLower = Array.from(new Set([
+      ...(vessels || []).map(v => (v.name || '').trim().toLowerCase()),
+      ...(allVesselNamesForSearch || []).map(n => n.trim().toLowerCase()),
+    ])).filter(Boolean);
+
+    const matchesSearchTokens = (query: string, ...fields: Array<string | undefined | null>): boolean => {
+      const trimmedQuery = foldDiacritics((query || '').trim().toLowerCase());
+      if (!trimmedQuery) return true;
+      const haystack = foldDiacritics(fields.filter(Boolean).join(' \u0001 ').toLowerCase());
+      const andOfWords = (clause: string): boolean => {
+        const tokens = clause.split(/\s+/).filter(Boolean);
+        return tokens.length > 0 && tokens.every(token => haystack.includes(token));
+      };
+      const rawClauses = trimmedQuery.split(/[+,;]+/).map(c => c.trim()).filter(Boolean);
+      if (rawClauses.length <= 1) {
+        const tokens = trimmedQuery.split(/\s+/).filter(Boolean);
+        return tokens.every(token => haystack.includes(token));
+      }
+      const vesselClauses = rawClauses.filter(c =>
+        knownVesselNamesLower.some(name => name === c || name.includes(c) || c.includes(name))
+      );
+      if (vesselClauses.length > 0) {
+        if (!vesselClauses.some(andOfWords)) return false;
+        const otherClauses = rawClauses.filter(c => !vesselClauses.includes(c));
+        return otherClauses.every(andOfWords);
+      }
+      // No clause recognized as a known vessel name — e.g. "Bow Fighter +
+      // Bow Fraternity" when the vessel list hasn't loaded yet, or "Bow
+      // Fighter + monthly report.pdf" mixing a vessel with a filename.
+      // +/,/; still means OR here: requiring every clause to match (AND)
+      // meant a query naming two different things never matched any single
+      // row, which is exactly the "no results" bug this was meant to fix.
+      // Each clause is still an AND of its own words.
+      return rawClauses.some(andOfWords);
+    };
 
     const getFirstClassSite = (keyHint: string, fallbackIdx: number) => {
       const sites = host.state.documentSites || [];
@@ -77,15 +230,24 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           setTimeout(() => void host._refreshSiteFolder(effectiveSiteId, rawDriveId, folderRef).catch(() => undefined), 0);
         }
 
-        // If this folder corresponds to a known vessel, also refresh vessel rows
-        const leafVesselMatch = vessels.find(v => v.name.trim().toLowerCase() === (leafNode?.name || '').trim().toLowerCase());
-        const detectedVessel = leafVesselMatch?.name || (targetVessel && targetVessel !== 'all' ? targetVessel : '');
-        if (detectedVessel) {
-          setTimeout(() => {
-            void host._loadVesselRowsFromApi(detectedVessel).catch(() => undefined);
-            void host._loadFilesForVessel(detectedVessel).catch(() => undefined);
-          }, 0);
-        }
+        // NOTE: this used to also detect whether the folder just opened
+        // shares a name with a registered vessel and, if so, fire off
+        // _loadVesselRowsFromApi + _loadFilesForVessel (a full recursive
+        // Graph walk of that vessel's entire folder tree via
+        // _mergeLiveSharePointFiles) in the background — purely as a
+        // "warm the Vessels module's cache in case the user switches
+        // there later" prefetch. It ran on every folder navigation in
+        // Sites scope, competing for the same origin's connection pool
+        // with the _refreshSiteFolder call right above it for the folder
+        // the user is actually waiting on — i.e. opening a vessel-named
+        // folder in Sites could genuinely slow down loading that folder's
+        // own contents, and left documentFilesLoading/vesselLoadingName
+        // set (see the toolbar banner above) for a vessel the user may
+        // have already navigated away from by the time it resolved.
+        // Removed: the Vessels module already loads a vessel's rows
+        // on demand (componentDidUpdate's vesselFilter handler) exactly
+        // when the user actually opens it there, so this prefetch traded
+        // a real, guaranteed slowdown for a speculative later saving.
       } else if (targetScope === 'shared_docs' || targetScope === 'documents') {
         const firstClass = targetScope === 'shared_docs' ? getFirstClassSite('nksdocman', 0) : getFirstClassSite('dev', 1);
         if (firstClass?.site_id && firstClass?.drive_id) {
@@ -113,6 +275,14 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       }
     };
 
+    // Filled in once deriveLiveNavFilterState is defined further down, so
+    // Back/Forward (defined here) can re-sync the filter bar too.
+    const liveNavSync: {
+      derive?: (stack: { id: string; name: string }[]) => {
+        docCategoryFilter: string; docSubfolderOtherFilter: string; vesselFilter: string; docListPage: number;
+      };
+    } = {};
+
     const canGoBack = folderNavIndex > 0;
     const canGoForward = folderNavIndex < folderNavHistory.length - 1;
 
@@ -120,6 +290,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       if (!canGoBack) return;
       const prev = folderNavHistory[folderNavIndex - 1];
       host.setState({ folderNavIndex: folderNavIndex - 1, folderPathStack: prev.folderPathStack, docMainFolder: prev.docMainFolder });
+      if (prev.folderPathStack[0]?.id === 'sites_root' && liveNavSync.derive) host.setState(liveNavSync.derive(prev.folderPathStack));
       triggerFolderRefresh(prev.folderPathStack);
     };
 
@@ -127,6 +298,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       if (!canGoForward) return;
       const next = folderNavHistory[folderNavIndex + 1];
       host.setState({ folderNavIndex: folderNavIndex + 1, folderPathStack: next.folderPathStack, docMainFolder: next.docMainFolder });
+      if (next.folderPathStack[0]?.id === 'sites_root' && liveNavSync.derive) host.setState(liveNavSync.derive(next.folderPathStack));
       triggerFolderRefresh(next.folderPathStack);
     };
 
@@ -143,19 +315,54 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       | 'Documents'
       | 'SharePoint Sites';
 
-    const VESSEL_MAIN_FOLDERS: Array<{ key: MainFolderKey; icon: string; emoji: string; color: string; bg: string }> = [
-      { key: 'Technical & Crewing', icon: '⚙️', emoji: '⚙️', color: '#dc2626', bg: '#fee2e2' },
-      { key: 'Commercial & Chartering', icon: '💼', emoji: '💼', color: '#16a34a', bg: '#dcfce7' },
-      { key: 'Insurance', icon: '🛡️', emoji: '🛡️', color: '#d97706', bg: '#fef3c7' },
-    ];
-    const MAIN_FOLDERS: Array<{ key: MainFolderKey; icon: string; emoji: string; color: string; bg: string }> = [
-      ...VESSEL_MAIN_FOLDERS,
-      { key: 'Kaizen - Knowledge Bank', icon: '📚', emoji: '📚', color: '#7c3aed', bg: '#ede9fe' },
-    ];
+    const VESSEL_MAIN_FOLDERS: Array<{ key: MainFolderKey; icon: string; emoji: string; color: string; bg: string }> = [];
+    const MAIN_FOLDERS: Array<{ key: MainFolderKey; icon: string; emoji: string; color: string; bg: string }> = [];
     const activeLiveSite = (host.state.documentSites || []).find(site => site.site_key === host.state.activeDocumentSite);
     const isNksDocMan = /nksdocman/i.test(`${activeLiveSite?.site_key || ''} ${activeLiveSite?.sp_site_name || ''}`);
-    const liveRootFolders = (host.state.documentLiveFolders || [])
-      .filter(folder => folder.is_folder !== false && folder.depth === 0 &&
+
+    // Resolve the site/drive actually being displayed right now. When browsing
+    // via the "SharePoint Sites" breadcrumb tree (docScopeType 'sites', the
+    // same folderPathStack[1]/[2] resolution the Level>=2/3 folder-view
+    // renderer below uses), that's a different site than whatever
+    // activeDocumentSite happens to be — that variable only tracks the
+    // top "SharePoint site" quick-switcher, which this navigation mode
+    // doesn't use. Falling back to activeLiveSite keeps the quick-switcher
+    // scopes (Documents / Vessels / etc.) working as before.
+    const isSitesScopeNav = docScopeType === 'sites' && folderPathStack.length >= 2 &&
+      (folderPathStack[0]?.id === 'sites_root' || folderPathStack[0]?.name === 'SharePoint Sites' || folderPathStack[0]?.name === 'Sites Documents');
+    const sitesScopeSiteNode = isSitesScopeNav ? folderPathStack[1] : null;
+    const sitesScopeRawSiteId = (sitesScopeSiteNode?.id || '').replace(/^site:/, '');
+    const sitesScopeMatchedSite = sitesScopeSiteNode
+      ? (host.state.documentSites || []).find(s =>
+          s.site_id === sitesScopeRawSiteId || s.site_key === sitesScopeRawSiteId || s.sp_site_name === sitesScopeSiteNode.name
+        )
+      : null;
+    const sitesScopeSiteId = sitesScopeSiteNode ? (sitesScopeMatchedSite?.site_id || sitesScopeRawSiteId) : '';
+    const sitesScopeDriveNode = isSitesScopeNav && folderPathStack.length >= 3 ? folderPathStack[2] : null;
+    const sitesScopeDriveId = sitesScopeDriveNode
+      ? (sitesScopeDriveNode.id || '').replace(/^drive:/, '')
+      : (sitesScopeMatchedSite?.drive_id || '');
+
+    const effectiveLiveSiteId = sitesScopeSiteId || activeLiveSite?.site_id || '';
+    const effectiveLiveDriveId = sitesScopeDriveId || activeLiveSite?.drive_id || '';
+
+    const directRootItems = effectiveLiveSiteId && effectiveLiveDriveId
+      ? host._getOrLoadSiteFolderChildren(effectiveLiveSiteId, effectiveLiveDriveId, 'root').items
+      : [];
+    const liveRootSource = effectiveLiveSiteId && effectiveLiveDriveId
+      ? directRootItems
+      : (host.state.documentLiveFolders || []).filter(folder => folder.is_folder !== false && folder.depth === 0);
+    const liveRootFolders = liveRootSource
+      // `folder.folder` (the Graph driveItem folder facet) is the only
+      // reliable positive folder signal across both sources this list can
+      // come from: it's present on a raw Graph children response only for
+      // real folders, and it's synthesized from documentLiveFolders'
+      // is_folder flag the same way (see _getOrLoadSiteFolderChildren).
+      // `is_folder !== false` used to be OR'd in here as a fallback, but
+      // that's `undefined !== false` → true for every raw Graph *file* too
+      // (that shape has no is_folder field at all), which is what let files
+      // leak into this "folders only" list.
+      .filter(folder => !!folder.folder &&
         !['shared documents', 'documents'].includes((folder.name || '').trim().toLowerCase()))
       .map(folder => ({
         key: folder.name,
@@ -165,18 +372,48 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         bg: '#ccfbf1',
         liveFolderId: folder.id,
       }));
+    // The "SharePoint Sites" tile used to be pinned here as a synthetic
+    // level-0 card, but it duplicated the "SharePoint site" dropdown above
+    // the grid: clicking it just re-opened a picker for the same sites the
+    // dropdown already switches between, which read as redundant/confusing.
+    // Site switching now happens only through that dropdown, so this list is
+    // just the real top-level folders of the selected site's library.
     const rootFolderCards = [
-      ...(isNksDocMan ? [] : MAIN_FOLDERS.map(item => ({ ...item, liveFolderId: undefined as string | undefined }))),
-      {
-        key: 'SharePoint Sites' as MainFolderKey,
-        icon: '🌐',
-        emoji: '🌐',
-        color: '#0284c7',
-        bg: '#e0f2fe',
-        liveFolderId: undefined as string | undefined,
-      },
-      ...liveRootFolders.filter(live => !MAIN_FOLDERS.some(item => item.key.toLowerCase() === live.key.toLowerCase())),
+      ...liveRootFolders,
     ];
+
+    // ── Live Main folder / Sub-folder classification ──────────────────────────
+    // "Main folder" options must be the real, current top-level folders of the
+    // selected site's Documents library (not a hard-coded list), and any real
+    // folder that sits alongside vessel folders but isn't itself a vessel
+    // (e.g. "Report", "ACRA CHARGE", "Share with Mr Akase") must still be
+    // reachable as its own filter option instead of disappearing. Vessel
+    // identity is authoritative from the SharePoint Term Store (merged with
+    // DB vessels server-side), not path-guessing alone.
+    const liveTermStoreVesselNames: string[] = effectiveLiveSiteId
+      ? host._getOrLoadTermStoreVessels(effectiveLiveSiteId)
+      : [];
+    const liveTermStoreVesselSet = new Set(
+      liveTermStoreVesselNames.concat((vessels || []).map(v => v.name)).map(n => (n || '').trim().toLowerCase()).filter(Boolean)
+    );
+    const KNOWN_MAIN_FOLDER_MAP = folderNamesByMainFolder();
+    const KNOWN_MAIN_FOLDER_NAME_SET = new Set(Object.keys(KNOWN_MAIN_FOLDER_MAP).map(n => n.trim().toLowerCase()));
+    const KNOWN_MAIN_FOLDER_COMMON_MAP = folderNamesByMainFolder(true);
+    const KNOWN_CATEGORY_NAME_SET = new Set(
+      Object.values(KNOWN_MAIN_FOLDER_MAP).concat(Object.values(KNOWN_MAIN_FOLDER_COMMON_MAP))
+        .reduce((all, names) => all.concat(names), [] as string[])
+        .map(n => n.trim().toLowerCase())
+    );
+    // "Main folder" = every real top-level folder in the site's Documents
+    // library, live — known department (Technical & Crewing, ...), a vessel
+    // folder sitting flat at root (e.g. "mvtest2209"), or anything else
+    // (e.g. "Report", "ACRA CHARGE") — all of it, not just the known set.
+    // A top-level folder that is also a recognised vessel is cross-listed in
+    // the vessel filter too (see siteVesselNames below), it isn't removed
+    // from here.
+    const liveMainFolderNames = Array.from(new Set(
+      liveRootFolders.map(f => f.key).filter(Boolean)
+    ));
 
     // Hierarchy navigation state
     const stackLevel = folderPathStack.length;
@@ -753,7 +990,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
 
     const visibleCurrentFolderFiles = textFilter.trim()
-      ? allCurrentFolderFiles.filter(file => file.name.toLowerCase().includes(textFilter.trim().toLowerCase()))
+      ? allCurrentFolderFiles.filter(file => matchesSearchTokens(textFilter, file.name))
       : allCurrentFolderFiles;
 
     const commonTemplateRows = getCommonShipsFlatRows();
@@ -815,7 +1052,93 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       'Norse New Haven', 'Norse Ijmuiden', 'Belle Lune', 'Bow Fighter'
     ];
 
-    const parseSharePointRowMetadata = (
+    // Vessel alias tables + keyword sets used by parseSharePointRowMetadata.
+    // These depend only on render-time state, so they are built once per
+    // render instead of once per parse call (the parser runs several times per
+    // row on every render, which made List view and the filters slow).
+    const buildVesselAliasTables = () => {
+      const allVesselNames = new Set<string>();
+      const vesselAliasMap = new Map<string, string>();
+
+      allFleetVesselNames.forEach(name => {
+        allVesselNames.add(name);
+        vesselAliasMap.set(name.toLowerCase(), name);
+      });
+
+      (vessels || []).forEach(v => {
+        if (v.name) {
+          allVesselNames.add(v.name);
+          vesselAliasMap.set(v.name.toLowerCase(), v.name);
+        }
+      });
+
+      // SharePoint Term Store vessel terms for the active site — the
+      // authoritative vessel list per the "Vessel Name" managed metadata
+      // column (see GET /api/sites/{site_id}/term-store-vessels). Folders
+      // named after a vessel that only exists in the term store (not yet in
+      // the app's own vessels table) are still recognised as vessels here
+      // instead of falling through to "Not Listed".
+      liveTermStoreVesselNames.forEach(name => {
+        if (name && !vesselAliasMap.has(name.toLowerCase())) {
+          allVesselNames.add(name);
+          vesselAliasMap.set(name.toLowerCase(), name);
+        }
+      });
+
+      const dynamicVesselAliases = host.state.documentVesselAliases || {};
+      Object.entries(dynamicVesselAliases).forEach(([canonical, aliasList]) => {
+        allVesselNames.add(canonical);
+        vesselAliasMap.set(canonical.toLowerCase(), canonical);
+        if (Array.isArray(aliasList)) {
+          aliasList.forEach(a => {
+            if (a) vesselAliasMap.set(a.trim().toLowerCase(), canonical);
+          });
+        }
+      });
+
+      const matchVesselStringCache = new Map<string, string | null>();
+      const matchVesselString = (str: string): string | null => {
+        if (!str) return null;
+        if (matchVesselStringCache.has(str)) return matchVesselStringCache.get(str)!;
+        const result = matchVesselStringUncached(str);
+        matchVesselStringCache.set(str, result);
+        return result;
+      };
+      const matchVesselStringUncached = (str: string): string | null => {
+        const clean = str.trim().toLowerCase().replace(/^(mv|m\/v|mt)\s+/i, '').trim();
+        if (vesselAliasMap.has(clean)) return vesselAliasMap.get(clean)!;
+        if (vesselAliasMap.has(str.trim().toLowerCase())) return vesselAliasMap.get(str.trim().toLowerCase())!;
+        for (const [alias, canonical] of Array.from(vesselAliasMap.entries())) {
+          if (alias.length >= 4 && clean.includes(alias)) {
+            return canonical;
+          }
+        }
+        return null;
+      };
+
+      const nonVesselKeywords = new Set([
+        'sharepoint sites', 'sites documents', 'shared documents', 'documents',
+        'nksdocman', 'communication site', 'root', 'technical', 'crewing',
+        'technical & crewing', 'commercial & chartering', 'insurance',
+        'kaizen', 'kaizen - knowledge bank', 'common for all vessels', 'common for all ships',
+        'site library', 'general documents'
+      ]);
+      // Every configured site's own key/display name is a breadcrumb
+      // container segment (like "Communication Site" / "NKSDocMan" above),
+      // never a vessel or a real folder — e.g. "NissenKaiunExternal".
+      (host.state.documentSites || []).forEach(s => {
+        if (s.site_key) nonVesselKeywords.add(s.site_key.trim().toLowerCase());
+        if (s.sp_site_name) nonVesselKeywords.add(s.sp_site_name.trim().toLowerCase());
+      });
+      return { allVesselNames, vesselAliasMap, matchVesselString, nonVesselKeywords };
+    };
+    let vesselAliasTablesCache: ReturnType<typeof buildVesselAliasTables> | null = null;
+    const getVesselAliasTables = (): ReturnType<typeof buildVesselAliasTables> => {
+      if (!vesselAliasTablesCache) vesselAliasTablesCache = buildVesselAliasTables();
+      return vesselAliasTablesCache;
+    };
+
+    const parseSharePointRowMetadataUncached = (
       rowPath: string,
       fileName?: string | null,
       rawVessel?: string | null,
@@ -836,52 +1159,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         .map(s => s.trim())
         .filter(Boolean);
 
-      const allVesselNames = new Set<string>();
-      const vesselAliasMap = new Map<string, string>();
+      const { allVesselNames, matchVesselString, nonVesselKeywords } = getVesselAliasTables();
 
-      allFleetVesselNames.forEach(name => {
-        allVesselNames.add(name);
-        vesselAliasMap.set(name.toLowerCase(), name);
-      });
-
-      (vessels || []).forEach(v => {
-        if (v.name) {
-          allVesselNames.add(v.name);
-          vesselAliasMap.set(v.name.toLowerCase(), v.name);
-        }
-      });
-
-      const dynamicVesselAliases = host.state.documentVesselAliases || {};
-      Object.entries(dynamicVesselAliases).forEach(([canonical, aliasList]) => {
-        allVesselNames.add(canonical);
-        vesselAliasMap.set(canonical.toLowerCase(), canonical);
-        if (Array.isArray(aliasList)) {
-          aliasList.forEach(a => {
-            if (a) vesselAliasMap.set(a.trim().toLowerCase(), canonical);
-          });
-        }
-      });
-
-      const matchVesselString = (str: string): string | null => {
-        if (!str) return null;
-        const clean = str.trim().toLowerCase().replace(/^(mv|m\/v|mt)\s+/i, '').trim();
-        if (vesselAliasMap.has(clean)) return vesselAliasMap.get(clean)!;
-        if (vesselAliasMap.has(str.trim().toLowerCase())) return vesselAliasMap.get(str.trim().toLowerCase())!;
-        for (const [alias, canonical] of Array.from(vesselAliasMap.entries())) {
-          if (alias.length >= 4 && clean.includes(alias)) {
-            return canonical;
-          }
-        }
-        return null;
-      };
-
-      const nonVesselKeywords = new Set([
-        'sharepoint sites', 'sites documents', 'shared documents', 'documents',
-        'nksdocman', 'communication site', 'root', 'technical', 'crewing',
-        'technical & crewing', 'commercial & chartering', 'insurance',
-        'kaizen', 'kaizen - knowledge bank', 'common for all vessels', 'common for all ships',
-        'site library', 'general documents'
-      ]);
 
       let detectedVessel: string | null = null;
       if (rawVessel && !nonVesselKeywords.has(rawVessel.trim().toLowerCase())) {
@@ -935,8 +1214,43 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       if (!detectedMainFolder && rawGroup) {
         detectedMainFolder = matchDepartment(rawGroup);
       }
+      // A file that isn't under one of the known departments still sits
+      // under *some* real top-level folder — e.g. "Report", "ACRA CHARGE",
+      // or a vessel folder that sits flat at the site root (e.g.
+      // "mvtest2209", where the vessel folder itself is the only top-level
+      // container). Use the first non-generic path segment as the Main
+      // folder label instead of leaving it blank, so the row/column always
+      // shows the real folder it's actually in; prefer a non-vessel segment
+      // (a genuine "other" folder) but fall back to the vessel's own
+      // top-level folder when that's the only real segment there is.
+      const isFallbackSegment = (p: string): boolean => {
+        const low = p.trim().toLowerCase();
+        if (!low || nonVesselKeywords.has(low)) return false;
+        if (fileName && p.trim().toLowerCase() === fileName.trim().toLowerCase()) return false;
+        if (/\.(pdf|dwg|dxf|xlsx|xls|docx|doc|txt|msg|eml|png|jpg|jpeg|zip)$/i.test(p.trim())) return false;
+        return true;
+      };
+      // Index of the document-library root marker ("Documents"/"Shared
+      // Documents"/...) within the path, reused below so both the Main
+      // folder fallback and the sub-level split are structural (positional)
+      // rather than dependent on enumerating every possible container name
+      // — a site display name like "NissenKaiunExternal" sits *before* this
+      // marker and is therefore never a candidate, regardless of whether
+      // it's registered in any keyword set.
+      const libraryRootIdx = parts.findIndex(p => /^(documents|shared documents|sites documents|site library|general documents)$/i.test(p.trim()));
 
-      const mainFolderLabel = detectedMainFolder || 'Main folder not assigned';
+      if (!detectedMainFolder) {
+        // Scan only the segments that sit AFTER the document library root
+        // ("... > Documents > ACRA CHARGE", "... > Shared Documents >
+        // Report"). Falls back to scanning the whole path only if no
+        // library-root marker is present.
+        const candidateParts = libraryRootIdx >= 0 ? parts.slice(libraryRootIdx + 1) : parts;
+        const targetVesselLow = (detectedVessel || '').trim().toLowerCase();
+        const nonVesselSegment = candidateParts.find(p => isFallbackSegment(p) && p.trim().toLowerCase() !== targetVesselLow);
+        detectedMainFolder = nonVesselSegment || candidateParts.find(isFallbackSegment) || null;
+      }
+
+      const mainFolderLabel = detectedMainFolder || '';
 
       const knownContainers = new Set([
         'sharepoint sites', 'sites documents', 'shared documents', 'documents',
@@ -948,6 +1262,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         'technical & crewing', 'commercial and chartering', 'commercial & chartering',
         'insurance', 'kaizen', 'kaizen - knowledge bank'
       ]);
+      // Every configured site's own key/display name is a breadcrumb
+      // container segment, never a real sub-folder/category — same reason
+      // it's excluded from nonVesselKeywords above.
+      (host.state.documentSites || []).forEach(s => {
+        if (s.site_key) knownContainers.add(s.site_key.trim().toLowerCase());
+        if (s.sp_site_name) knownContainers.add(s.sp_site_name.trim().toLowerCase());
+      });
 
       const isFileString = (s: string): boolean => {
         if (!s) return false;
@@ -961,26 +1282,55 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         vesselIdx = parts.findIndex(p => matchVesselString(p) === detectedVessel || p.toLowerCase() === targetVesselLower);
       }
 
+      // Where the resolved Main folder segment itself sits in the path —
+      // everything strictly after it (and after the vessel, if any) is the
+      // real sub-folder/category chain. Searching from just after the
+      // library root (when present) guards against a same-named segment
+      // appearing earlier, e.g. inside the site name itself.
+      const mainFolderLow = mainFolderLabel.trim().toLowerCase();
+      const mainFolderIdx = mainFolderLow
+        ? parts.findIndex((p, i) => i > libraryRootIdx && p.trim().toLowerCase() === mainFolderLow)
+        : -1;
+
       let subLevels: string[];
       if (vesselIdx >= 0) {
         subLevels = parts.slice(vesselIdx + 1).filter(p => !isFileString(p) && (!targetVesselLower || p.toLowerCase() !== targetVesselLower));
+      } else if (mainFolderIdx >= 0) {
+        subLevels = parts.slice(mainFolderIdx + 1).filter(p => !isFileString(p) && !allVesselNames.has(p));
       } else {
         subLevels = parts.filter(p => !knownContainers.has(p.toLowerCase()) && !allVesselNames.has(p) && !isFileString(p));
       }
 
-      const section = subLevels[0] || (rawCategory && !knownContainers.has(rawCategory.toLowerCase()) ? rawCategory : '') || '';
-      const group = subLevels[1] || (rawGroup && rawGroup !== section && !knownContainers.has(rawGroup.toLowerCase()) ? rawGroup : '') || '';
-      const category = subLevels[2] || (rawCategory && rawCategory !== section && rawCategory !== group && !knownContainers.has(rawCategory.toLowerCase()) ? rawCategory : '') || '';
-      const subCategory = subLevels[3] || (rawSubCategory && rawSubCategory !== category && rawSubCategory !== group ? rawSubCategory : '') || '';
+      const section = subLevels[0] || (rawCategory && !isFileString(rawCategory) && !knownContainers.has(rawCategory.toLowerCase()) ? rawCategory : '') || '';
+      const group = subLevels[1] || (rawGroup && rawGroup !== section && !isFileString(rawGroup) && !knownContainers.has(rawGroup.toLowerCase()) ? rawGroup : '') || '';
+      const category = subLevels[2] || (rawCategory && rawCategory !== section && rawCategory !== group && !isFileString(rawCategory) && !knownContainers.has(rawCategory.toLowerCase()) ? rawCategory : '') || '';
+      const subCategory = subLevels[3] || (rawSubCategory && rawSubCategory !== category && rawSubCategory !== group && !isFileString(rawSubCategory) ? rawSubCategory : '') || '';
 
       return {
         vessel: vesselLabel,
         mainFolder: mainFolderLabel,
-        documentSection: section || 'Document section not assigned',
-        group: group || 'Group not assigned',
-        category: category || 'Category not assigned',
-        subCategory: subCategory || 'Sub-category not assigned',
+        documentSection: section || '',
+        group: group || '',
+        category: category || '',
+        subCategory: subCategory || '',
       };
+    };
+
+    const parseSharePointRowMetadataCache = new Map<string, ReturnType<typeof parseSharePointRowMetadataUncached>>();
+    const parseSharePointRowMetadata = (
+      rowPath: string,
+      fileName?: string | null,
+      rawVessel?: string | null,
+      rawGroup?: string | null,
+      rawCategory?: string | null,
+      rawSubCategory?: string | null
+    ): ReturnType<typeof parseSharePointRowMetadataUncached> => {
+      const cacheKey = [rowPath, fileName, rawVessel, rawGroup, rawCategory, rawSubCategory].map(v => v || '').join('\u0001');
+      const cached = parseSharePointRowMetadataCache.get(cacheKey);
+      if (cached) return cached;
+      const result = parseSharePointRowMetadataUncached(rowPath, fileName, rawVessel, rawGroup, rawCategory, rawSubCategory);
+      parseSharePointRowMetadataCache.set(cacheKey, result);
+      return result;
     };
 
     const getSharePointSiteFlatRows = (): FlatRow[] => {
@@ -997,6 +1347,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         folderId?: string,
         tags?: {
           vessel?: string;
+          domain?: string;
           department?: string;
           mainFolder?: string;
           group?: string;
@@ -1014,6 +1365,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
         const labels = parseSharePointRowMetadata(cleanPath, fileName);
         const tagVessel = tags?.vessel && tags.vessel !== 'To Be Classified' && tags.vessel !== 'Unknown' && tags.vessel !== 'Not Listed' ? tags.vessel : null;
+        const rowDomain = tags?.domain || '';
         const tagDept = tags?.department || tags?.mainFolder || null;
         const tagSection = tags?.documentSection || tags?.document_section || null;
         const tagGroup = tags?.group || null;
@@ -1030,6 +1382,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         generatedRows.push({
           srNo: `${srPrefix}-${generatedRows.length + 1}`,
           vesselName: rowVessel,
+          domain: rowDomain,
           group: rowMainFolder,
           category: rowCat,
           subCategory: rowSubCat,
@@ -1220,16 +1573,31 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     const scopeVesselRows = activeVesselName
       ? scopeRows.filter(r => r.vesselName.trim().toLowerCase() === activeVesselName.trim().toLowerCase())
       : scopeRows;
+    const wholeSiteSearch = Boolean(
+      host.state.activeDocumentSite && textFilter.trim().length > 0 &&
+      (docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents')
+    );
 
     const hierarchyForRow = (row: Pick<FlatRow, 'vesselName' | 'group' | 'category' | 'subCategory' | 'subFolderPath'>): { section: string; group: string; category: string; subCategory: string } => {
       const parts = (row.subFolderPath || '').split('>').map(part => part.trim()).filter(Boolean);
       const knownContainers = new Set([
         'vessels', 'specific vessels', 'documents', 'shared documents',
         'common for all ships', 'common', 'kaizen - knowledge bank', 'kaizen',
+        'sharepoint sites', 'sites documents', 'nksdocman', 'site library', 'general documents',
         (row.vesselName || '').trim().toLowerCase(),
         (row.group || '').trim().toLowerCase(),
         'technical & crewing', 'commercial & chartering', 'insurance', 'knowledge bank'
       ]);
+      // A "SharePoint Sites > <Site display name> > <Library> > …" row (the
+      // flattened multi-site list) carries the site's own name as a
+      // breadcrumb segment, never a real Group — same as
+      // parseSharePointRowMetadataUncached's knownContainers above. Without
+      // this, a file with no Group tag falls back to showing the site name
+      // itself (e.g. "Communication Site") as its Group.
+      (host.state.documentSites || []).forEach(s => {
+        if (s.site_key) knownContainers.add(s.site_key.trim().toLowerCase());
+        if (s.sp_site_name) knownContainers.add(s.sp_site_name.trim().toLowerCase());
+      });
 
       const subLevels = parts.filter(p => !knownContainers.has(p.toLowerCase()));
 
@@ -1241,14 +1609,25 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       return { section, group, category, subCategory };
     };
 
-    const getListViewLabels = (row: Pick<FlatRow, 'vesselName' | 'group' | 'category' | 'subCategory' | 'subFolderPath'> & { fileName?: string | null }): {
+    type ListViewLabels = {
       vessel: string;
       mainFolder: string;
       documentSection: string;
       group: string;
       category: string;
       subCategory: string;
-    } => {
+    };
+    // Called several times per row per render (dropdown options, filtering,
+    // grouping); memoize per row object for this render.
+    const listViewLabelsCache = new WeakMap<object, ListViewLabels>();
+    const getListViewLabels = (row: Pick<FlatRow, 'vesselName' | 'group' | 'category' | 'subCategory' | 'subFolderPath'> & { fileName?: string | null }): ListViewLabels => {
+      const cachedLabels = listViewLabelsCache.get(row);
+      if (cachedLabels) return cachedLabels;
+      const computed = getListViewLabelsUncached(row);
+      listViewLabelsCache.set(row, computed);
+      return computed;
+    };
+    const getListViewLabelsUncached = (row: Pick<FlatRow, 'vesselName' | 'group' | 'category' | 'subCategory' | 'subFolderPath'> & { fileName?: string | null }): ListViewLabels => {
       const parsed = parseSharePointRowMetadata(
         row.subFolderPath || '',
         row.fileName,
@@ -1260,31 +1639,19 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       // When parsing leaves fields unassigned, fall back to direct row field values
       // via hierarchyForRow so filter dropdowns are not blank.
       const needsFallback =
-        parsed.documentSection === 'Document section not assigned' ||
-        parsed.group === 'Group not assigned' ||
-        parsed.category === 'Category not assigned' ||
-        parsed.subCategory === 'Sub-category not assigned';
+        !parsed.documentSection ||
+        !parsed.group ||
+        !parsed.category ||
+        !parsed.subCategory;
       if (needsFallback) {
         const hier = hierarchyForRow(row);
         return {
           vessel: parsed.vessel,
-          mainFolder: parsed.mainFolder,
-          documentSection:
-            parsed.documentSection !== 'Document section not assigned'
-              ? parsed.documentSection
-              : hier.section || 'Document section not assigned',
-          group:
-            parsed.group !== 'Group not assigned'
-              ? parsed.group
-              : hier.group || 'Group not assigned',
-          category:
-            parsed.category !== 'Category not assigned'
-              ? parsed.category
-              : hier.category || 'Category not assigned',
-          subCategory:
-            parsed.subCategory !== 'Sub-category not assigned'
-              ? parsed.subCategory
-              : hier.subCategory || 'Sub-category not assigned',
+          mainFolder: parsed.mainFolder || '',
+          documentSection: parsed.documentSection || hier.section || '',
+          group: parsed.group || hier.group || '',
+          category: parsed.category || hier.category || '',
+          subCategory: parsed.subCategory || hier.subCategory || '',
         };
       }
       return parsed;
@@ -1312,60 +1679,1674 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       meta: getListViewLabels(row),
     }));
 
-    const documentSectionOptions = Array.from(new Set(
-      rowMetadataList
-        .map(item => item.meta.documentSection)
-        .filter(s => s && s !== 'Document section not assigned' && !allGroups.some(g => g.toLowerCase() === s.toLowerCase()))
-    )).sort();
+    // "Main folder" = every real top-level folder of the selected site's
+    // Documents library, live (see liveMainFolderNames above) — never a
+    // fixed list. liveMainFolderNames only covers a single resolvable site
+    // (docScopeType 'documents'/'vessels'/'sites'-breadcrumb); the flattened
+    // "Sites" list view spans every connected site at once, so there's no
+    // one site/drive to fetch a root listing for and it stays empty there.
+    // Union in whatever main-folder value each in-scope row already
+    // resolved to (same fallback logic as parseSharePointRowMetadata above)
+    // so the dropdown reflects real folders in every scope, not just the
+    // single-site ones.
+    const rowScannedMainFolderNames = Array.from(new Set(
+      scopeVesselRows
+        .map(r => getListViewLabels(r).mainFolder)
+        .filter(mf => mf && mf !== 'SharePoint Sites' && mf !== 'Main folder not assigned')
+    ));
+    // getListViewLabels()/parseSharePointRowMetadata() canonicalize a row's
+    // folder into the shared department name (e.g. "Technical & Crewing"),
+    // not the site's literal top-level folder name. That's fine as a
+    // fallback for the flattened multi-site "Sites" list view, which has no
+    // single root to list live — but for a resolvable single site (this
+    // scope, once liveMainFolderNames is populated from the real root
+    // listing), unioning both sources added a phantom option: NKSDocMan's
+    // real top-level folders are "Technical" and "Technical and Crewing
+    // New", plus a canonical "Technical & Crewing" that matches neither
+    // literal folder, so the dropdown showed 3 entries for 2 real folders.
+    // Once live data is available, trust it exclusively.
+    const mainFolderOptionsLive = liveMainFolderNames.length > 0
+      ? liveMainFolderNames
+      : Array.from(new Set([...liveMainFolderNames, ...rowScannedMainFolderNames]));
+    // While both sources are still loading (first render after a site
+    // switch, or before any row has been scanned) fall back to the known
+    // department set so the dropdown isn't empty for a moment.
+    const mainFolderOptions = mainFolderOptionsLive.length > 0
+      ? mainFolderOptionsLive.sort()
+      : Object.keys(KNOWN_MAIN_FOLDER_MAP);
+
+    // "Sub-folder" = a real folder found *nested* one level under the
+    // *currently selected/navigated* main folder — not any main folder in
+    // scope. When a main folder is selected (via the "All main folders"
+    // dropdown, docCategoryFilter — the actual UI control despite its name
+    // — or by drilling into one in Folder view) this list is scoped
+    // strictly to that one main folder, so it can never show another
+    // folder's sub-folders (or the site name, or a bare file) alongside
+    // them.
+    //
+    // A live top-level folder click (e.g. "Share Folder with Tsuneishi
+    // China") always pushes docMainFolder as the literal marker
+    // 'SharePoint Sites' (see the rootFolderCards click handler), not the
+    // folder's own name, so that alone can't identify the folder — use the
+    // breadcrumb's own last segment (currentFolderName) for that specific
+    // navigation shape instead. docMainFolder itself is deliberately NOT
+    // used as a fallback: it isn't reliably cleared when navigating back up
+    // to the Documents root, so trusting it let a stale value from a
+    // previous folder keep scoping this list after the user had backed all
+    // the way out.
+    const isTopLevelLiveFolderView = docViewMode === 'folder' && stackLevel === 4 &&
+      folderPathStack[0]?.id === 'sites_root' &&
+      (folderPathStack[1]?.id || '').startsWith('site:') &&
+      (folderPathStack[2]?.id || '').startsWith('drive:');
+    // Same "SharePoint Sites" live navigation shape as isTopLevelLiveFolderView,
+    // but *deeper* than the main-folder tile view (already inside a vessel /
+    // category / sub-folder). folderPathStack[3] is always the main folder in
+    // this shape regardless of how many more levels have been drilled into
+    // since, so it's still resolvable here — without this, scopedMainFolder-
+    // ForSubfolders stayed null the moment the user navigated past the main
+    // folder tiles (docCategoryFilter is only set by explicitly picking from
+    // the dropdown, which normal folder-click navigation never does), which
+    // in turn disabled the live recursive walk below and the "always keep the
+    // current folder selectable" fallback — the Sub-folder dropdown then only
+    // had whatever Source 3 (DB row scanning) happened to know about, so any
+    // folder nested deeper than that (or not yet reflected in a DB row) never
+    // appeared, however deep the real SharePoint nesting actually went.
+    const isWithinLiveFolderView = docViewMode === 'folder' && stackLevel > 4 &&
+      folderPathStack[0]?.id === 'sites_root' &&
+      (folderPathStack[1]?.id || '').startsWith('site:') &&
+      (folderPathStack[2]?.id || '').startsWith('drive:');
+    const scopedMainFolderForSubfolders = docCategoryFilter !== 'all'
+      ? docCategoryFilter
+      : (isTopLevelLiveFolderView && currentFolderName
+        ? currentFolderName
+        : (isWithinLiveFolderView ? (folderPathStack[3]?.name || null) : null));
+    // vesselFilter names one exact vessel (see the Vessel select above). When
+    // it's set, the Sub-folder dropdown below must be scoped to that
+    // vessel's own branch — otherwise every vessel folder nested anywhere
+    // under the selected main folder gets walked and offered together, so
+    // picking e.g. "Elephanta" left every other vessel's sub-folders in the
+    // list too. Normalized (not exact-string) so minor punctuation/spacing
+    // differences between the DB vessel name and the live folder name still
+    // match.
+    const normalizeVesselKey = (s: string): string => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const activeVesselFilter = vesselFilter && vesselFilter !== 'all' && vesselFilter.trim().toLowerCase() !== 'not listed'
+      ? normalizeVesselKey(vesselFilter)
+      : null;
+    // No confirmed main-folder scope → no sub-folder options at all, rather
+    // than falling back to a global scan across every folder in view.
+    // Row-derived sub-folders come ONLY from real folder segments that sit
+    // *below* the selected main folder in a row's own path. The old version
+    // pulled the row's group/category/documentSection labels instead, and
+    // those labels fall back to things like the site name — which is how
+    // "Communication Site" showed up as a sub-folder of a main folder that
+    // contains no such folder.
+    const allSiteNameSet = new Set(
+      (host.state.documentSites || [])
+        .reduce((acc, s) => acc.concat([s.sp_site_name, s.site_key, s.default_library_name]), [] as Array<string | undefined>)
+        .concat(['shared documents', 'documents'])
+        .filter(Boolean)
+        .map(n => String(n).trim().toLowerCase())
+    );
+    const subfolderOptionsFromRows: string[] = [];
+    // Parallel to subfolderOptionsFromRows, but keeps the REAL nesting chain
+    // (every ancestor segment, in order) for each name instead of flattening
+    // it away. subfolderOptionsFromRows itself has always thrown that shape
+    // out — it exists only to answer "is this name a sub-folder at all?" —
+    // which is fine for the plain-<select> era this fed, but the tree below
+    // (rowOnlyOptions) used to reuse those bare names as ROOT nodes for any
+    // folder the live recursive walk hadn't (yet, or ever, e.g. once its
+    // 300-entry/15-per-level budget is spent) discovered. A folder several
+    // levels deep — say Drawings and Manuals > To Be Classified > Basic >
+    // "07 Flow sensor" — landed at the TOP of the tree, as if it were a
+    // sibling of "Drawings and Manuals" itself, purely because this scan
+    // knew its name but not where it actually lives. Recording the chain
+    // here lets that fallback nest it correctly instead of guessing "root".
+    const subfolderChainByName = new Map<string, string[]>();
+    if (scopedMainFolderForSubfolders) {
+      const mainLow = scopedMainFolderForSubfolders.trim().toLowerCase();
+      filteredCategoryRows.forEach(r => {
+        const segs = (r.subFolderPath || '').split('>').map(s => s.trim()).filter(Boolean);
+        // "SharePoint Sites > <site> > <library> > <main folder> > …" —
+        // start looking after the site/library prefix so a main folder that
+        // happens to share a name with the site can't match there.
+        const searchFrom = (segs[0] || '').toLowerCase() === 'sharepoint sites' ? 3 : 0;
+        let mainIdx = -1;
+        for (let i = searchFrom; i < segs.length; i++) {
+          if (segs[i].toLowerCase() === mainLow) { mainIdx = i; break; }
+        }
+        if (mainIdx < 0) return;
+        // With a vessel selected, only take segments *below* that vessel's
+        // own segment (wherever it sits under the main folder) — a row not
+        // under the selected vessel at all is skipped entirely, rather than
+        // contributing its segments starting from the main folder.
+        let startIdx = mainIdx + 1;
+        if (activeVesselFilter) {
+          let vesselIdx = -1;
+          for (let i = startIdx; i < segs.length; i++) {
+            if (normalizeVesselKey(segs[i]) === activeVesselFilter) { vesselIdx = i; break; }
+          }
+          if (vesselIdx < 0) return;
+          startIdx = vesselIdx + 1;
+        }
+        const fileLow = (r.fileName || '').trim().toLowerCase();
+        const tailSegs = segs.slice(startIdx).filter(seg => {
+          const low = seg.toLowerCase();
+          if (fileLow && low === fileLow) return false;
+          if (/\.[a-z0-9]{2,5}$/i.test(seg)) return false;
+          return true;
+        });
+        tailSegs.forEach((seg, i) => {
+          subfolderOptionsFromRows.push(seg);
+          const key = seg.trim().toLowerCase();
+          const chain = tailSegs.slice(0, i + 1);
+          // Prefer the longest/deepest chain seen for a given name (a name
+          // reused at a shallower spot elsewhere shouldn't win and truncate
+          // a real nested chain already recorded for it).
+          const existing = subfolderChainByName.get(key);
+          if (!existing || chain.length > existing.length) subfolderChainByName.set(key, chain);
+        });
+      });
+    }
+    const subfolderOptionsFromRowsFiltered = subfolderOptionsFromRows.filter(v => {
+      const low = v.toLowerCase();
+      if (low === 'sharepoint sites' || low === 'main folder not assigned') return false;
+      if (allSiteNameSet.has(low)) return false;
+      if (KNOWN_MAIN_FOLDER_NAME_SET.has(low) || KNOWN_CATEGORY_NAME_SET.has(low)) return false;
+      if (mainFolderOptions.some(n => n.trim().toLowerCase() === low)) return false;
+      return true;
+    });
+    // Row-scanning alone misses a real sub-folder whose files/rows haven't
+    // been loaded into state yet — which is the normal state for a main
+    // folder the user has only *selected from the dropdown*, not actually
+    // opened (opening is what triggers the file/row fetch). Fetch that
+    // folder's own children straight from SharePoint, the same live source
+    // the tile grid itself uses, and union the two so the list is correct
+    // whether or not anything has been browsed into yet.
+    //
+    // folderPathStack[3]'s id is only trustworthy when its NAME still
+    // matches scopedMainFolderForSubfolders. A vessel that sits under more
+    // than one main folder (the "is also under" chips / the Main folder
+    // dropdown) sets docCategoryFilter to the newly picked folder
+    // synchronously, but navigateToLiveMainFolder's own walk to that
+    // folder's live id — resolving a not-yet-cached vessel path, or simply
+    // the render that lands between the two setState calls — can leave
+    // folderPathStack pointing at the *previous* main folder for a beat, or
+    // (if navigateToLiveMainFolder's own rootFolderCards lookup ever misses,
+    // e.g. a name/casing mismatch) indefinitely. Blindly trusting
+    // folderPathStack[3]?.id in that window resolved the Sub-folder walk
+    // against the OLD main folder's id, so the dropdown kept listing that
+    // folder's sub-folders — appearing "stuck" on whichever folder was
+    // selected first — even though the Main folder control had already
+    // switched. Falling back to the rootFolderCards lookup (the same one
+    // navigateToLiveMainFolder itself uses) whenever the names disagree
+    // keeps the Sub-folder list in step with whichever main folder is
+    // actually selected right now.
+    const breadcrumbMainFolderNode = (isTopLevelLiveFolderView || isWithinLiveFolderView) ? folderPathStack[3] : null;
+    const breadcrumbMainFolderMatches = !!breadcrumbMainFolderNode && !!scopedMainFolderForSubfolders &&
+      breadcrumbMainFolderNode.name.trim().toLowerCase() === scopedMainFolderForSubfolders.trim().toLowerCase();
+    const scopedMainFolderLiveFolderId = breadcrumbMainFolderMatches
+      ? (breadcrumbMainFolderNode!.id || null)
+      : (scopedMainFolderForSubfolders
+        ? (rootFolderCards.find(c => c.key.trim().toLowerCase() === scopedMainFolderForSubfolders.trim().toLowerCase())?.liveFolderId || null)
+        : (breadcrumbMainFolderNode?.id || null));
+    // The first three breadcrumb entries ("SharePoint Sites" > site > drive)
+    // that any live top-level-folder navigation is built on top of. Reused
+    // both when a folder tile is clicked directly and when a Main
+    // folder / Sub-folder is picked from the filter dropdowns instead, so
+    // both paths land on the exact same navigation shape.
+    const siteNavPrefix: { id: string; name: string }[] | null = isSitesScopeNav
+      ? [folderPathStack[0], folderPathStack[1], folderPathStack[2]].filter(Boolean) as { id: string; name: string }[]
+      : (effectiveLiveSiteId && effectiveLiveDriveId
+        ? [
+          { id: 'sites_root', name: 'SharePoint Sites' },
+          { id: `site:${effectiveLiveSiteId}`, name: activeLiveSite?.sp_site_name || activeLiveSite?.site_key || 'Site' },
+          { id: `drive:${effectiveLiveDriveId}`, name: activeLiveSite?.sp_site_name || 'Documents' },
+        ]
+        : null);
+    // A "sub-folder" isn't just the main folder's direct children — a
+    // folder like "SS366" can itself contain further folders ("SS366
+    // FINISH PLAN"), and the filter needs to surface those too, at
+    // whatever depth they're actually nested. Walk down live children
+    // recursively (bounded, so one huge tree can't fan out into thousands
+    // of API calls) and collect every folder found at any level under the
+    // selected main folder, along with its own live folder id and the full
+    // chain of ids/names from the main folder down to it — that chain is
+    // what lets picking it from the dropdown actually navigate there.
+    interface LiveSubfolderEntry {
+      name: string;
+      id: string;
+      depth: number; // 1 = direct child of the main folder, 2+ = nested deeper
+      pathIds: string[];
+      pathNames: string[];
+    }
+    const liveSiteOwnNameSet = new Set(
+      [activeLiveSite?.sp_site_name, activeLiveSite?.site_key, (host.state.documentSites || []).find(s => s.site_id === effectiveLiveSiteId)?.sp_site_name]
+        .filter(Boolean)
+        .map(n => (n as string).trim().toLowerCase())
+    );
+    // Total-entry budget across the whole walk, independent of depth — keeps
+    // a wide-and-deep tree from ballooning the dropdown (and the Graph call
+    // count) even though folders now nest "indefinitely" per level.
+    const LIVE_SUBFOLDER_BUDGET = 300;
+    const collectLiveFolderEntriesRecursive = (
+      folderId: string,
+      depthRemaining: number,
+      depth: number,
+      pathIds: string[],
+      pathNames: string[],
+      out: LiveSubfolderEntry[],
+    ): void => {
+      if (depthRemaining <= 0 || !folderId || !effectiveLiveSiteId || !effectiveLiveDriveId || out.length >= LIVE_SUBFOLDER_BUDGET) return;
+      const children = host._getOrLoadSiteFolderChildren(effectiveLiveSiteId, effectiveLiveDriveId, folderId).items || [];
+      // Dedup scoped to just THIS folder's own children listing (in case
+      // Graph ever repeats an item across a page boundary) — NOT a Set
+      // shared across the whole recursive walk. A shared/global Set here
+      // meant a folder name reused anywhere else in the tree (e.g. every
+      // vessel having its own "Drawings"/"Manuals"/"To Be Classified" —
+      // completely normal in this DMS) got silently dropped the instant
+      // that name was first seen under a different, often earlier-visited
+      // vessel/branch — see the vessel-scoped walk below, which exists
+      // specifically to work around this for the *selected* vessel; this
+      // fixes it at the source so every branch of the tree collects its own
+      // same-named folders correctly, not just the selected vessel's.
+      const seenAtThisLevel = new Set<string>();
+      children
+        // `folder.folder` (the Graph folder facet) is the only reliable
+        // positive folder signal — see the liveRootFolders note above for
+        // why `is_folder !== false` was unsafe here (it let files through).
+        .filter(f => f && !!f.folder && f.name)
+        .slice(0, 15)
+        .forEach(f => {
+          if (out.length >= LIVE_SUBFOLDER_BUDGET) return;
+          const name = (f.name || '').trim();
+          const childPathIds = f.id ? [...pathIds, f.id] : pathIds;
+          const childPathNames = [...pathNames, name];
+          if (name) {
+            const low = name.toLowerCase();
+            if (low !== 'sharepoint sites' && low !== 'main folder not assigned' &&
+              !KNOWN_MAIN_FOLDER_NAME_SET.has(low) && !KNOWN_CATEGORY_NAME_SET.has(low) &&
+              !liveSiteOwnNameSet.has(low) && !seenAtThisLevel.has(low)) {
+              seenAtThisLevel.add(low);
+              out.push({ name, id: f.id, depth, pathIds: childPathIds, pathNames: childPathNames });
+            }
+          }
+          if (f.id) collectLiveFolderEntriesRecursive(f.id, depthRemaining - 1, depth + 1, childPathIds, childPathNames, out);
+        });
+    };
+    const liveSubfolderEntries: LiveSubfolderEntry[] = [];
+    if (scopedMainFolderLiveFolderId) {
+      // Depth bound of 6 (not truly infinite) so one pathological tree can't
+      // hang the browser or fan out into hundreds of Graph calls; combined
+      // with the 300-entry budget above this comfortably covers real
+      // folder structures (e.g. SSxxx > FINISH PLAN > ELECTRIC/HULL/...)
+      // while staying bounded.
+      collectLiveFolderEntriesRecursive(scopedMainFolderLiveFolderId, 6, 1, [], [], liveSubfolderEntries);
+    }
+    // The folder the user is currently inside (and every folder between it
+    // and the main folder) must always be selectable, even when the bounded
+    // walk above cut it off (15 children per level / 300 total). Otherwise
+    // clicking into e.g. "ACRA CHARGE > NKS Canopus" sets the Sub-folder
+    // dropdown to a value it has no <option> for, and it silently shows
+    // "All sub-folders" while the grid is inside NKS Canopus.
+    if (
+      scopedMainFolderForSubfolders &&
+      folderPathStack[0]?.id === 'sites_root' &&
+      folderPathStack.length > 4 &&
+      (folderPathStack[3]?.name || '').trim().toLowerCase() === scopedMainFolderForSubfolders.trim().toLowerCase()
+    ) {
+      const existing = new Set(liveSubfolderEntries.map(e => e.name.trim().toLowerCase()));
+      const tail = folderPathStack.slice(4);
+      tail.forEach((node, i) => {
+        const low = (node.name || '').trim().toLowerCase();
+        if (!low || existing.has(low)) return;
+        existing.add(low);
+        const upto = tail.slice(0, i + 1);
+        liveSubfolderEntries.push({
+          name: node.name.trim(),
+          id: node.id,
+          depth: i + 1,
+          pathIds: upto.map(n => n.id),
+          pathNames: upto.map(n => n.name),
+        });
+      });
+    }
+    // The folder the user is CURRENTLY BROWSING (rendered as live tiles with
+    // real counts in the main content area, e.g. "Drawings"(7)/"Manuals"(15)/
+    // "To Be Classified"(0) under "Drawings and Manuals") must have its own
+    // children collected too, not just be selectable itself. The main-folder
+    // walk above starts at the *main* folder (e.g. "Technical & Crewing")
+    // and is depth-first with a 15-children-per-level slice and a 300-entry
+    // total budget — with ~24 vessels sitting under most main folders, that
+    // budget is very likely to be exhausted (or a whole vessel skipped by
+    // the 15-per-level cap) long before the walk ever reaches deep into the
+    // specific vessel/category branch actually being viewed. That's exactly
+    // why folders visibly rendered as live tiles right here never showed up
+    // in the dropdown. Unconditional — unlike the vessel-scoped walk below,
+    // this does NOT require the Vessel filter dropdown to be set, since
+    // simply clicking through "SharePoint Sites" breadcrumb tiles (the
+    // normal navigation flow) never touches vesselFilter at all.
+    if (
+      isWithinLiveFolderView &&
+      scopedMainFolderForSubfolders &&
+      folderPathStack.length > 4
+    ) {
+      const tail = folderPathStack.slice(4);
+      const currentTailNode = tail[tail.length - 1];
+      if (currentTailNode?.id) {
+        const currentFolderEntries: LiveSubfolderEntry[] = [];
+        collectLiveFolderEntriesRecursive(
+          currentTailNode.id, 4, tail.length + 1,
+          tail.map(n => n.id), tail.map(n => n.name), currentFolderEntries,
+        );
+        const existingIds = new Set(liveSubfolderEntries.map(e => e.id));
+        currentFolderEntries.forEach(e => {
+          if (!existingIds.has(e.id)) {
+            existingIds.add(e.id);
+            liveSubfolderEntries.push(e);
+          }
+        });
+      }
+    }
+    // When the Folder view is at/under the selected vessel's own folder
+    // (e.g. right after picking the vessel from the Vessel dropdown), walk
+    // that vessel folder's children directly. The main-folder walk above
+    // only takes 15 children per level, so a vessel folder beyond the first
+    // 15 under its main folder (e.g. #20 of "Technical"'s 23) never had its
+    // sub-folders collected, leaving the Sub-folder dropdown empty.
+    if (
+      activeVesselFilter &&
+      scopedMainFolderForSubfolders &&
+      folderPathStack[0]?.id === 'sites_root' &&
+      folderPathStack.length > 4 &&
+      (folderPathStack[3]?.name || '').trim().toLowerCase() === scopedMainFolderForSubfolders.trim().toLowerCase()
+    ) {
+      const tail = folderPathStack.slice(4);
+      const vesselIdxInTail = tail.findIndex(n => normalizeVesselKey(n.name || '') === activeVesselFilter);
+      if (vesselIdxInTail >= 0 && tail[vesselIdxInTail].id) {
+        const upto = tail.slice(0, vesselIdxInTail + 1);
+        // collectLiveFolderEntriesRecursive's own dedup is now scoped per
+        // folder (see its definition above), so this no longer needs its
+        // own separate seen-set to avoid the selected vessel losing a
+        // same-named folder to some other vessel the main walk reached
+        // first — this walk exists for a different reason: the main walk
+        // above only takes the first 15 children per level, so a vessel
+        // folder beyond that cutoff (e.g. #20 of "Technical"'s 23) never
+        // gets its own sub-folders collected there at all. Walking directly
+        // from the selected vessel's own id guarantees its branch is always
+        // covered regardless of where it sits in its main folder's listing.
+        const vesselEntries: LiveSubfolderEntry[] = [];
+        collectLiveFolderEntriesRecursive(
+          tail[vesselIdxInTail].id, 5, vesselIdxInTail + 2,
+          upto.map(n => n.id), upto.map(n => n.name), vesselEntries,
+        );
+        // Pushed AFTER the main walk's entries, so when liveSubfolderEntryByName
+        // (below) is built, this vessel's own id for a shared name wins over
+        // any other vessel's entry the main walk happened to collect first —
+        // navigating the dropdown always resolves to *this* vessel's folder.
+        liveSubfolderEntries.push(...vesselEntries);
+      }
+    }
+    // The walk above collects every folder under the *main* folder, across
+    // every vessel in it — narrow that down to the selected vessel's own
+    // branch before it reaches the dropdown. An entry qualifies when the
+    // vessel's name appears somewhere in its own path chain (pathNames)
+    // *before* its last segment; that last check excludes the vessel's own
+    // folder entry itself (already covered by the Vessel filter, not a
+    // "sub-folder" of it). Depth is re-based to the vessel so its direct
+    // children start at depth 1 again, matching the indentation the options
+    // below expect.
+    const vesselIndexInPath = (e: LiveSubfolderEntry): number =>
+      activeVesselFilter ? e.pathNames.findIndex(n => normalizeVesselKey(n) === activeVesselFilter) : -1;
+    const scopedLiveSubfolderEntries = activeVesselFilter
+      ? liveSubfolderEntries.filter(e => {
+        const idx = vesselIndexInPath(e);
+        return idx >= 0 && idx < e.pathNames.length - 1;
+      })
+      : liveSubfolderEntries;
+    // Kept unscoped (every vessel's entries, by name) so navigation lookups
+    // — including from a Sub-folder value chosen before the Vessel filter
+    // changed — can still resolve a folder id; only the *displayed* options
+    // and their depths above are vessel-scoped.
+    const liveSubfolderEntryByName = new Map(liveSubfolderEntries.map(e => [e.name.trim().toLowerCase(), e]));
+    // Preserve the live entries' own hierarchy (DFS) order so nesting reads
+    // top-to-bottom in the dropdown; row-scanned names with no live match
+    // (folders discovered only because a file under them was already loaded)
+    // have no known depth, so they're appended as top-level after the live
+    // ones, alphabetically.
+    const rowOnlyOptions = subfolderOptionsFromRowsFiltered
+      .filter(name => !liveSubfolderEntryByName.has(name.trim().toLowerCase()))
+      .filter((name, idx, arr) => arr.findIndex(n => n.trim().toLowerCase() === name.trim().toLowerCase()) === idx)
+      .sort();
+    // Nested tree for the Sub-folder filter (FolderTreeSelect). Three
+    // sources are merged into one name-keyed trie, because no single source
+    // covers every navigation flow / folder state on its own:
+    //   1. scopedLiveSubfolderEntries — the "SharePoint Sites" live recursive
+    //      walk (see above); each entry already carries its own full path.
+    //   2. host.state.spoFolderMap — the live folder graph the classic
+    //      Department > Vessel flow already builds and reads for its own
+    //      folder-tile counts (see subfolderFolderCountMap below). This is
+    //      what makes a genuinely empty container folder (children, but no
+    //      files of its own — e.g. "Drawings and Manuals" with 0 files but 3
+    //      sub-folders) show up at all: source 3 below can only ever find a
+    //      folder that has a *file* somewhere underneath it.
+    //   3. Row / uploaded-folder path scanning — a safety net for a folder
+    //      that hasn't been walked live yet in this session but does have
+    //      files under it, so the tree isn't empty on a cold load.
+    const subfolderTree: FolderTreeNode[] = (() => {
+      interface MutableFolderNode { name: string; id: string; children: Map<string, MutableFolderNode>; }
+      const roots = new Map<string, MutableFolderNode>();
+      const ensureChild = (parent: Map<string, MutableFolderNode>, name: string, id?: string): MutableFolderNode => {
+        const key = name.trim().toLowerCase();
+        let node = parent.get(key);
+        if (!node) {
+          node = { name: name.trim(), id: id || name.trim(), children: new Map() };
+          parent.set(key, node);
+        } else if (id && node.id === node.name) {
+          // Upgrade a synthetic (name-based) id to a real live one once a
+          // later source learns it, so navigation can use whichever source
+          // discovered this folder first.
+          node.id = id;
+        }
+        return node;
+      };
+      const toFolderTreeNodes = (m: Map<string, MutableFolderNode>): FolderTreeNode[] =>
+        Array.from(m.values()).map(n => ({ name: n.name, id: n.id, children: toFolderTreeNodes(n.children) }));
+      // Hoisted out of the Source 3 block below so the rowOnlyOptions
+      // fallback (end of this IIFE) can also use it to nest a name at its
+      // real known depth instead of dropping it at the root.
+      const insertPath = (segs: string[]): void => {
+        let level = roots;
+        segs.filter(isDisplayableFolderName).forEach(seg => {
+          const node = ensureChild(level, seg);
+          level = node.children;
+        });
+      };
+
+      // Source 1: SharePoint-Sites live walk.
+      scopedLiveSubfolderEntries.forEach(e => {
+        const idx = vesselIndexInPath(e);
+        const relNames = idx >= 0 ? e.pathNames.slice(idx + 1) : e.pathNames;
+        const relIds = idx >= 0 ? e.pathIds.slice(idx + 1) : e.pathIds;
+        let level = roots;
+        for (let i = 0; i < relNames.length; i++) {
+          const node = ensureChild(level, relNames[i], relIds[i]);
+          level = node.children;
+        }
+      });
+
+      // Source 2: Department > Vessel flow's own live folder graph.
+      // Not used in the Sites flow — source 1 above already covers it, from
+      // its own (better-scoped) recursive Graph walk.
+      const deptVesselLiveId: string | null = (() => {
+        if (atSitesRoot) return null;
+        const raw = vesselNodeInStack?.id;
+        if (raw && !/^(sf_|category_|common|kaizen_root|dept_|vessels_root|specific_vessels)/.test(raw)) return raw;
+        if (vesselName && docMainFolder) {
+          return host._getLiveSharePointFolderId([docMainFolder, vesselName].join(' > ')) || null;
+        }
+        return null;
+      })();
+      if (deptVesselLiveId) {
+        const MAX_DEPT_TREE_NODES = 500;
+        let nodeCount = 0;
+        const walkSpoFolderMap = (liveId: string, target: Map<string, MutableFolderNode>, depthLeft: number): void => {
+          if (depthLeft <= 0 || nodeCount >= MAX_DEPT_TREE_NODES) return;
+          const liveNode = host.state.spoFolderMap.get(liveId);
+          (liveNode?.children || []).forEach(child => {
+            if (!child.isFolder || !child.name) return;
+            if (child.id && host._appDeletedItemIds.has(child.id)) return;
+            if (nodeCount >= MAX_DEPT_TREE_NODES) return;
+            nodeCount++;
+            const node = ensureChild(target, child.name, child.id);
+            if (child.id) walkSpoFolderMap(child.id, node.children, depthLeft - 1);
+          });
+        };
+        walkSpoFolderMap(deptVesselLiveId, roots, 6);
+      }
+
+      // Source 3: row / uploaded-folder path scanning, full depth (not just
+      // one level relative to wherever the user currently is), scoped to
+      // this vessel + main folder.
+      if (vesselName && docMainFolder) {
+        (rows || []).forEach(r => {
+          if ((r.vesselName || '').trim().toLowerCase() !== vesselName.trim().toLowerCase()) return;
+          if ((r.group || '').trim().toLowerCase() !== docMainFolder.trim().toLowerCase()) return;
+          insertPath(getFolderTailSegments(r.subFolderPath, vesselName, docMainFolder));
+        });
+        Object.keys(uploadedFilesByFolder || {}).forEach(key => {
+          if (host._appDeletedItemIds.has(key)) return;
+          if (key.includes('||')) {
+            const parts = key.split('||');
+            const kVessel = (parts[0] || '').trim().toLowerCase();
+            const kGroup = (parts[1] || '').trim().toLowerCase();
+            if (kVessel && kVessel !== vesselName.trim().toLowerCase()) return;
+            if (kGroup && kGroup !== docMainFolder.trim().toLowerCase()) return;
+          } else {
+            const otherVessel = vessels.find(v => v.name && key.toLowerCase().includes(v.name.toLowerCase()));
+            if (otherVessel && otherVessel.name.toLowerCase() !== vesselName.trim().toLowerCase()) return;
+          }
+          insertPath(getFolderTailSegments(key, vesselName, docMainFolder));
+        });
+      }
+
+      // rowOnlyOptions: names the Sites-flow's own row-scan found with no
+      // CONFIRMED LIVE nesting (i.e. the live walk above hasn't — or, once
+      // its budget/depth caps are hit, simply can't — reach them this
+      // session). That never meant they're actually top-level: a folder
+      // like "07 Flow sensor" living at Drawings and Manuals > To Be
+      // Classified > Basic > "07 Flow sensor" used to land here and get
+      // added as a bare root (ensureChild(roots, name) with no ancestors),
+      // which is what made it render as a sibling of "Drawings and Manuals"
+      // instead of nested under it. subfolderChainByName (recorded during
+      // the same row scan that found the name) carries that real ancestor
+      // chain, so re-use it here via insertPath — same as Source 3 — and
+      // only fall back to a bare root when no chain was ever recorded for
+      // it (e.g. it surfaced from something other than a row path).
+      rowOnlyOptions.forEach(name => {
+        if (roots.has(name.trim().toLowerCase())) return;
+        const chain = subfolderChainByName.get(name.trim().toLowerCase());
+        if (chain && chain.length > 0) insertPath(chain);
+        else ensureChild(roots, name);
+      });
+
+      return toFolderTreeNodes(roots);
+    })();
+    // Selecting a Main folder / Sub-folder from the dropdown must not just
+    // filter the grid — it must navigate the Folder view to that folder's
+    // real contents, exactly as clicking its tile/breadcrumb would.
+    const navigateToLiveMainFolder = (folderKey: string): void => {
+      const card = rootFolderCards.find(c => c.key.trim().toLowerCase() === folderKey.trim().toLowerCase());
+      if (card && card.liveFolderId && siteNavPrefix) {
+        // A vessel already selected (it has a folder under this main folder
+        // too — the same vessel commonly sits under several main folders)
+        // should stay selected and land back inside *its own* folder here,
+        // not just at this main folder's root. Landing at the root has no
+        // vessel segment in the path, so deriveLiveNavFilterState/liveNavSync
+        // below would otherwise clear the Vessel dropdown back to "All
+        // vessels" — which is what made switching Main folder look like it
+        // silently dropped/broke the vessel selection instead of just
+        // showing that vessel's documents under the newly picked main folder.
+        if (vesselFilter && vesselFilter !== 'all' && vesselFilter.trim().toLowerCase() !== 'not listed') {
+          const vesselPaths = siteVesselFolderPaths.get(vesselFilter.trim().toLowerCase()) || [];
+          const vesselPathUnderNewMain = vesselPaths.find(p =>
+            (p.split('/')[0] || '').trim().toLowerCase() === folderKey.trim().toLowerCase());
+          if (vesselPathUnderNewMain) {
+            const nodes = resolveCachedDriveFolderStack(vesselPathUnderNewMain);
+            if (nodes) {
+              const vesselStack = [...siteNavPrefix, ...nodes];
+              host._pushFolderNav(vesselStack, 'SharePoint Sites');
+              host.setState({
+                ...deriveDocFiltersFromStack(vesselStack),
+                docSubfolderOtherFilter: 'all',
+                vesselFilter,
+                docListPage: 0,
+              });
+              return;
+            }
+            // resolveCachedDriveFolderStack only reads what's already in
+            // _siteFolderItemsCache and gives up (returning null) the
+            // moment a level hasn't been fetched yet — which, for a main
+            // folder the user hasn't opened at all this session (exactly
+            // the "is also under" chip case, since that chip is populated
+            // from a full tree scan, not from this per-level cache), is
+            // every level below its root. That's what made clicking the
+            // chip strand the user on this main folder's bare root with no
+            // further attempt to actually reach the vessel's folder there.
+            // Land on the root now so the click still does *something*
+            // visible, then keep resolving the real path level-by-level
+            // (awaiting each Graph round trip instead of bailing on the
+            // first one) and finish the jump the moment it comes back.
+            const rootStack = [...siteNavPrefix, { id: card.liveFolderId, name: card.key }];
+            host._pushFolderNav(rootStack, 'SharePoint Sites');
+            if (liveNavSync.derive) host.setState({ vesselFilter: liveNavSync.derive(rootStack).vesselFilter });
+            const targetVessel = vesselFilter;
+            resolveLiveDriveFolderStackAsync(vesselPathUnderNewMain).then(resolvedNodes => {
+              if (!resolvedNodes) return;
+              // Only complete the jump if the user hasn't since navigated
+              // away from the root this redirected them to, or changed the
+              // vessel selection — otherwise the fetch's result is stale
+              // and finishing the jump would yank them somewhere they
+              // didn't ask to go.
+              const current = host.state.folderPathStack || [];
+              const stillAtRedirectedRoot = current.length === rootStack.length &&
+                current[current.length - 1]?.id === rootStack[rootStack.length - 1]?.id &&
+                host.state.vesselFilter === targetVessel;
+              if (!stillAtRedirectedRoot) return;
+              const vesselStack = [...siteNavPrefix, ...resolvedNodes];
+              host._pushFolderNav(vesselStack, 'SharePoint Sites');
+              host.setState({
+                ...deriveDocFiltersFromStack(vesselStack),
+                docSubfolderOtherFilter: 'all',
+                vesselFilter: targetVessel,
+                docListPage: 0,
+              });
+            }).catch(() => undefined);
+            return;
+          }
+        }
+        const stack = [...siteNavPrefix, { id: card.liveFolderId, name: card.key }];
+        host._pushFolderNav(stack, 'SharePoint Sites');
+        if (liveNavSync.derive) host.setState({ vesselFilter: liveNavSync.derive(stack).vesselFilter });
+      }
+    };
+    const navigateToLiveSubfolder = (subfolderName: string): void => {
+      const entry = liveSubfolderEntryByName.get(subfolderName.trim().toLowerCase());
+      if (entry && siteNavPrefix && scopedMainFolderLiveFolderId && scopedMainFolderForSubfolders) {
+        const mainFolderNode = { id: scopedMainFolderLiveFolderId, name: scopedMainFolderForSubfolders };
+        const extraStack = entry.pathIds.map((id, i) => ({ id, name: entry.pathNames[i] }));
+        const stack = [...siteNavPrefix, mainFolderNode, ...extraStack];
+        host._pushFolderNav(stack, 'SharePoint Sites');
+        if (liveNavSync.derive) host.setState({ vesselFilter: liveNavSync.derive(stack).vesselFilter });
+      }
+    };
+    // Counterpart to navigateToLiveSubfolder for the classic Department >
+    // Vessel flow (not "SharePoint Sites"), used when picking a node from
+    // the FolderTreeSelect tree that came from subfolderTree's source 2/3
+    // (spoFolderMap / row-scanning) rather than the Sites live walk, which
+    // has no entry in liveSubfolderEntryByName to navigate from. Takes the
+    // node's full name path (root-to-leaf) since the same folder name can
+    // exist at more than one depth.
+    const navigateToDeptSubfolder = (pathSegs: string[]): void => {
+      if (atSitesRoot || !vesselName || !docMainFolder || pathSegs.length === 0) return;
+      const mainNode = folderPathStack[0];
+      const mainFolderNodeId = (mainNode && mainNode.name.trim().toLowerCase() === docMainFolder.trim().toLowerCase())
+        ? mainNode.id
+        : docMainFolder;
+      const vesselRaw = vesselNodeInStack?.id;
+      const vesselNodeId = (vesselRaw && !/^(sf_|category_|common|kaizen_root|dept_|vessels_root|specific_vessels)/.test(vesselRaw))
+        ? vesselRaw
+        : (host._getLiveSharePointFolderId([docMainFolder, vesselName].join(' > ')) || vesselName);
+      const newStack: { id: string; name: string }[] = [
+        { id: mainFolderNodeId, name: docMainFolder },
+        { id: vesselNodeId, name: vesselName },
+      ];
+      pathSegs.forEach((seg, i) => {
+        const breadcrumb = [docMainFolder, vesselName, ...pathSegs.slice(0, i + 1)].join(' > ');
+        newStack.push({ id: host._getLiveSharePointFolderId(breadcrumb) || breadcrumb, name: seg });
+      });
+      host._pushFolderNav(newStack, docMainFolder);
+      const leaf = newStack[newStack.length - 1];
+      void host._refreshFolderFiles(leaf.id, [docMainFolder, vesselName, ...pathSegs].join(' > '), true).catch(() => undefined);
+    };
+    // Jumping via a breadcrumb segment lands the Folder view on a specific
+    // point in the tree, but the Main folder / Sub-folder dropdowns only
+    // ever get set by their own onChange handlers above — a breadcrumb click
+    // bypasses those entirely, so the dropdowns kept showing whatever was
+    // selected before the jump even though the grid had moved on. Derive the
+    // correct dropdown values from the breadcrumb stack being navigated to,
+    // so every breadcrumb click re-syncs them the same way picking that same
+    // folder from the dropdown would have.
+    const deriveDocFiltersFromStack = (stack: { id: string; name: string }[]): { docCategoryFilter: string; docSubfolderOtherFilter: string } => {
+      // Live "SharePoint Sites" shape: [sites_root, site:, drive:, mainFolder, ...subfolders]
+      if (stack[0]?.id === 'sites_root') {
+        if (stack.length <= 3) return { docCategoryFilter: 'all', docSubfolderOtherFilter: 'all' };
+        if (stack.length === 4) return { docCategoryFilter: stack[3].name, docSubfolderOtherFilter: 'all' };
+        return { docCategoryFilter: stack[3].name, docSubfolderOtherFilter: stack[stack.length - 1].name };
+      }
+      // Live "Shared Documents" / "Documents" library shape (renderLibraryBrowser):
+      // [libRoot, mainFolder, ...subfolders] — the same kind of live SharePoint
+      // folder browsing as the "SharePoint Sites" shape above, just without the
+      // site/drive prefix, since this is a single fixed configured library rather
+      // than a user-picked one. A vessel folder commonly sits under more than one
+      // top-level main folder here too (e.g. "Technical" and "Technical and
+      // Crewing New" both containing "Bow Fighter"), so this needs the same
+      // per-navigation re-sync: without it, the Main folder / Sub-folder dropdowns
+      // kept whatever value they were last set to (from an earlier dropdown pick,
+      // possibly under a completely different main folder) even after the user
+      // had clicked folder tiles into a different main folder entirely — which is
+      // what let the Sub-folder dropdown keep resolving against the wrong
+      // (earlier-selected) main folder's live id while the grid itself had
+      // already moved to the newly opened one.
+      if (stack[0]?.id === 'lib:shared_documents' || stack[0]?.id === 'lib:documents') {
+        if (stack.length <= 1) return { docCategoryFilter: 'all', docSubfolderOtherFilter: 'all' };
+        if (stack.length === 2) return { docCategoryFilter: stack[1].name, docSubfolderOtherFilter: 'all' };
+        return { docCategoryFilter: stack[1].name, docSubfolderOtherFilter: stack[stack.length - 1].name };
+      }
+      // Any other breadcrumb shape (department / vessel / Kaizen drill-down)
+      // doesn't use the Main folder / Sub-folder dropdowns — those only ever
+      // apply to the live SharePoint-folder scope — so landing there via
+      // breadcrumb should leave them cleared, same as the existing idx===0 /
+      // idx===1 handlers below already do explicitly.
+      return { docCategoryFilter: 'all', docSubfolderOtherFilter: 'all' };
+    };
 
     const groupLevelRows = rowMetadataList.filter(item =>
       docCategoryFilter === 'all' || item.meta.documentSection.trim().toLowerCase() === docCategoryFilter.trim().toLowerCase()
     );
-    const groupLevelOptions = Array.from(new Set(
-      groupLevelRows
-        .map(item => item.meta.group)
-        .filter(g => g && g !== 'Group not assigned')
-    )).sort();
 
     const categoryRows = groupLevelRows.filter(item =>
       docGroupLevelFilter === 'all' || item.meta.group.trim().toLowerCase() === docGroupLevelFilter.trim().toLowerCase()
     );
-    const categoryOptions = Array.from(new Set(
-      categoryRows
-        .map(item => item.meta.category)
-        .filter(c => c && c !== 'Category not assigned')
-    )).sort();
+    const drawingCategories = ['Hull', 'Basic', 'Electrical', 'Machinery', 'Safety'];
+    const manualCategories = ['Automation', 'Auxiliary Engine', 'Boiler', 'Bridge Equipments', 'Cargo', 'Deck Machinery', 'Electrical', 'Main Engine', 'Other Manuals', 'Pollution', 'Propulsion', 'Refrigeration', 'Safety', 'Shafting', 'Steering Gear'];
+    const categoryOptions = (() => {
+      const normalizedGroup = (docGroupLevelFilter || 'all').trim().toLowerCase();
+      if (normalizedGroup === 'drawings') return drawingCategories.slice();
+      if (normalizedGroup === 'manuals') return manualCategories.slice();
+      return drawingCategories.concat(manualCategories).filter((value, index, array) => array.indexOf(value) === index);
+    })();
 
+    // Sub-category options, scoped the same way categoryOptions is scoped
+    // to the selected group: once a category is picked (docLeafCategoryFilter),
+    // narrow to rows under that category too, so the dropdown only ever
+    // offers sub-categories that actually exist under the current
+    // group/category selection.
     const subCategoryRows = categoryRows.filter(item =>
       docLeafCategoryFilter === 'all' || item.meta.category.trim().toLowerCase() === docLeafCategoryFilter.trim().toLowerCase()
     );
-    const subCategoryOptions = Array.from(new Set(
-      subCategoryRows
-        .map(item => item.meta.subCategory)
-        .filter(s => s && s !== 'Sub-category not assigned')
+    const subCategoryOptions: string[] = Array.from(new Set(
+      subCategoryRows.map(item => item.meta.subCategory).filter(Boolean)
     )).sort();
 
+    // ── Group / Category for the List view columns and their filters ──
+    // Real folder names only *partly* spell these out, e.g.
+    //   "SS367-MAERSK FERRATO-Ship drawings, Plans, Manuals" > … > "ELECT"
+    // so both are matched on partial words, never on exact folder names:
+    //   • Group: a folder whose name contains the word "drawing(s)"/"dwg"
+    //     or "manual(s)". The DEEPEST such folder decides, so
+    //     "Drawings and Manuals > Drawings > Hull" is Drawings only; a folder
+    //     naming both ("Ship drawings, Plans, Manuals") with nothing more
+    //     specific below it counts as both.
+    //   • Category: any folder in the path whose words cover the category's
+    //     words, where a folder word may be an abbreviation (≥4 letters) of
+    //     the category word or vice versa: "ELECT" → Electrical,
+    //     "MACH" → Machinery, "BRIDGE EQUIP" → Bridge Equipments,
+    //     "Aux Engine" → Auxiliary Engine ("AUX" is 3 letters, so only when
+    //     the remaining words also match).
+    // File names are never matched — only the folders a file sits in.
+    const GC_STOPWORDS = new Set(['and', 'of', 'the', 'for', 'a']);
+    const gcWords = (value: string): string[] => (value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(' ')
+      .filter(w => w && !GC_STOPWORDS.has(w));
+    const gcWordMatches = (categoryWord: string, folderWord: string, allowShort: boolean): boolean => {
+      if (categoryWord === folderWord) return true;
+      const minLen = allowShort ? 3 : 4;
+      if (folderWord.length >= minLen && categoryWord.indexOf(folderWord) === 0) return true; // ELECT → electrical
+      if (categoryWord.length >= 4 && folderWord.indexOf(categoryWord) === 0) return true;    // electricals → electrical
+      return false;
+    };
+    const folderMatchesCategory = (folderName: string, category: string): boolean => {
+      const catWords = gcWords(category);
+      const folderWords = gcWords(folderName);
+      if (catWords.length === 0 || folderWords.length === 0) return false;
+      // Multi-word categories may use a 3-letter abbreviation ("Aux") since
+      // the other word(s) must still match; single words need ≥4 letters.
+      const allowShort = catWords.length > 1;
+      return catWords.every(cw => folderWords.some(fw => gcWordMatches(cw, fw, allowShort)));
+    };
+    const folderGroupsOf = (folderName: string): { drawings: boolean; manuals: boolean } => {
+      const words = gcWords(folderName);
+      return {
+        drawings: words.some(w => /^(drawings?|dwgs?)$/.test(w)),
+        manuals: words.some(w => /^manuals?$/.test(w)),
+      };
+    };
+    const pathFolderSegments = (subFolderPath: string): string[] => (subFolderPath || '')
+      .split(/\s*>\s*|\//)
+      .map(seg => seg.trim())
+      .filter(seg => !!seg && !/\.[a-z0-9]{2,5}$/i.test(seg));
+    const decisiveGroupOf = (segments: string[]): { idx: number; drawings: boolean; manuals: boolean } | null => {
+      for (let i = segments.length - 1; i >= 0; i--) {
+        const g = folderGroupsOf(segments[i]);
+        if (g.drawings || g.manuals) return { idx: i, drawings: g.drawings, manuals: g.manuals };
+      }
+      return null;
+    };
+    /** True when the folder path satisfies the Group and/or Category filter. */
+    const pathMatchesGroupCategory = (subFolderPath: string, group: string, category: string): boolean => {
+      const segments = pathFolderSegments(subFolderPath);
+      if (group !== 'all') {
+        const g = decisiveGroupOf(segments);
+        if (!g) return false;
+        const want = group.trim().toLowerCase();
+        if (want === 'drawings' && !g.drawings) return false;
+        if (want === 'manuals' && !g.manuals) return false;
+      }
+      if (category !== 'all') {
+        if (!segments.some(seg => folderMatchesCategory(seg, category))) return false;
+      }
+      return true;
+    };
+    const drawingsManualsCache = new WeakMap<object, { group: string | null; category: string | null }>();
+    const drawingsManualsForRow = (row: Pick<FlatRow, 'subFolderPath'>): { group: string | null; category: string | null } => {
+      const cached = drawingsManualsCache.get(row);
+      if (cached) return cached;
+      const segments = pathFolderSegments(row.subFolderPath || '');
+      let result: { group: string | null; category: string | null } = { group: null, category: null };
+      const g = decisiveGroupOf(segments);
+      if (g) {
+        const group = g.drawings && g.manuals ? 'Drawings / Manuals' : (g.drawings ? 'Drawings' : 'Manuals');
+        const known = g.drawings && g.manuals
+          ? drawingCategories.concat(manualCategories)
+          : (g.drawings ? drawingCategories : manualCategories);
+        // Category: first folder below the group folder that is (an
+        // abbreviation of) a known category, shown by its canonical name;
+        // otherwise the folder directly under the group folder, as before.
+        let category: string | null = null;
+        for (let i = g.idx + 1; i < segments.length && !category; i++) {
+          const hit = known.find(c => folderMatchesCategory(segments[i], c));
+          if (hit) category = hit;
+        }
+        if (!category && segments[g.idx + 1]) category = segments[g.idx + 1];
+        result = { group, category };
+      }
+      drawingsManualsCache.set(row, result);
+      return result;
+    };
+
+    // Sub-folder tree <-> "All categories" dropdown sync. These are two
+    // different pickers over what is often the same underlying folder (the
+    // tree shows live/scanned sub-folders; the flat dropdown shows the
+    // fixed Drawings/Manuals category list) — selecting one should update
+    // the other whenever they clearly refer to the same folder, in both
+    // directions, so the two never show contradictory selections.
+    const findCategoryForFolderName = (folderName: string): string | null => {
+      if (!folderName || folderName === 'all') return null;
+      const norm = folderName.trim().toLowerCase();
+      const exact = categoryOptions.find(c => c.trim().toLowerCase() === norm);
+      if (exact) return exact;
+      return categoryOptions.find(c => folderMatchesCategory(folderName, c)) || null;
+    };
+    const findSubfolderNodeForCategory = (category: string): { name: string; path: string[] } | null => {
+      if (!category || category === 'all') return null;
+      const norm = category.trim().toLowerCase();
+      let exactHit: { name: string; path: string[] } | null = null;
+      let fuzzyHit: { name: string; path: string[] } | null = null;
+      const walk = (nodes: FolderTreeNode[], trail: string[]): void => {
+        for (const node of nodes) {
+          const ownPath = [...trail, node.name];
+          if (!exactHit && node.name.trim().toLowerCase() === norm) exactHit = { name: node.name, path: ownPath };
+          if (!fuzzyHit && folderMatchesCategory(node.name, category)) fuzzyHit = { name: node.name, path: ownPath };
+          if (node.children.length) walk(node.children, ownPath);
+        }
+      };
+      walk(subfolderTree, []);
+      return exactHit || fuzzyHit;
+    };
+
+    // Vessels the folder tree itself names: a top-level main folder or a
+    // (recursively discovered) sub-folder whose name matches a recognized
+    // vessel — e.g. a vessel folder sitting flat at the site root, or one
+    // nested a few levels down — must be selectable from the Vessel filter
+    // too, not just vessels that already have DB rows. "Recognized" means
+    // matched against the Term Store / DB vessel set already used elsewhere
+    // to classify folders (liveTermStoreVesselSet), not a name guess, so an
+    // ordinary folder like "Report" or "Insurance" can't get misread as a
+    // vessel. Only the sub-folder tree of the *currently scoped* main folder
+    // is walked (liveSubfolderEntries, computed above for the Sub-folder
+    // dropdown) — walking every main folder's full subtree on every render
+    // would be far too expensive — so this widens as the user browses/picks
+    // different main folders, in both Folder view and List view alike.
+    const vesselDisplayNameByLower = new Map<string, string>();
+    liveTermStoreVesselNames.forEach(n => { if (n) vesselDisplayNameByLower.set(n.trim().toLowerCase(), n); });
+    (vessels || []).forEach(v => { if (v.name && !vesselDisplayNameByLower.has(v.name.trim().toLowerCase())) vesselDisplayNameByLower.set(v.name.trim().toLowerCase(), v.name); });
+    const folderDetectedVesselNames = Array.from(new Set(
+      [...liveMainFolderNames, ...liveSubfolderEntries.map(e => e.name)]
+        .map(name => vesselDisplayNameByLower.get(name.trim().toLowerCase()))
+        .filter((name): name is string => Boolean(name))
+    ));
+
     const distinctVesselsInScope = Array.from(new Set(
-      scopeRows.map(r => getListViewLabels(r).vessel).filter(Boolean)
+      scopeRows.map(r => getListViewLabels(r).vessel).filter(Boolean).concat(folderDetectedVesselNames)
     )).sort((a, b) => {
       if (a === 'Not Listed') return 1;
       if (b === 'Not Listed') return -1;
       return a.localeCompare(b);
     });
 
-    const vesselFilterOptions = mainFolderPage && docMainFolder
+    const vesselFilterOptions = (mainFolderPage && docMainFolder
       ? vessels.filter(v => scopeRows.some(r =>
           r.vesselName.trim().toLowerCase() === v.name.trim().toLowerCase() &&
           r.group.trim().toLowerCase() === docMainFolder.trim().toLowerCase()
         ))
-      : vessels;
-    const siteVesselNames = Array.from(new Set(
-      scopeRows
-        .map(row => getListViewLabels(row).vessel)
-        .filter(name => name && name !== 'Not Listed')
-        .concat(vessels.map(v => v.name))
-    )).sort((a, b) => a.localeCompare(b));
-    const siteVesselOptions = siteVesselNames.map(name => ({ id: name, name }));
+      : vessels
+    ).concat(
+      // Same minimal shape as KNOWN_SPO_VESSELS below — only id/name are read
+      // where this list is rendered (the Vessel <select>'s options), but the
+      // full VesselRecord shape (imported from ../types/rows, not available
+      // to read from here) is matched as closely as that existing pattern
+      // does, with `as unknown as VesselRecord` covering any other field
+      // that type declares beyond what's known here.
+      folderDetectedVesselNames
+        .filter(name => !vessels.some(v => v.name.trim().toLowerCase() === name.trim().toLowerCase()))
+        .map(name => ({ id: name, name, status: 'Active', is_provisioned: true } as unknown as VesselRecord))
+    );
+    // ── Site-specific vessel detection (Vessel filter, folder cards, rows) ──
+    // A vessel belongs to the site being viewed only when a real folder on
+    // that site is named after it. Candidate vessel names are this site's
+    // Term Store vessels plus every vessel created from this app. A folder
+    // name matches a vessel when, after normalising:
+    //   • exactly — "Bow Fighter", "MV Bow Fighter", "bow-fighter"
+    //   • with a leading number stripped — "01 Bow Fighter", "123-Bow Fighter"
+    //   • partially, on whole words — "Bow Fighter Drawings" (names ≥5 chars;
+    //     the longest vessel name wins, so "Maersk EI Banco" beats "Maersk").
+    // Substring matching on file names (what parseSharePointRowMetadata does)
+    // is NOT used here — that is how vessels with no folder on the site, e.g.
+    // "Dutches Emerald", leaked into the dropdown.
+    const normVesselText = (value: string): string => (value || '')
+      .toLowerCase()
+      .replace(/^(m\/v|mv|mt)[\s.]+/, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+    const normFolderText = (value: string): string => normVesselText(
+      (value || '').replace(/^[\s\d._\-#()[\]]+/, '')
+    );
+    const vesselCandidateByKey = new Map<string, string>();
+    const addVesselCandidate = (name: string | undefined | null): void => {
+      const key = normVesselText(name || '');
+      if (key && !vesselCandidateByKey.has(key)) vesselCandidateByKey.set(key, (name || '').trim());
+    };
+    liveTermStoreVesselNames.forEach(addVesselCandidate);
+    (vessels || []).forEach(v => addVesselCandidate(v.name));
+    const partialVesselKeys = Array.from(vesselCandidateByKey.keys())
+      .filter(key => key.length >= 5)
+      .sort((x, y) => y.length - x.length);
+    // Typo tolerance for folder names that misspell a vessel, e.g. folder
+    // "022024 Duchess Emeralad" for vessel "Duchess Emerald". Deliberately
+    // narrow so different vessels can't collide ("mvtest3" vs "mvtest4"):
+    //   • only multi-word vessel names;
+    //   • every word must line up with a folder word, in order;
+    //   • at least one word must match exactly;
+    //   • a word may differ by 1 edit (2 for words of 9+ letters), and only
+    //     when both words are ≥5 letters and contain no digits.
+    const withinEditDistance = (a: string, b: string, max: number): boolean => {
+      if (a === b) return true;
+      if (Math.abs(a.length - b.length) > max) return false;
+      let prev: number[] = [];
+      for (let j = 0; j <= b.length; j++) prev.push(j);
+      for (let i = 1; i <= a.length; i++) {
+        const cur: number[] = [i];
+        let rowMin = i;
+        for (let j = 1; j <= b.length; j++) {
+          const cost = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
+          const val = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+          cur.push(val);
+          if (val < rowMin) rowMin = val;
+        }
+        if (rowMin > max) return false;
+        prev = cur;
+      }
+      return prev[b.length] <= max;
+    };
+    const vesselWordsClose = (folderWord: string, vesselWord: string): boolean => {
+      if (folderWord === vesselWord) return true;
+      if (folderWord.length < 5 || vesselWord.length < 5) return false;
+      if (/\d/.test(folderWord) || /\d/.test(vesselWord)) return false;
+      const max = Math.max(folderWord.length, vesselWord.length) >= 9 ? 2 : 1;
+      return withinEditDistance(folderWord, vesselWord, max);
+    };
+    // Only the START of the folder's (already leading-digit/punct-stripped)
+    // word sequence is checked against the vessel's words — a sliding window
+    // over the WHOLE folder name used to let a folder that merely mentions
+    // the vessel somewhere in a longer descriptive title match too, e.g.
+    // "Ship's Copy (USB) for BOW FIGHTER at FUKUOKA SY" (a document title
+    // filed under an unrelated "Share with Mashin Shokai Singapore" folder)
+    // matched vessel "Bow Fighter" purely because those two words happened
+    // to appear back-to-back later in the sentence. A real (possibly typo'd
+    // or suffixed, e.g. "Duchess Emeralad" or "Bow Fighter - Handover")
+    // vessel folder has the vessel's name leading, not buried mid-sentence.
+    const fuzzyVesselKeyMatches = (folderKey: string, vesselKey: string): boolean => {
+      const vesselWords = vesselKey.split(' ').filter(Boolean);
+      const folderWords = folderKey.split(' ').filter(Boolean);
+      if (vesselWords.length < 2 || folderWords.length < vesselWords.length) return false;
+      let exactCount = 0;
+      for (let k = 0; k < vesselWords.length; k++) {
+        const fw = folderWords[k];
+        const vw = vesselWords[k];
+        if (fw === vw) { exactCount++; continue; }
+        if (!vesselWordsClose(fw, vw)) return false;
+      }
+      return exactCount > 0;
+    };
+    const folderVesselMatchCache = new Map<string, string | null>();
+    const matchFolderToVessel = (folderName: string): string | null => {
+      const raw = (folderName || '').trim();
+      if (!raw) return null;
+      if (folderVesselMatchCache.has(raw)) return folderVesselMatchCache.get(raw)!;
+      let result: string | null = null;
+      const exactKey = normVesselText(raw);
+      const strippedKey = normFolderText(raw);
+      if (vesselCandidateByKey.has(exactKey)) {
+        result = vesselCandidateByKey.get(exactKey)!;
+      } else if (strippedKey && vesselCandidateByKey.has(strippedKey)) {
+        result = vesselCandidateByKey.get(strippedKey)!;
+      } else if (strippedKey) {
+        // Require the vessel key to LEAD the (leading-digit/punct-stripped)
+        // folder text — not merely appear anywhere inside it. `indexOf`
+        // against the whole padded string used to also match a vessel name
+        // sitting in the middle or at the end of an unrelated, longer folder
+        // title (e.g. "Ship's Copy (USB) for BOW FIGHTER at FUKUOKA SY" ->
+        // matched "Bow Fighter" even though that folder isn't the vessel's
+        // own folder at all, just a document filed elsewhere that mentions
+        // it). A real vessel folder — "Bow Fighter", "022024 Duchess
+        // Emeralad", "Bow Fighter - Handover" — has the vessel name leading
+        // once the numeric/punctuation prefix is stripped; startsWith keeps
+        // that case working while rejecting a mid-sentence mention.
+        const partial = partialVesselKeys.find(key => strippedKey === key || strippedKey.startsWith(`${key} `));
+        const fuzzy = partial ? undefined : partialVesselKeys.find(key => fuzzyVesselKeyMatches(strippedKey, key));
+        const hit = partial || fuzzy;
+        result = hit ? vesselCandidateByKey.get(hit)! : null;
+      }
+      folderVesselMatchCache.set(raw, result);
+      return result;
+    };
+    const vesselNamesEqual = (x: string, y: string): boolean =>
+      normVesselText(x) === normVesselText(y);
+
+    // Every folder we already know exists on the viewed site/drive, as
+    // drive-relative paths ("Technical & Crewing/Bow Fighter"). Sources, all
+    // scoped to effectiveLiveSiteId/effectiveLiveDriveId: the drive root
+    // listing, every folder listing already fetched into
+    // _siteFolderItemsCache (Folder view browsing and the List view subtree
+    // prefetch), and the live tree when it belongs to this site.
+    const knownSiteFolderPaths: string[] = [];
+    {
+      const seenPaths = new Set<string>();
+      const addFolderPath = (path: string): void => {
+        const clean = (path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+        const low = clean.toLowerCase();
+        if (!clean || seenPaths.has(low)) return;
+        seenPaths.add(low);
+        knownSiteFolderPaths.push(clean);
+      };
+      liveRootFolders.forEach(f => addFolderPath(f.key));
+      if (effectiveLiveSiteId && effectiveLiveDriveId) {
+        const cachePrefix = `${effectiveLiveSiteId}::${effectiveLiveDriveId}::`;
+        host._siteFolderItemsCache.forEach((entry, key) => {
+          if (!key.startsWith(cachePrefix) || !entry || !Array.isArray(entry.items)) return;
+          const parentPath = String((entry as any).parentPath || '').replace(/^\/+|\/+$/g, '');
+          entry.items.forEach((item: any) => {
+            if (!item?.name || !item.folder) return;
+            addFolderPath(parentPath ? `${parentPath}/${item.name}` : item.name);
+          });
+        });
+      }
+      if (!isSitesScopeNav || sitesScopeMatchedSite?.site_key === activeLiveSite?.site_key) {
+        (host.state.documentLiveFolders || []).forEach(folder => {
+          if (folder.is_folder !== false && folder.path) addFolderPath(folder.path);
+        });
+      }
+    }
+    // vessel display name (lower-cased) → drive-relative paths of its folders.
+    const siteVesselFolderPaths = new Map<string, string[]>();
+    const siteVesselByLower = new Map<string, string>();
+    const recordSiteVesselFolder = (vesselName: string, path: string): void => {
+      const low = vesselName.trim().toLowerCase();
+      if (!siteVesselByLower.has(low)) siteVesselByLower.set(low, vesselName.trim());
+      const paths = siteVesselFolderPaths.get(low) || [];
+      if (paths.indexOf(path) < 0) paths.push(path);
+      siteVesselFolderPaths.set(low, paths);
+    };
+    // A deeper folder whose OWN name merely *mentions* a vessel (e.g. a
+    // "Certificate (BOW FIGHTER)" folder several levels inside that vessel's
+    // own tree, under "Drawings and Manuals/To Be Classified/…") is not a
+    // second home for the vessel — matchFolderToVessel's partial/fuzzy rules
+    // exist to tolerate typo'd vessel FOLDER names ("022024 Duchess
+    // Emeralad"), not to classify every folder that happens to reference the
+    // vessel in its title. Recording those too made "select vessel" land
+    // several levels too deep (straight into To Be Classified > Certificate
+    // (BOW FIGHTER) instead of the vessel's own folder) whenever that deep
+    // path happened to resolve/get tried before the real one. Skip a match
+    // when the vessel's name already appears as an EARLIER segment of the
+    // same path — that's proof this is a sub-folder nested under the
+    // vessel's real folder, not an alternate location for it.
+    const isNestedUnderSameVessel = (ancestorSegments: string[], vesselName: string): boolean =>
+      ancestorSegments.some(seg => {
+        const segVessel = matchFolderToVessel(seg);
+        return !!segVessel && vesselNamesEqual(segVessel, vesselName);
+      });
+    knownSiteFolderPaths.forEach(path => {
+      const segments = path.split('/');
+      const vesselName = matchFolderToVessel(segments[segments.length - 1]);
+      if (!vesselName) return;
+      if (isNestedUnderSameVessel(segments.slice(0, -1), vesselName)) return;
+      recordSiteVesselFolder(vesselName, path);
+    });
+    // Folder names seen only through the Main folder / Sub-folder walk.
+    liveSubfolderEntries.forEach(entry => {
+      const vesselName = matchFolderToVessel(entry.name);
+      if (!vesselName) return;
+      if (isNestedUnderSameVessel(entry.pathNames.slice(0, -1), vesselName)) return;
+      recordSiteVesselFolder(vesselName, entry.pathNames.length ? entry.pathNames.join('/') : entry.name);
+    });
+
+    // Port of backend site_alias_matches (backend/app/config.py:74-104).
+    const SITE_TOKENS = ['external', 'nissenkaiunexternal', 'nksdocman', 'docman', 'nks', 'local', 'communication site', 'communication', 'dev', 'root', 'default', 'vessel dms'];
+    const ROOT_ALIASES = ['dev', 'communication', 'communication site', 'root', 'default', 'vessel dms'];
+    const canonicalSiteToken = (value: string): string => {
+      const text = value.trim().toLowerCase();
+      for (const token of SITE_TOKENS) {
+        if (text.indexOf(token) >= 0) return token;
+      }
+      return text;
+    };
+    const siteAliasSet = (value: string): Set<string> => {
+      const norm = canonicalSiteToken(value);
+      const aliases = new Set<string>([norm]);
+      const addAll = (list: string[]): void => list.forEach(item => aliases.add(item));
+      if (ROOT_ALIASES.indexOf(norm) >= 0) addAll(ROOT_ALIASES);
+      if (norm.indexOf('communication') >= 0 || norm === 'dev' || norm === 'root') addAll(['dev', 'communication', 'communication site', 'root']);
+      if (norm.indexOf('docman') >= 0 || norm.indexOf('nks') >= 0 || norm === 'local') addAll(['local', 'nksdocman', 'docman', 'nks']);
+      if (norm.indexOf('external') >= 0) addAll(['external', 'nissenkaiunexternal']);
+      return aliases;
+    };
+    const siteAliasesMatch = (left: string, right: string): boolean => {
+      if (!left.trim() || !right.trim()) return false;
+      if (canonicalSiteToken(left) === canonicalSiteToken(right)) return true;
+      const leftAliases = siteAliasSet(left);
+      return Array.from(siteAliasSet(right)).some(alias => leftAliases.has(alias));
+    };
+    const viewedSite = sitesScopeMatchedSite || activeLiveSite;
+    const viewedSiteKeys = [viewedSite?.site_key, viewedSite?.sp_site_name]
+      .map(value => String(value || '').trim())
+      .filter(Boolean);
+    const viewedSiteIds = [viewedSite?.site_id, sitesScopeRawSiteId]
+      .map(value => String(value || '').trim().toLowerCase())
+      .filter(Boolean);
+    const isVesselProvisionedToViewedSite = (v: VesselRecord): boolean =>
+      [...(v.provisioned_site_ids || []), v.provisioned_site_key]
+        .map(id => String(id || '').trim())
+        .filter(Boolean)
+        .some(id =>
+          viewedSiteIds.indexOf(id.toLowerCase()) >= 0 ||
+          viewedSiteKeys.some(key => siteAliasesMatch(id, key))
+        );
+
+    // App-created vessels provisioned to this site whose folder hasn't been
+    // seen yet (e.g. nested below folders nobody has opened): confirm the
+    // recorded vessel_folder_path really exists by walking it through the
+    // cached folder listings, loading each parent level on demand (cached,
+    // one request per level). Only a confirmed folder adds the vessel — a
+    // vessel whose metadata says "this site" but has no folder here (stale
+    // provisioned_site_ids, deleted folder) is left out.
+    const resolveDriveFolderPath = (path: string): boolean | undefined => {
+      if (!effectiveLiveSiteId || !effectiveLiveDriveId) return undefined;
+      const segments = path.replace(/\\/g, '/').split('/').map(seg => seg.trim()).filter(Boolean);
+      if (segments.length === 0) return undefined;
+      let parentId = 'root';
+      for (const segment of segments) {
+        const listing = host._getOrLoadSiteFolderChildren(effectiveLiveSiteId, effectiveLiveDriveId, parentId);
+        if (listing.loading) return undefined;
+        const hit = (listing.items || []).find((item: any) =>
+          item?.folder && String(item.name || '').trim().toLowerCase() === segment.toLowerCase());
+        if (!hit) return false;
+        parentId = hit.id;
+      }
+      return true;
+    };
+    if (docScopeType === 'sites') {
+      (vessels || []).forEach(v => {
+        if (!v.name || siteVesselByLower.has(v.name.trim().toLowerCase())) return;
+        if (!v.vessel_folder_path || !isVesselProvisionedToViewedSite(v)) return;
+        if (resolveDriveFolderPath(v.vessel_folder_path) === true) {
+          recordSiteVesselFolder(v.name, v.vessel_folder_path.replace(/\\/g, '/').replace(/^\/+|\/+$/g, ''));
+        }
+      });
+    }
+    const siteVesselNames = Array.from(siteVesselByLower.values()).sort((x, y) => x.localeCompare(y));
+    // True when `pathLike` (drive-relative) is the selected vessel's folder,
+    // inside it, or one of its ancestor folders.
+    const selectedSiteVesselPaths = vesselFilter !== 'all'
+      ? (siteVesselFolderPaths.get(vesselFilter.trim().toLowerCase()) || []).map(p => p.toLowerCase())
+      : [];
+    const isPathOnSelectedVesselBranch = (pathLike: string): boolean => {
+      const low = pathLike.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLowerCase();
+      if (!low) return false;
+      return selectedSiteVesselPaths.some(vp => vp === low || vp.startsWith(`${low}/`) || low.startsWith(`${vp}/`));
+    };
+    // siteVesselNames only ever contains vessels whose folder has already
+    // been *confirmed* on this site — either a folder already seen in a
+    // cache we've populated this session (knownSiteFolderPaths /
+    // liveSubfolderEntries, both scoped to wherever the user has actually
+    // browsed), or one resolved on demand above via resolveDriveFolderPath,
+    // which itself needs every parent level of that vessel's folder already
+    // cached. Landing several levels deep via a direct jump (e.g. picking a
+    // vessel from the dropdown, or a saved/shared deep link) never loads the
+    // sibling folders at the main-folder root, so at a breadcrumb like
+    // Technical > Bow Fighter > Drawings and Manuals, siteVesselNames only
+    // ever has "Bow Fighter" — every other vessel on the fleet is filtered
+    // out of the dropdown for no reason other than its folder not having
+    // been fetched yet in *this* browsing session. The Vessel filter should
+    // always offer every vessel in the fleet, not just the ones the cache
+    // happens to already know about — folder-confirmed names are kept as
+    // the display spelling when there's a mismatch, DB vessels fill in the
+    // rest. Picking a not-yet-confirmed one still works: navigateToSiteVesselFolder
+    // already has a fallback path for a vessel whose live folder hasn't been
+    // walked yet.
+    const allSiteVesselNamesByLower = new Map<string, string>();
+    (vessels || []).forEach(v => {
+      if (v.name && v.name.trim()) allSiteVesselNamesByLower.set(v.name.trim().toLowerCase(), v.name.trim());
+    });
+    siteVesselNames.forEach(name => allSiteVesselNamesByLower.set(name.trim().toLowerCase(), name));
+    const siteVesselOptions = Array.from(allSiteVesselNamesByLower.values())
+      .sort((a, b) => a.localeCompare(b))
+      .map(name => ({ id: name, name }));
+
+    // Every main folder the *selected* vessel has a known folder under —
+    // shared by the "also under" chip strip, the Compare toggle, and the
+    // Compare grid itself, so all three agree on the same set/order.
+    const vesselMainFolders = vesselFilter !== 'all' && vesselFilter.trim().toLowerCase() !== 'not listed'
+      ? Array.from(new Set(
+        (siteVesselFolderPaths.get(vesselFilter.trim().toLowerCase()) || [])
+          .map(p => (p.split('/')[0] || '').trim())
+          // A single-segment recorded path ("Bow Fighter", no "/") means the
+          // vessel folder itself was matched as if it were a top-level main
+          // folder — a real main folder is never just the vessel's own
+          // name, so that's the vessel's folder sitting at the library
+          // root, not a second home under some other main folder. Drop it
+          // rather than showing a "Bow Fighter" chip alongside the real
+          // main folders.
+          .filter(name => Boolean(name) && name.trim().toLowerCase() !== vesselFilter.trim().toLowerCase())
+      ))
+      : [];
+    // The vessel's own base folder path under a given main folder (the
+    // longest recorded path starting with "<mainFolder>/" — vessels are
+    // occasionally recorded via a deeper nested discovery too, but the
+    // shortest "<mainFolder>/<vessel>" form is what Compare mode should
+    // treat as that box's root).
+    const vesselBasePathUnderMain = (mainFolder: string): string | null => {
+      const paths = (siteVesselFolderPaths.get(vesselFilter.trim().toLowerCase()) || [])
+        .filter(p => (p.split('/')[0] || '').trim().toLowerCase() === mainFolder.trim().toLowerCase());
+      if (paths.length === 0) return null;
+      return paths.slice().sort((a, b) => a.length - b.length)[0];
+    };
+
+    // ── Keep the filter bar in step with Folder view navigation ──
+    // Every way of moving through the live SharePoint tree (clicking a folder
+    // tile, a breadcrumb, Back/Forward, or picking from the Main folder /
+    // Sub-folder dropdowns) goes through deriveLiveNavFilterState so the
+    // dropdowns always describe the folder actually on screen:
+    //   • Main folder / Sub-folder ← the breadcrumb (deriveDocFiltersFromStack)
+    //   • Vessel ← the deepest folder in the path that is a vessel folder
+    //     (typo-tolerant, see matchFolderToVessel); if there is none and the
+    //     new location is off the selected vessel's branch, the vessel filter
+    //     is cleared instead of leaving a stale "No folder for X here".
+    type LiveNavFilterState = {
+      docCategoryFilter: string;
+      docSubfolderOtherFilter: string;
+      vesselFilter: string;
+      docListPage: number;
+    };
+    const deriveLiveNavFilterState = (stack: { id: string; name: string }[]): LiveNavFilterState => {
+      const base = deriveDocFiltersFromStack(stack);
+      const currentVessel = host.state.vesselFilter || 'all';
+      if (stack[0]?.id !== 'sites_root') {
+        return { ...base, vesselFilter: currentVessel, docListPage: 0 };
+      }
+      const folderNames = stack.slice(3).map(n => n.name);
+      let vesselInPath: string | null = null;
+      for (const name of folderNames) {
+        const matched = matchFolderToVessel(name);
+        if (matched) vesselInPath = matched;
+      }
+      let nextVessel = currentVessel;
+      if (vesselInPath) {
+        nextVessel = vesselInPath;
+      } else if (currentVessel !== 'all' && currentVessel.trim().toLowerCase() !== 'not listed') {
+        const path = folderNames.join('/');
+        const low = path.toLowerCase();
+        if (!low) {
+          // folderNames is empty exactly when the navigation landed at the
+          // drive/library root itself — e.g. clicking the "Documents"
+          // breadcrumb segment. `!low` used to short-circuit onBranch to
+          // true here, which kept whichever vessel was selected before
+          // pinned in the dropdown (and kept the folder list scoped to just
+          // that vessel's folders) even though the root is above every
+          // vessel's folder, not "still on" any one of them. Landing at the
+          // root must clear the vessel filter instead.
+          nextVessel = 'all';
+        } else {
+          const vesselPaths = (siteVesselFolderPaths.get(currentVessel.trim().toLowerCase()) || []).map(p => p.toLowerCase());
+          const onBranch = vesselPaths.some(vp => vp === low || vp.startsWith(`${low}/`) || low.startsWith(`${vp}/`));
+          if (!onBranch) nextVessel = 'all';
+        }
+      }
+      return { ...base, vesselFilter: nextVessel, docListPage: 0 };
+    };
+    liveNavSync.derive = deriveLiveNavFilterState;
+    const pushLiveFolderNav = (stack: { id: string; name: string }[]): void => {
+      host._pushFolderNav(stack, 'SharePoint Sites');
+      host.setState(deriveLiveNavFilterState(stack));
+    };
+    // Resolve a drive-relative folder path ("ACRA CHARGE/NKS/022024 Duchess
+    // Emeralad") to breadcrumb nodes. Goes through _getOrLoadSiteFolderChildren
+    // rather than reading _siteFolderItemsCache directly: a level the user
+    // has never opened (e.g. the main folder above a vessel picked from the
+    // Vessel dropdown at the library root) isn't in the cache yet, but
+    // _getOrLoadSiteFolderChildren derives it synchronously from the
+    // already-loaded live tree (documentLiveFolders). Returns null only if a
+    // level genuinely still needs a Graph round-trip.
+    const resolveCachedDriveFolderStack = (path: string): { id: string; name: string }[] | null => {
+      if (!effectiveLiveSiteId || !effectiveLiveDriveId) return null;
+      const segments = path.replace(/\\/g, '/').split('/').map(seg => seg.trim()).filter(Boolean);
+      if (segments.length === 0) return null;
+      const nodes: { id: string; name: string }[] = [];
+      let parentId = 'root';
+      for (const segment of segments) {
+        const entry = host._getOrLoadSiteFolderChildren(effectiveLiveSiteId, effectiveLiveDriveId, parentId);
+        if (!entry || entry.loading) return null;
+        const hit = (entry.items || []).find((item: any) =>
+          item?.folder && String(item.name || '').trim().toLowerCase() === segment.toLowerCase());
+        if (!hit) return null;
+        nodes.push({ id: hit.id, name: hit.name });
+        parentId = hit.id;
+      }
+      return nodes;
+    };
+    // Counterpart to resolveCachedDriveFolderStack for when a level genuinely
+    // isn't cached yet (that function's "returns null only if a level
+    // genuinely still needs a Graph round-trip" case) — instead of giving up
+    // there, this awaits _loadAndCacheSiteFolderChildren (the same
+    // _siteFolderItemsCache, but Promise-based) one level at a time so a
+    // main folder that has never been opened this session still resolves,
+    // just a beat later. Used by navigateToLiveMainFolder's own fallback so
+    // jumping to a vessel's "is also under" main folder for the first time
+    // in a session lands inside that vessel's folder there instead of on
+    // the main folder's bare root.
+    const resolveLiveDriveFolderStackAsync = async (path: string): Promise<{ id: string; name: string }[] | null> => {
+      if (!effectiveLiveSiteId || !effectiveLiveDriveId) return null;
+      const segments = path.replace(/\\/g, '/').split('/').map(seg => seg.trim()).filter(Boolean);
+      if (segments.length === 0) return null;
+      const nodes: { id: string; name: string }[] = [];
+      let parentId = 'root';
+      for (const segment of segments) {
+        const items = await host._loadAndCacheSiteFolderChildren(effectiveLiveSiteId, effectiveLiveDriveId, parentId);
+        const hit = (items || []).find((item: any) =>
+          item?.folder && String(item.name || '').trim().toLowerCase() === segment.toLowerCase());
+        if (!hit) return null;
+        nodes.push({ id: hit.id, name: hit.name });
+        parentId = hit.id;
+      }
+      return nodes;
+    };
+
+    // Proactively confirm whether the selected vessel also has a folder
+    // under each of this site's OTHER known main folders — not just the
+    // one(s) already discovered from browsing. Without this, a vessel's
+    // second home (the "also under" chips, the Compare button) only ever
+    // shows up once the user happens to have browsed into that other main
+    // folder at least once this session, which is exactly what made the
+    // chips/Compare button silently disappear after landing on Bow Fighter
+    // straight from the Vessel dropdown, before "Technical" had ever been
+    // opened this session. Each check is just resolveCachedDriveFolderStack
+    // for "<mainFolder>/<vessel>": free once cached, and when it isn't yet,
+    // its own _getOrLoadSiteFolderChildren side effect primes the cache in
+    // the background so the next render picks the folder up naturally
+    // through the normal knownSiteFolderPaths walk above (self-healing,
+    // same pattern used everywhere else in this file). mainFolderOptions is
+    // a small, fixed set of departments, so this stays cheap — at most one
+    // extra Graph call per not-yet-checked main folder, once.
+    if (vesselFilter !== 'all' && vesselFilter.trim().toLowerCase() !== 'not listed' &&
+      (docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents')) {
+      const knownVesselMainsLower = new Set(vesselMainFolders.map(m => m.trim().toLowerCase()));
+      mainFolderOptions.forEach(m => {
+        if (knownVesselMainsLower.has(m.trim().toLowerCase())) return;
+        resolveCachedDriveFolderStack(`${m}/${vesselFilter.trim()}`);
+      });
+    }
+
+    // ── Compare mode: one browsable box per main folder the selected vessel
+    // is under, side by side, instead of Folder view's single location.
+    // Each box drills through its own vessel-folder subtree independently
+    // (compareBoxSubPaths, keyed by main folder), reusing
+    // resolveCachedDriveFolderStack/_getOrLoadSiteFolderChildren the same
+    // way the rest of Folder view does — so a box that needs a Graph round
+    // trip just shows "Loading…" and resolves itself on the next render,
+    // same self-healing behaviour as everywhere else in this file.
+    const compareBoxStyle: React.CSSProperties = {
+      border: '1px solid var(--vdms-border)', borderRadius: 10, background: 'var(--vdms-surface)',
+      display: 'flex', flexDirection: 'column', minWidth: 0,
+    };
+    const renderCompareBox = (mainFolder: string): React.ReactElement => {
+      const basePath = vesselBasePathUnderMain(mainFolder);
+      const subPath = compareBoxSubPaths[mainFolder] || [];
+      const setSubPath = (next: string[]): void => {
+        host.setState({ compareBoxSubPaths: { ...compareBoxSubPaths, [mainFolder]: next } });
+      };
+      const crumb = [mainFolder, vesselFilter, ...subPath];
+      const header = (
+        <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--vdms-border-soft)', fontSize: 11, color: 'var(--vdms-text-muted)', display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+          {crumb.map((seg, i) => {
+            const isLast = i === crumb.length - 1;
+            const targetSubPath = i <= 1 ? [] : subPath.slice(0, i - 1);
+            return (
+              <span key={i}>
+                {i > 0 && <span style={{ opacity: 0.5 }}> / </span>}
+                <span
+                  onClick={isLast ? undefined : () => setSubPath(targetSubPath)}
+                  style={{
+                    cursor: isLast ? 'default' : 'pointer',
+                    textDecoration: isLast ? 'none' : 'underline',
+                    fontWeight: isLast ? 700 : 500,
+                    color: isLast ? 'var(--vdms-text)' : 'var(--vdms-text-muted)',
+                  }}
+                >
+                  {seg}
+                </span>
+              </span>
+            );
+          })}
+        </div>
+      );
+      if (!basePath || !siteNavPrefix || !effectiveLiveSiteId || !effectiveLiveDriveId) {
+        return (
+          <div key={mainFolder} style={compareBoxStyle}>
+            {header}
+            <div style={{ padding: 16, fontSize: 12, color: 'var(--vdms-text-muted)' }}>Loading…</div>
+          </div>
+        );
+      }
+      const fullPath = subPath.length > 0 ? `${basePath}/${subPath.join('/')}` : basePath;
+      const nodes = resolveCachedDriveFolderStack(fullPath);
+      if (!nodes || nodes.length === 0) {
+        return (
+          <div key={mainFolder} style={compareBoxStyle}>
+            {header}
+            <div style={{ padding: 16, fontSize: 12, color: 'var(--vdms-text-muted)' }}>Loading…</div>
+          </div>
+        );
+      }
+      const leafId = nodes[nodes.length - 1].id;
+      const listing = host._getOrLoadSiteFolderChildren(effectiveLiveSiteId, effectiveLiveDriveId, leafId);
+      const items = listing.items || [];
+      const boxFolders = items.filter((it: any) => !!it.folder);
+      const boxFiles = items.filter((it: any) => !it.folder);
+      return (
+        <div key={mainFolder} style={compareBoxStyle}>
+          {header}
+          <div style={{ maxHeight: 340, overflowY: 'auto', padding: 6 }}>
+            {listing.loading && <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', padding: 8 }}>Loading…</div>}
+            {!listing.loading && boxFolders.length === 0 && boxFiles.length === 0 && (
+              <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', padding: 8 }}>Empty</div>
+            )}
+            {boxFolders.map((f: any) => (
+              <div
+                key={f.id}
+                onClick={() => setSubPath([...subPath, f.name])}
+                style={{ padding: '6px 8px', cursor: 'pointer', borderRadius: 6, fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
+                onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--vdms-surface-alt)'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+              >
+                📁 {f.name}
+              </div>
+            ))}
+            {boxFiles.map((file: any) => {
+              const fileUrl = file.web_url || file.webUrl || file.download_url || '';
+              return (
+                <div
+                  key={file.id || file.name}
+                  onClick={() => {
+                    if (fileUrl) window.open(fileUrl, '_blank');
+                    else void host._openDocumentFile(file.id, file.name, crumb.join(' > '));
+                  }}
+                  style={{ padding: '6px 8px', cursor: 'pointer', borderRadius: 6, fontSize: 12, color: '#0284c7' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--vdms-surface-alt)'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+                >
+                  📄 {file.name}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      );
+    };
+    const renderVesselCompareGrid = (): React.ReactElement => (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--vdms-text)' }}>
+            Comparing {vesselFilter} across {vesselMainFolders.length} main folders
+          </div>
+          <button
+            type="button"
+            onClick={() => host.setState({ docCompareMode: false })}
+            style={{
+              padding: '5px 12px', borderRadius: 8, border: '1px solid var(--vdms-border)',
+              background: 'var(--vdms-surface)', color: 'var(--vdms-text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            ✕ Exit compare
+          </button>
+        </div>
+        {/* One box per main folder; wraps to a new row on narrow widths, and
+            each box scrolls its own contents independently once a folder
+            has more than ~10 items, rather than growing the whole page. */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+          {vesselMainFolders.map(m => renderCompareBox(m))}
+        </div>
+      </div>
+    );
+    // Picking a vessel while the Folder view is somewhere that has nothing
+    // for it: jump to that vessel's folder (preferring one inside the folder
+    // currently open) instead of showing an empty "No folder for X here".
+    // The landed stack is [sites_root, site, drive, <main folder>, …, <vessel>],
+    // so deriveDocFiltersFromStack auto-selects the Main folder dropdown and
+    // puts the vessel folder in the Sub-folder dropdown.
+    //
+    // Works from every live-library scope, not just "SharePoint Sites":
+    //   • sites_root stack            → [sites_root, site, drive, …]  (3 prefix nodes)
+    //   • Shared Documents / Documents → [lib:…, …]                    (1 prefix node)
+    // siteNavPrefix already synthesises the sites_root prefix for the latter,
+    // the same way navigateToLiveMainFolder / navigateToLiveSubfolder do.
+    const navigateToSiteVesselFolder = (vesselName: string): void => {
+      if (!siteNavPrefix) return;
+      const rootId = folderPathStack[0]?.id;
+      const livePrefixLength = rootId === 'sites_root'
+        ? 3
+        : ((rootId === 'lib:shared_documents' || rootId === 'lib:documents') ? 1 : -1);
+      const vesselPaths = siteVesselFolderPaths.get(vesselName.trim().toLowerCase()) || [];
+      const candidates = vesselPaths.slice();
+      if (candidates.length === 0) {
+        // The live folder walk hasn't recorded this vessel's folder (the
+        // option came from the flattened rows instead). Fall back to the
+        // row's own main folder: "<Main folder>/<Vessel>" if that folder
+        // exists, otherwise at least land on (and select) the main folder.
+        const row = scopeRows.find(r => vesselNamesEqual(getListViewLabels(r).vessel || '', vesselName));
+        const mainFolder = row ? (getListViewLabels(row).mainFolder || '').trim() : '';
+        const mainCard = mainFolder
+          ? liveRootFolders.find(c => c.key.trim().toLowerCase() === mainFolder.toLowerCase())
+          : undefined;
+        if (!mainCard) return;
+        candidates.push(`${mainCard.key}/${vesselName.trim()}`, mainCard.key);
+      }
+      // List View (or Folder view before any live root has been resolved
+      // into the breadcrumb stack, e.g. right after a site switch) has no
+      // breadcrumb to push a folder-nav stack onto — _pushFolderNav only
+      // means something in Folder view. But the Main folder / Sub-folder
+      // dropdowns must still auto-select the vessel's own main folder here,
+      // same as Folder view does below, otherwise picking a vessel from
+      // List view leaves "All main folders" selected and the Sub-folder
+      // dropdown empty (subfolderTree is scoped off docCategoryFilter,
+      // see scopedMainFolderForSubfolders above).
+      if (docViewMode !== 'folder' || livePrefixLength < 0) {
+        // A vessel commonly has a folder under several main folders (e.g.
+        // "Technical & Crewing/<vessel>" AND "Commercial & Chartering/<vessel>"
+        // AND "Insurance/<vessel>" all exist for the same vessel). List view's
+        // whole purpose is to show the vessel's documents flattened across
+        // the site, so the Main folder dropdown must only be pinned to one
+        // specific main folder when the vessel actually has just one home —
+        // pinning it to whichever main folder happened to be first in
+        // `candidates` used to silently drop every row that lived under the
+        // vessel's *other* main folders (isLiveMainFolderValue path-segment
+        // check further down ANDs docCategoryFilter with the vessel filter).
+        // With it left on "All main folders", the vessel filter alone (which
+        // already matches by folder segment regardless of which main folder
+        // it's under) is enough to pull in all of them.
+        const distinctMainFolders = Array.from(new Set(
+          candidates.map(p => (p.split('/')[0] || '').trim().toLowerCase()).filter(Boolean)
+        ));
+        const mainFolderName = distinctMainFolders.length === 1
+          ? (candidates[0] || '').split('/')[0]?.trim()
+          : '';
+        host.setState({
+          docCategoryFilter: mainFolderName || 'all',
+          docSubfolderOtherFilter: 'all',
+          vesselFilter: vesselName,
+          docListPage: 0,
+        });
+        return;
+      }
+      const here = folderPathStack.slice(livePrefixLength).map(n => n.name).join('/').toLowerCase();
+      // Already inside the vessel's folder (or deeper)? Stay put. Being at the
+      // library root or at an ancestor (e.g. the main folder) is NOT enough —
+      // the user wants the vessel's own sub-folder opened. `!here` (and the
+      // ancestor check) used to count as "on branch", which made picking a
+      // vessel at the root a silent no-op — the same bug
+      // deriveLiveNavFilterState had, see its comment above.
+      const insideVesselFolder = !!here && vesselPaths.some(p => {
+        const vp = p.toLowerCase();
+        return vp === here || here.startsWith(`${vp}/`);
+      });
+      if (insideVesselFolder) return;
+      const preferred = candidates.filter(p => here && p.toLowerCase().startsWith(`${here}/`));
+      let nodes: { id: string; name: string }[] | null = null;
+      for (const candidate of [...preferred, ...candidates]) {
+        nodes = resolveCachedDriveFolderStack(candidate);
+        if (nodes) break;
+      }
+      if (!nodes) return;
+      const stack = [...siteNavPrefix, ...nodes];
+      host._pushFolderNav(stack, 'SharePoint Sites');
+      // Main folder ← stack[3]. The Sub-folder dropdown is left on "All
+      // sub-folders": with a vessel selected it lists that vessel's own
+      // sub-folders (the vessel folder itself is not one of its options).
+      host.setState({
+        ...deriveDocFiltersFromStack(stack),
+        docSubfolderOtherFilter: 'all',
+        vesselFilter: vesselName,
+        docListPage: 0,
+      });
+    };
+
+    // Shared by the Vessel filter <select> below and the search box's
+    // results dropdown (selecting a vessel suggestion there must behave
+    // exactly like picking it from the dropdown) — factored out so there's
+    // only one place that knows how to apply a vessel selection.
+    const applyVesselFilterSelection = (val: string): void => {
+      if (docViewMode === 'folder' && mainFolderPage && docMainFolder) {
+        if (val && val !== 'all') {
+          const vesselMatch = vessels.find(v => v.name.trim().toLowerCase() === val.trim().toLowerCase());
+          const vesselId = vesselMatch?.id || val;
+          host._pushFolderNav(
+            [{ id: docMainFolder, name: docMainFolder }, { id: String(vesselId), name: val }],
+            docMainFolder
+          );
+        } else {
+          host._pushFolderNav([{ id: docMainFolder, name: docMainFolder }], docMainFolder);
+        }
+      }
+      host.setState({ vesselFilter: val || 'all', docListPage: 0 });
+      const isLiveLibraryScope = docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents';
+      if (isLiveLibraryScope && val && val !== 'all' && val !== 'Not Listed') {
+        navigateToSiteVesselFolder(val);
+      }
+      if (val && val !== 'all' && val !== 'Not Listed' && !isLiveLibraryScope) {
+        void host._loadVesselRowsFromApi(val).catch(() => undefined);
+        void host._loadFilesForVessel(val).catch(() => undefined);
+      }
+    };
 
     // ── mainFolderGroupMap: which groups belong to which main folder (for list view filtering) ──
     const mainFolderGroupMap = folderNamesByMainFolder(docScopeType === 'common');
@@ -1382,8 +3363,69 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     let filtered = scopeRows.filter(r => {
       const labels = getListViewLabels(r);
 
+      // A text query in SharePoint Sites scope is site-wide. Do not let the
+      // folder currently open in the breadcrumb or its derived filters hide
+      // matching files returned by the backend site search.
+      //
+      // IMPORTANT: this used to skip the Vessel filter entirely whenever a
+      // text search was active — `wholeSiteSearch` only checks
+      // activeDocumentSite/textFilter/docScopeType, never vesselFilter — so
+      // typing a keyword and then picking a vessel from the Vessel filter
+      // still showed every vessel's matches for that keyword instead of just
+      // the selected one ("only that vessel's files need to filter, searched
+      // content should not follow other vessels"). The Vessel filter must
+      // still narrow the results here, exactly as it does below for the
+      // no-search case (same folder-path-segment matching as that branch).
+      if (wholeSiteSearch) {
+        const hasVesselFilter = vesselFilter !== 'all' && vesselFilter.trim().toLowerCase() !== 'not listed';
+        if (hasVesselFilter) {
+          if ((r.groupKey || '').endsWith(':search')) {
+            const rowVessel = labels.vessel || r.vesselName || '';
+            if (!rowVessel || !vesselNamesEqual(rowVessel, vesselFilter)) return false;
+          } else {
+            const rowSegments = (r.subFolderPath || '').split(/\s*>\s*|\//).map(seg => seg.trim()).filter(Boolean);
+            const libraryIdx = rowSegments.findIndex(seg => /^(documents|shared documents|sites documents|site library|general documents)$/i.test(seg));
+            const folderSegments = libraryIdx >= 0 ? rowSegments.slice(libraryIdx + 1) : rowSegments;
+            const inSelectedVessel = folderSegments.some(seg => {
+              const matched = matchFolderToVessel(seg);
+              return !!matched && vesselNamesEqual(matched, vesselFilter);
+            });
+            if (!inSelectedVessel) return false;
+          }
+        }
+        if ((r.groupKey || '').endsWith(':search')) return true;
+        return matchesSearchTokens(
+          textFilter,
+          labels.vessel,
+          labels.mainFolder,
+          labels.documentSection,
+          labels.group,
+          labels.category,
+          labels.subCategory,
+          r.vesselName,
+          r.group,
+          r.category,
+          r.subCategory,
+          r.subFolderPath,
+          r.fileName,
+        );
+      }
+
       // 1. Vessel filter
-      if (vesselFilter !== 'all') {
+      if (vesselFilter !== 'all' && docScopeType === 'sites' && vesselFilter.trim().toLowerCase() !== 'not listed') {
+        // SharePoint Sites scope: a row belongs to the selected vessel only
+        // when its folder path runs through a folder named after that vessel
+        // (same matching as the dropdown) — not the fuzzy row label, which
+        // let e.g. "mvtest3" also pick up "mvtest3421212" rows.
+        const rowSegments = (r.subFolderPath || '').split(/\s*>\s*|\//).map(seg => seg.trim()).filter(Boolean);
+        const libraryIdx = rowSegments.findIndex(seg => /^(documents|shared documents|sites documents|site library|general documents)$/i.test(seg));
+        const folderSegments = libraryIdx >= 0 ? rowSegments.slice(libraryIdx + 1) : rowSegments;
+        const inSelectedVessel = folderSegments.some(seg => {
+          const matched = matchFolderToVessel(seg);
+          return !!matched && vesselNamesEqual(matched, vesselFilter);
+        });
+        if (!inSelectedVessel) return false;
+      } else if (vesselFilter !== 'all') {
         const normVesselFilter = vesselFilter.trim().toLowerCase();
         const normRowVessel = labels.vessel.trim().toLowerCase();
         if (normRowVessel !== normVesselFilter) {
@@ -1403,6 +3445,30 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         } else if (labels.vessel.trim().toLowerCase() !== activeVesselName.trim().toLowerCase() && r.vesselName.trim().toLowerCase() !== activeVesselName.trim().toLowerCase()) {
           return false;
         }
+      }
+
+      // 1.5. Sub-folder filter — real folders that aren't a known main
+      // folder/category and aren't a vessel (e.g. "Report", "ACRA CHARGE").
+      // These rows commonly have no vessel at all, so this check stands on
+      // its own rather than depending on the vessel filter above.
+      // Matched primarily as an exact path SEGMENT of subFolderPath (split
+      // on '>', not a raw substring) — a sub-folder can be nested at any
+      // depth (e.g. "SS366 FINISH PLAN"), and a substring check both
+      // under- and over-matches (misses an exact-but-not-adjacent segment,
+      // or false-positives on a folder name that's a substring of another).
+      // The label-based checks stay as a fallback for rows whose path
+      // string doesn't cleanly carry the segment (legacy vessel/department
+      // rows where "sub-folder" maps onto group/category instead).
+      if (docSubfolderOtherFilter !== 'all') {
+        const normFilter = docSubfolderOtherFilter.trim().toLowerCase();
+        const pathSegments = (r.subFolderPath || '').split('>').map(s => s.trim().toLowerCase());
+        const subfolderMatch = pathSegments.indexOf(normFilter) !== -1 ||
+          (labels.mainFolder || '').trim().toLowerCase() === normFilter ||
+          (labels.group || '').trim().toLowerCase() === normFilter ||
+          (labels.category || '').trim().toLowerCase() === normFilter ||
+          (labels.documentSection || '').trim().toLowerCase() === normFilter ||
+          (r.group || '').trim().toLowerCase() === normFilter;
+        if (!subfolderMatch) return false;
       }
 
       // 2. Main folder / group filter
@@ -1426,29 +3492,41 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         if (!groupMatch) return false;
       }
 
-      // 3. Category / Document section filter
-      const effectiveSectionFilter = docCategoryFilter !== 'all' ? docCategoryFilter : (catFilter !== 'all' ? catFilter : 'all');
-      if (effectiveSectionFilter !== 'all') {
-        const normFilter = effectiveSectionFilter.trim().toLowerCase();
-        const sectionMatch = (labels.documentSection || '').trim().toLowerCase() === normFilter ||
-          (r.category || '').trim().toLowerCase() === normFilter ||
-          (r.subFolderPath || '').toLowerCase().includes(`> ${normFilter}`) ||
-          (r.subFolderPath || '').toLowerCase().includes(`${normFilter} >`);
-        if (!sectionMatch) return false;
+      // 3. Main folder filter (live SharePoint-tree scope) / Category /
+      // Document section filter (vessel & department scope).
+      // docCategoryFilter is overloaded between two unrelated concepts: for
+      // vessel/department rows it's always been a "document section" filter
+      // (Drawings/Manuals-style, kept below); for the live Main folder /
+      // Sub-folder dropdowns built for the SharePoint-sites folder tree it
+      // holds a real top-level folder NAME instead, which has nothing to do
+      // with documentSection — comparing it there almost never matched,
+      // which silently filtered every file out of List View whenever a live
+      // Main folder was selected (worse combined with a Sub-folder
+      // selection, since both then had to pass). When the current value is
+      // one of the live folder names the Main folder dropdown itself
+      // offers, match it as an exact path segment instead.
+      const isLiveMainFolderValue = docCategoryFilter !== 'all' &&
+        mainFolderOptions.some(n => n.trim().toLowerCase() === docCategoryFilter.trim().toLowerCase());
+      if (isLiveMainFolderValue) {
+        const normFilter = docCategoryFilter.trim().toLowerCase();
+        const pathSegments = (r.subFolderPath || '').split('>').map(s => s.trim().toLowerCase());
+        if (pathSegments.indexOf(normFilter) === -1) return false;
+      } else {
+        const effectiveSectionFilter = docCategoryFilter !== 'all' ? docCategoryFilter : (catFilter !== 'all' ? catFilter : 'all');
+        if (effectiveSectionFilter !== 'all') {
+          const normFilter = effectiveSectionFilter.trim().toLowerCase();
+          const sectionMatch = (labels.documentSection || '').trim().toLowerCase() === normFilter ||
+            (r.category || '').trim().toLowerCase() === normFilter ||
+            (r.subFolderPath || '').toLowerCase().includes(`> ${normFilter}`) ||
+            (r.subFolderPath || '').toLowerCase().includes(`${normFilter} >`);
+          if (!sectionMatch) return false;
+        }
       }
-      if (docGroupLevelFilter !== 'all') {
-        const normFilter = docGroupLevelFilter.trim().toLowerCase();
-        const groupMatch = (labels.group || '').trim().toLowerCase() === normFilter ||
-          (r.subFolderPath || '').toLowerCase().includes(`> ${normFilter}`);
-        if (!groupMatch) return false;
-      }
-      if (docLeafCategoryFilter !== 'all') {
-        const normFilter = docLeafCategoryFilter.trim().toLowerCase();
-        const catMatch = (labels.category || '').trim().toLowerCase() === normFilter ||
-          (r.category || '').trim().toLowerCase() === normFilter ||
-          (r.subCategory || '').trim().toLowerCase() === normFilter ||
-          (r.subFolderPath || '').toLowerCase().includes(`> ${normFilter}`);
-        if (!catMatch) return false;
+      // Group / Category filters use the same path-based rule as the
+      // columns (drawingsManualsForRow), so a filter always matches what the
+      // table shows.
+      if (docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all') {
+        if (!pathMatchesGroupCategory(r.subFolderPath || '', docGroupLevelFilter, docLeafCategoryFilter)) return false;
       }
       if (docSubCategoryFilter !== 'all') {
         const normFilter = docSubCategoryFilter.trim().toLowerCase();
@@ -1458,22 +3536,66 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         if (!subMatch) return false;
       }
 
-      // 4. Text search filter
+      // 4. Text search filter — tokenized (see matchesSearchTokens above) so
+      // a combined query such as "<vessel name> <partial file name>" still
+      // matches: every whitespace-separated token in the box just needs to
+      // be found somewhere across the row's vessel, folder hierarchy, path,
+      // category and file name (any file format/extension), and each token
+      // may match a different field. This also fixes plain partial file-name
+      // searches where the typed words aren't contiguous in the file name
+      // (e.g. spaces vs. underscores/hyphens: "annual report" now matches
+      // "Annual_Report_2024.pdf").
       if (textFilter) {
-        const q = textFilter.trim().toLowerCase();
-        return (labels.vessel || '').toLowerCase().includes(q) ||
-          (labels.mainFolder || '').toLowerCase().includes(q) ||
-          (labels.documentSection || '').toLowerCase().includes(q) ||
-          (labels.group || '').toLowerCase().includes(q) ||
-          (labels.category || '').toLowerCase().includes(q) ||
-          (labels.subCategory || '').toLowerCase().includes(q) ||
-          (r.vesselName || '').toLowerCase().includes(q) ||
-          (r.group || '').toLowerCase().includes(q) ||
-          (r.subFolderPath || '').toLowerCase().includes(q) ||
-          (r.fileName || '').toLowerCase().includes(q);
+        return matchesSearchTokens(
+          textFilter,
+          labels.vessel,
+          labels.mainFolder,
+          labels.documentSection,
+          labels.group,
+          labels.category,
+          labels.subCategory,
+          r.vesselName,
+          r.group,
+          r.category,
+          r.subCategory,
+          r.subFolderPath,
+          r.fileName,
+        );
       }
       return true;
     });
+
+    // De-duplicate the same physical file when the SharePoint Sites scope
+    // picked it up from more than one live source. `siteRows` above is built
+    // from two independent scans (see getSharePointSiteFlatRows): (1) the
+    // on-demand per-folder browse cache (_siteFolderItemsCache, populated
+    // when the user actually opens a folder — correctly resolves the file's
+    // vessel/path), and (2) the site-wide recursive tree
+    // (documentLiveFolders / _loadDocumentLiveTree's own "live:" rows via
+    // `rows`), which re-derives vessel/path itself and can mis-resolve a
+    // flat (Part C) vessel's file as an unmatched root-level "Not Listed"
+    // row when its own vessel-matching runs before `vessels` state is fully
+    // populated. Both rows carry the same real fileId, so keep only the
+    // best one per fileId: prefer whichever row actually resolved a vessel,
+    // then whichever has the deeper/more specific folder path.
+    if (docScopeType === 'sites') {
+      const bestByFileId = new Map<string, FlatRow>();
+      const passthrough: FlatRow[] = [];
+      const scoreRow = (row: FlatRow): number => {
+        const v = (row.vesselName || '').trim().toLowerCase();
+        const hasVessel = v && v !== 'not listed' && v !== 'vessel name not listed' && v !== 'vessel not assigned' ? 1 : 0;
+        const depth = (row.subFolderPath || '').split('>').length;
+        return hasVessel * 1000 + depth;
+      };
+      for (const r of filtered) {
+        if (!r.fileId || !r.fileName) { passthrough.push(r); continue; }
+        const existing = bestByFileId.get(r.fileId);
+        if (!existing || scoreRow(r) > scoreRow(existing)) {
+          bestByFileId.set(r.fileId, r);
+        }
+      }
+      filtered = [...passthrough, ...Array.from(bestByFileId.values())];
+    }
 
     // ── Per-subfolder file count (for tile badge) ──
     // Count files (rows with fileName) that belong to each direct child subfolder.
@@ -1765,6 +3887,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         groupedMap.set(dedupeKey, {
           srNo: r.srNo,
           vesselName: r.vesselName,
+          domain: r.domain,
           group: r.group,
           category: r.category,
           subCategory: r.subCategory || r.category,
@@ -1802,9 +3925,21 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     }
 
     let groupedList = Array.from(groupedMap.values());
-    if (docViewMode === 'list' && docScopeType === 'sites') {
-      groupedList = groupedList.filter(row => row.files.length > 0);
-    }
+    // NOTE: this used to unconditionally drop every row with zero files
+    // whenever docScopeType === 'sites', which made sense back when every
+    // vessel was auto-provisioned with the full department/category
+    // template (dozens of near-always-empty leaf folders per vessel) —
+    // without it, List View would have been mostly noise. Since the
+    // backend moved to the flat one-root-folder-per-vessel model (no more
+    // auto-created subtree; see real_backend.py create_vessel / Part C),
+    // a brand-new vessel's root folder IS the row, and it has no files
+    // until something is uploaded — so this filter was hiding every
+    // freshly created vessel from List View entirely, even though the
+    // same folder shows up immediately in Folder View (which never
+    // applied this filter). Keep every real folder/file row here so List
+    // View matches what Folder View already shows; only actually-attached
+    // vs. not-attached filtering is still controlled by attachmentFilter
+    // below.
     if (attachmentFilter !== 'all') {
       groupedList = groupedList.filter(row => attachmentFilter === 'attached' ? row.files.length > 0 : row.files.length === 0);
     }
@@ -1967,6 +4102,26 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         return;
       }
 
+      // Prefer navigating straight to whatever live Main folder / Sub-folder
+      // is currently selected (now preserved across the switch — see
+      // openListViewFromFolderContext above) over guessing from a selected
+      // row: an arbitrary candidate row's own path can point somewhere else
+      // entirely, which is exactly the "doesn't preserve the folder" symptom
+      // reported when switching back to Folder view.
+      if (docCategoryFilter !== 'all') {
+        if (docSubfolderOtherFilter !== 'all' && liveSubfolderEntryByName.has(docSubfolderOtherFilter.trim().toLowerCase())) {
+          navigateToLiveSubfolder(docSubfolderOtherFilter);
+          host.setState({ docViewMode: 'folder' });
+          return;
+        }
+        const liveMainFolderCard = rootFolderCards.find(c => c.key.trim().toLowerCase() === docCategoryFilter.trim().toLowerCase());
+        if (liveMainFolderCard && liveMainFolderCard.liveFolderId) {
+          navigateToLiveMainFolder(docCategoryFilter);
+          host.setState({ docViewMode: 'folder' });
+          return;
+        }
+      }
+
       const selectedRow = pageGroupedRows.find(row => row.files.some(file => listViewSelectedFiles.has(file.id)));
       const candidate = selectedRow || pageGroupedRows[0] || groupedList[0] || null;
       openFolderViewForListRow(candidate);
@@ -1995,12 +4150,17 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       } else if (atSharedDocsRoot || atDocsRoot || atSitesRoot) {
         nextScope = atSharedDocsRoot ? 'shared_docs' : (atDocsRoot ? 'documents' : 'sites');
         nextGroupFilter = atSharedDocsRoot ? 'Shared Documents' : (atDocsRoot ? 'Documents' : 'SharePoint Sites');
-        nextVesselFilter = 'all';
-        for (const node of folderPathStack) {
-          const parsed = parseSharePointRowMetadata(node.name);
-          if (parsed.vessel && parsed.vessel !== 'Not Listed') {
-            nextVesselFilter = parsed.vessel;
-            break;
+        // Keep the vessel already picked in the dropdown; otherwise take it
+        // from a vessel folder in the breadcrumb (same folder→vessel matching
+        // as the dropdown, so the value is always one of its options).
+        nextVesselFilter = vesselFilter && vesselFilter !== 'all' ? vesselFilter : 'all';
+        if (nextVesselFilter === 'all') {
+          for (const node of folderPathStack) {
+            const matched = matchFolderToVessel(node.name);
+            if (matched) {
+              nextVesselFilter = matched;
+              break;
+            }
           }
         }
         hierarchyLevels = [];
@@ -2039,15 +4199,20 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           ? 'root'
           : (folderPathStack[folderPathStack.length - 1]?.id || 'root');
         if (siteId && driveId) {
-          host._getOrLoadSiteFolderChildren(siteId, driveId, folderId);
-          // A vessel row can represent a folder whose uploaded files are one
-          // level below it. Load that folder's children before List View
-          // flattens the cached site rows into file rows.
-          const activeCache = host._siteFolderItemsCache.get(`${siteId}::${driveId}::${folderId}`);
-          (activeCache?.items || [])
-            .filter(item => item?.folder && item.id)
-            .slice(0, 20)
-            .forEach(item => host._getOrLoadSiteFolderChildren(siteId, driveId, item.id));
+          // List View must show every file *underneath* the folder the user
+          // was browsing, not just the files of folders they happened to
+          // click into one at a time in Folder view. Folder view only ever
+          // loads one level (the folder currently open), so switching to
+          // List View right after opening "Documents" — before manually
+          // drilling into each of its sub-folders — used to flatten to
+          // nothing, even though Folder view clearly showed sub-folders
+          // with content. Walk the subtree recursively (bounded, so a huge
+          // library can't hang the browser or spam Graph) instead of the
+          // previous one-extra-level prefetch, and let already-cached
+          // folders resolve instantly (_loadAndCacheSiteFolderChildren
+          // reuses _siteFolderItemsCache, the same cache _getOrLoadSiteFolderChildren
+          // reads from).
+          void host._prefetchSiteSubtree(siteId, driveId, folderId);
         }
       }
 
@@ -2055,15 +4220,41 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         void host._loadData(true).catch(() => undefined);
       }
 
+      // The live SharePoint-sites folder tree (Main folder / Sub-folder
+      // dropdowns) is a different navigation concept from the legacy
+      // hierarchyLevels computed above (which is empty for this scope
+      // anyway — see nextScope === 'sites' branch), so switching to List
+      // view from there must keep whatever Main folder / Sub-folder was
+      // selected rather than stomping it with level0/level3 — that stomp
+      // (always 'all' for this scope) is what made the filters visibly
+      // reset to "All main folders" / "All sub-folders" on every Folder ->
+      // List switch. Every other scope keeps its existing behavior.
+      // hierarchyLevels is always [] for the live SharePoint-sites folder
+      // tree (see above), so level0..level3 are always 'all' here — that
+      // used to blow away docGroupLevelFilter / docLeafCategoryFilter /
+      // docSubCategoryFilter (along with docCategoryFilter /
+      // docSubfolderOtherFilter) on every single Folder -> List switch,
+      // which is the "filters go blank when I switch views repeatedly"
+      // symptom for this scope. docCategoryFilter/docSubfolderOtherFilter
+      // were already carved out as an exception (preserved instead of
+      // stomped); the other three hierarchy filters need the same
+      // treatment for consistency.
+      const isLiveSitesFolderNav = folderPathStack[0]?.id === 'sites_root';
+      const nextDocCategoryFilter: string = isLiveSitesFolderNav ? docCategoryFilter : level0;
+      const nextDocSubfolderOtherFilter: string = isLiveSitesFolderNav ? docSubfolderOtherFilter : 'all';
+      const nextDocGroupLevelFilter: string = isLiveSitesFolderNav ? docGroupLevelFilter : level1;
+      const nextDocLeafCategoryFilter: string = isLiveSitesFolderNav ? docLeafCategoryFilter : level2;
+      const nextDocSubCategoryFilter: string = isLiveSitesFolderNav ? docSubCategoryFilter : level3;
       host.setState({
         docViewMode: 'list',
         docScopeType: nextScope,
         vesselFilter: nextVesselFilter || 'all',
         docGroupFilter: nextGroupFilter || 'all',
-        docCategoryFilter: level0,
-        docGroupLevelFilter: level1,
-        docLeafCategoryFilter: level2,
-        docSubCategoryFilter: level3,
+        docCategoryFilter: nextDocCategoryFilter,
+        docSubfolderOtherFilter: nextDocSubfolderOtherFilter,
+        docGroupLevelFilter: nextDocGroupLevelFilter,
+        docLeafCategoryFilter: nextDocLeafCategoryFilter,
+        docSubCategoryFilter: nextDocSubCategoryFilter,
         catFilter: 'all',
         textFilter: '',
         docListPage: 0,
@@ -2236,6 +4427,100 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     const sharedDocsSite = getFirstClassSite('nksdocman', 0);
     const docsSite = getFirstClassSite('dev', 1);
 
+    // Where the "Archive" toolbar button should root its picker popup when
+    // browsing the plain SharePoint folder tree (Sites / Shared Documents /
+    // Documents) — those views have no per-file checkbox selection of their
+    // own, unlike the vessel-organized List/Folder views below. Mirrors the
+    // same site/drive/folder-id resolution each of those views' own renderer
+    // already does (see the Level>=3 "sites" branch and renderLibraryBrowser
+    // further down) so the popup opens on exactly the folder on screen.
+    const resolveArchiveRootContext = (): { siteId: string; driveId: string; folderId: string; folderName: string } | null => {
+      if (atSitesRoot) {
+        if (stackLevel < 3) return null;
+        const siteNode = folderPathStack[1];
+        const rawSiteId = (siteNode?.id || '').replace(/^site:/, '');
+        const matchedSite = (host.state.documentSites || []).find(s =>
+          s.site_id === rawSiteId || s.site_key === rawSiteId || s.sp_site_name === siteNode?.name
+        );
+        const siteId = matchedSite?.site_id || rawSiteId;
+        const driveNode = folderPathStack[2];
+        const driveId = (driveNode?.id || '').replace(/^drive:/, '') || matchedSite?.drive_id || '';
+        if (!siteId || !driveId) return null;
+        const isDriveRoot = stackLevel === 3;
+        let folderId = isDriveRoot ? 'root' : (currentFolderNode?.id || 'root');
+        if (!isDriveRoot && /^sf_/i.test(folderId)) {
+          folderId = folderPathStack.slice(3).map(node => node.name).filter(Boolean).join('/');
+        }
+        return { siteId, driveId, folderId, folderName: currentFolderName || 'this folder' };
+      }
+      if (atSharedDocsRoot || atDocsRoot) {
+        const site = atSharedDocsRoot ? sharedDocsSite : docsSite;
+        if (!site?.site_id || !site?.drive_id) return null;
+        const isLibRoot = stackLevel === 1;
+        const folderId = isLibRoot ? 'root' : (currentFolderNode?.id || 'root');
+        return {
+          siteId: site.site_id,
+          driveId: site.drive_id,
+          folderId,
+          folderName: currentFolderName || site.default_library_name || (atSharedDocsRoot ? 'Shared Documents' : 'Documents'),
+        };
+      }
+      return null;
+    };
+
+    // Mirrors the site/folder resolution `handleDocumentsPageDrop` above
+    // does for the vessel-organized Folder/List views (flat-root template
+    // structure, not the plain SharePoint browsing `resolveArchiveRootContext`
+    // covers) — used by the "New Folder" toolbar button to reuse the
+    // existing Add Folder popup (host._openAddFolderDialog), which needs a
+    // real, non-synthetic SharePoint drive-item id to create a subfolder
+    // under.
+    const resolveVesselFolderContext = (): { folderId: string; folderLabel: string; vesselName: string } | null => {
+      const topFolderId = currentFolderNode && !/^(sf_|category_|common|vessels_root|specific_vessels|kaizen_root|sites_root|site:|drive:)/.test(currentFolderNode.id) ? currentFolderNode.id : '';
+      let currentVessel = '';
+      let subFolderPath = '';
+      let fallbackPath = '';
+
+      if (atKaizenRoot) {
+        currentVessel = 'Kaizen - Knowledge Bank';
+        const kaizenFolders = folderPathStack.filter(n => n.id !== 'kaizen_root' && n.name !== 'Kaizen - Knowledge Bank').map(n => n.name);
+        subFolderPath = ['Kaizen - Knowledge Bank', ...kaizenFolders].join(' > ');
+        fallbackPath = ['Kaizen - Knowledge Bank', ...kaizenFolders].join('/');
+      } else if (atCommonShips) {
+        currentVessel = 'Common for all vessels';
+        const commonFolders = folderPathStack.slice(2).map(n => n.name);
+        subFolderPath = [docMainFolder || 'Technical & Crewing', 'Common for all ships', ...commonFolders].join(' > ');
+        fallbackPath = [docMainFolder || 'Technical & Crewing', 'Common for all ships', ...commonFolders].join('/');
+      } else if (vesselStackIdx !== -1) {
+        currentVessel = currentVesselNameFromStack || (vessels.length > 0 ? vessels[0].name : 'Bow Fighter');
+        const afterVesselItems = folderPathStack.slice(vesselStackIdx + 1).map(n => n.name);
+        subFolderPath = [docMainFolder || 'Technical & Crewing', currentVessel, ...afterVesselItems].join(' > ');
+        fallbackPath = [docMainFolder || 'Technical & Crewing', currentVessel, ...afterVesselItems].join('/');
+      } else if (docMainFolder) {
+        currentVessel = (vesselFilter !== 'all' ? vesselFilter : '') || currentVesselNameFromStack || (vessels.length > 0 ? vessels[0].name : '');
+        subFolderPath = currentFolderNode && currentFolderNode.name !== docMainFolder && currentFolderNode.name !== 'Documents'
+          ? `${docMainFolder} > ${currentVessel ? `${currentVessel} > ` : ''}${currentFolderNode.name}`
+          : `${docMainFolder}${currentVessel ? ` > ${currentVessel}` : ''}`;
+        fallbackPath = [docMainFolder, ...(currentVessel ? [currentVessel] : [])].join('/');
+      } else {
+        const activeDept = 'Technical & Crewing';
+        currentVessel = (vesselFilter !== 'all' ? vesselFilter : '') || (vessels.length > 0 ? vessels[0].name : '');
+        subFolderPath = currentVessel ? `${activeDept} > ${currentVessel}` : activeDept;
+        fallbackPath = [activeDept, ...(currentVessel ? [currentVessel] : [])].join('/');
+      }
+
+      const liveId = host._getLiveSharePointFolderId(subFolderPath);
+      const matchingRow = host.state.rows.find(r =>
+        (currentVessel ? r.vesselName === currentVessel : true) &&
+        r.uploadFolderId &&
+        !r.uploadFolderId.includes('/') &&
+        (docMainFolder ? r.group.toLowerCase().includes(docMainFolder.toLowerCase().split(' ')[0]) : true)
+      );
+      const resolvedFolderId = topFolderId || liveId || matchingRow?.uploadFolderId || '';
+      if (!resolvedFolderId || resolvedFolderId.includes('/')) return null;
+      return { folderId: resolvedFolderId, folderLabel: subFolderPath, vesselName: currentVessel };
+    };
+
     const renderLibraryBrowser = (
       siteId: string,
       driveId: string,
@@ -2250,7 +4535,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
       if (folderData.loading && folderData.items.length === 0) {
         return (
-          <div style={{ padding: 48, textAlign: 'center', color: '#64748b' }}>
+          <div style={{ padding: 48, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>
             <div style={{ fontSize: 28, marginBottom: 8, animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</div>
             <div style={{ fontSize: 14, fontWeight: 600 }}>Loading {currentNode?.name || libraryTitle}...</div>
           </div>
@@ -2260,86 +4545,14 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       const baseChildFolders = folderData.items.filter(item => item.folder || (!item.file && item.name && !item.name.includes('.')));
       const childFiles = folderData.items.filter(item => item.file || (item.name && item.name.includes('.')));
 
-      const liveFolderMap = new Map<string, any>();
-      baseChildFolders.forEach(f => {
-        if (f.name) liveFolderMap.set(f.name.toLowerCase(), f);
-      });
-
-      const currentSegments = folderPathStack.slice(1).map(n => n.name.trim()).filter(Boolean);
-      const currentNodeName = (currentNode?.name || '').trim().toLowerCase();
-
-      Object.entries(host.state.uploadedFilesByFolder || {}).forEach(([key, fList]) => {
-        if (!Array.isArray(fList) || fList.length === 0) return;
-        if (host._appDeletedItemIds.has(key)) return;
-        if (/^01[A-Za-z0-9]{15,}$/.test(key.trim())) return;
-        const keyClean = key.replace(/\\/g, '/');
-        const keySegs = keyClean.split(/[>/]/).map(s => s.trim()).filter(Boolean);
-        if (keySegs.length === 0) return;
-
-        let targetChildSeg: string | null = null;
-        if (currentSegments.length > 0) {
-          const startsWithCurrent = currentSegments.every((seg, idx) => keySegs[idx]?.toLowerCase() === seg.toLowerCase());
-          if (startsWithCurrent && keySegs.length > currentSegments.length) {
-            targetChildSeg = keySegs[currentSegments.length];
-          }
-        } else if (isLibRoot && keySegs.length > 0) {
-          targetChildSeg = keySegs[0];
-        } else if (currentNodeName) {
-          const idx = keySegs.findIndex(s => s.toLowerCase() === currentNodeName);
-          if (idx !== -1 && idx + 1 < keySegs.length) {
-            targetChildSeg = keySegs[idx + 1];
-          }
-        }
-
-        if (targetChildSeg && isDisplayableFolderName(targetChildSeg)) {
-          const norm = targetChildSeg.toLowerCase();
-          if (!liveFolderMap.has(norm)) {
-            liveFolderMap.set(norm, {
-              id: `sf_${targetChildSeg}`,
-              name: targetChildSeg,
-              folder: { childCount: fList.length },
-              webUrl: '',
-              lastModifiedDateTime: 'Just now',
-            });
-          }
-        }
-      });
-
-      (host.state.rows || []).forEach(r => {
-        if (!r.subFolderPath || host._appDeletedItemIds.has(r.uploadFolderId)) return;
-        const rSegs = r.subFolderPath.split(/[>/]/).map(s => s.trim()).filter(Boolean);
-        if (rSegs.length === 0) return;
-
-        let targetChildSeg: string | null = null;
-        if (currentSegments.length > 0) {
-          const startsWithCurrent = currentSegments.every((seg, idx) => rSegs[idx]?.toLowerCase() === seg.toLowerCase());
-          if (startsWithCurrent && rSegs.length > currentSegments.length) {
-            targetChildSeg = rSegs[currentSegments.length];
-          }
-        } else if (isLibRoot && rSegs.length > 0) {
-          targetChildSeg = rSegs[0];
-        } else if (currentNodeName) {
-          const idx = rSegs.findIndex(s => s.toLowerCase() === currentNodeName);
-          if (idx !== -1 && idx + 1 < rSegs.length) {
-            targetChildSeg = rSegs[idx + 1];
-          }
-        }
-
-        if (targetChildSeg && isDisplayableFolderName(targetChildSeg)) {
-          const norm = targetChildSeg.toLowerCase();
-          if (!liveFolderMap.has(norm)) {
-            liveFolderMap.set(norm, {
-              id: r.uploadFolderId || `sf_${targetChildSeg}`,
-              name: targetChildSeg,
-              folder: { childCount: 1 },
-              webUrl: '',
-              lastModifiedDateTime: 'Just now',
-            });
-          }
-        }
-      });
-
-      const childFolders = Array.from(liveFolderMap.values());
+      // NOTE: this used to merge host.state.rows (vessel rows, aggregated across ALL
+      // sites since GET /api/vessels has no site scoping) and host.state.uploadedFilesByFolder
+      // (keyed by a bare path string with no site/drive affinity) into the folder list
+      // shown here. Neither source carries any site/drive identity, so at a library root
+      // it injected other sites' vessel names as phantom folders (e.g. vessel folders
+      // showing up inside "Communication Site" > Documents). This is a real SharePoint
+      // library browser, so it must show exactly what Graph returns for this site/drive.
+      const childFolders = baseChildFolders;
 
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -2348,7 +4561,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               <div style={{ fontSize: 13, fontWeight: 700, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 {currentNode?.name || libraryTitle}
               </div>
-              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+              <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>
                 {librarySubtitle} · {childFolders.length} folders, {childFiles.length} files
               </div>
             </div>
@@ -2372,10 +4585,29 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     <div
                       key={sf.id || sf.name + idx}
                       onClick={() => {
-                        host._pushFolderNav([...folderPathStack, { id: sf.id, name: sf.name }], folderGroupKey);
+                        // Re-sync the Main folder / Sub-folder dropdowns to the
+                        // folder actually being opened, the same way a
+                        // breadcrumb click or dropdown pick already does (see
+                        // deriveDocFiltersFromStack). Without this, clicking
+                        // folder tiles here never touched docCategoryFilter at
+                        // all, so it kept whatever main folder was selected
+                        // earlier (e.g. from the Main folder dropdown, or the
+                        // "is also under" chips) even after the grid had moved
+                        // into a different main folder's tiles — which is what
+                        // left the Sub-folder dropdown scoped to that stale,
+                        // no-longer-current main folder's live id.
+                        const newStack = [...folderPathStack, { id: sf.id, name: sf.name }];
+                        host._pushFolderNav(newStack, folderGroupKey);
+                        host.setState({
+                          ...deriveDocFiltersFromStack(newStack),
+                          docGroupLevelFilter: 'all',
+                          docLeafCategoryFilter: 'all',
+                          docSubCategoryFilter: 'all',
+                          docListPage: 0,
+                        });
                       }}
                       style={{
-                        background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
+                        background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)', padding: 18,
                         display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
                         boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'all 0.15s ease',
                       }}
@@ -2387,16 +4619,16 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         📁
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {sf.name}
                         </div>
-                        <div style={{ fontSize: 12, color: '#64748b', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                           {sfLoading ? (
-                            <span style={{ color: '#94a3b8', fontSize: 10 }}>{sfTotal > 0 ? `${sfTotal} items` : '···'}</span>
+                            <span style={{ color: 'var(--vdms-text-faint)', fontSize: 10 }}>{sfTotal > 0 ? `${sfTotal} items` : '···'}</span>
                           ) : (
                             <>
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFolderCount ?? 0) > 0 ? '#e0f2fe' : '#f1f5f9', color: (sfFolderCount ?? 0) > 0 ? '#0369a1' : '#94a3b8', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📁 {sfFolderCount ?? 0}</span>
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFileCount ?? 0) > 0 ? '#dcfce7' : '#f1f5f9', color: (sfFileCount ?? 0) > 0 ? '#15803d' : '#94a3b8', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📄 {sfFileCount ?? 0}</span>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFolderCount ?? 0) > 0 ? '#e0f2fe' : 'var(--vdms-border-soft)', color: (sfFolderCount ?? 0) > 0 ? '#0369a1' : 'var(--vdms-text-faint)', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📁 {sfFolderCount ?? 0}</span>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFileCount ?? 0) > 0 ? '#dcfce7' : 'var(--vdms-border-soft)', color: (sfFileCount ?? 0) > 0 ? '#15803d' : 'var(--vdms-text-faint)', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📄 {sfFileCount ?? 0}</span>
                             </>
                           )}
                         </div>
@@ -2414,10 +4646,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               <div style={{ fontSize: 12, fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Files ({childFiles.length})
               </div>
-              <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+              <div style={{ background: 'var(--vdms-surface)', borderRadius: 12, border: '1px solid var(--vdms-border)', overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
-                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
+                    <tr style={{ background: 'var(--vdms-surface-alt)', borderBottom: '1px solid var(--vdms-border)', color: 'var(--vdms-text-muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
                       <th style={{ padding: '10px 16px' }}>FILE NAME</th>
                       <th style={{ padding: '10px 16px' }}>SIZE</th>
                       <th style={{ padding: '10px 16px' }}>DATE MODIFIED</th>
@@ -2433,8 +4665,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       const fileUrl = file.web_url || file.webUrl || file.download_url || '';
 
                       return (
-                        <tr key={file.id || file.name + idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                          <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <tr key={file.id || file.name + idx} style={{ borderBottom: '1px solid var(--vdms-border-soft)' }}>
+                          <td style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--vdms-text)', display: 'flex', alignItems: 'center', gap: 10 }}>
                             <span style={{ fontSize: 18 }}>📄</span>
                             <span
                               onClick={() => {
@@ -2450,8 +4682,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                               {file.name}
                             </span>
                           </td>
-                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{fileSize}</td>
-                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{fileDate}</td>
+                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)' }}>{fileSize}</td>
+                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)' }}>{fileDate}</td>
                           <td style={{ padding: '12px 16px', textAlign: 'right' }}>
                             <button
                               type="button"
@@ -2480,9 +4712,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           )}
 
           {childFolders.length === 0 && childFiles.length === 0 && (
-            <div style={{ background: '#fff', borderRadius: 14, border: '1px dashed #cbd5e1', padding: 48, textAlign: 'center', color: '#94a3b8' }}>
+            <div style={{ background: 'var(--vdms-surface)', borderRadius: 14, border: '1px dashed var(--vdms-border)', padding: 48, textAlign: 'center', color: 'var(--vdms-text-faint)' }}>
               <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
-              <div style={{ fontWeight: 600, color: '#475569', fontSize: 15 }}>This folder is empty</div>
+              <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>This folder is empty</div>
               <div style={{ fontSize: 13, marginTop: 4 }}>No files or subfolders found in this directory.</div>
             </div>
           )}
@@ -2505,36 +4737,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           .dms-nav-arrow:not(:disabled):hover { transform: translateY(-2px) scale(1.08); filter: saturate(1.2); }
           .dms-nav-arrow:not(:disabled):active { transform: translateY(0) scale(0.96); }
         `}</style>
-        {(host.state.documentSites.length > 1 || host.state.documentSites.length === 1) && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', padding: '12px 14px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              {host.state.documentSites.length > 1 && <>
-                <label htmlFor="documents-site-selector" style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>SharePoint site</label>
-                <select
-                  id="documents-site-selector"
-                  value={host.state.activeDocumentSite || ''}
-                  disabled={host.state.documentLiveFoldersLoading}
-                  onChange={event => {
-                    void host._switchDocumentSite(event.target.value).catch(error => window.alert(error?.message || 'Could not switch site.'));
-                  }}
-                  style={{ minWidth: 220, padding: '7px 10px', border: '1px solid #94a3b8', borderRadius: 7, background: '#fff', color: '#0f172a' }}
-                >
-                  {host.state.documentSites.map(site => <option key={site.site_key} value={site.site_key}>{site.sp_site_name || site.site_key}</option>)}
-                </select>
-              </>}
-              {host.state.documentLiveFoldersLoading && <span style={{ fontSize: 12, color: '#64748b' }}>Loading live folders...</span>}
-            </div>
-            <button
-              type="button"
-              onClick={() => host.setState({ modal: 'create', selectedVessel: null, form: { name: '', imo: '', shipyard: '', hull_number: '', vessel_type: '', target_site_ids: host.state.activeDocumentSite ? [host.state.activeDocumentSite] : [] }, modalMsg: null, modalError: null, formFieldErrors: {} })}
-              style={{ border: 0, borderRadius: 7, background: '#0f766e', color: '#fff', padding: '8px 14px', fontWeight: 700, cursor: 'pointer' }}
-            >
-              + New Vessel
-            </button>
-          </div>
-        )}
         {/* Breadcrumb Navigation Trail */}
-        <div style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           {/* Back / Forward navigation buttons */}
           <button
             onClick={goBack}
@@ -2543,9 +4747,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             title="Go back (Left Arrow)"
             className="dms-nav-arrow"
             style={{
-              width: 34, height: 34, borderRadius: 10, border: canGoBack ? '1px solid #38bdf8' : '1px solid #cbd5e1',
-              background: canGoBack ? 'linear-gradient(135deg, #0ea5e9, #2563eb)' : '#f1f5f9',
-              color: canGoBack ? '#fff' : '#cbd5e1',
+              width: 34, height: 34, borderRadius: 10, border: canGoBack ? '1px solid #38bdf8' : '1px solid var(--vdms-border)',
+              background: canGoBack ? 'linear-gradient(135deg, #0ea5e9, #2563eb)' : 'var(--vdms-border-soft)',
+              color: canGoBack ? '#fff' : 'var(--vdms-border)',
               cursor: canGoBack ? 'pointer' : 'not-allowed',
               fontSize: 20, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               transition: 'transform 160ms ease, filter 160ms ease, box-shadow 160ms ease',
@@ -2559,30 +4763,19 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             title="Go forward (Right Arrow)"
             className="dms-nav-arrow"
             style={{
-              width: 34, height: 34, borderRadius: 10, border: canGoForward ? '1px solid #c084fc' : '1px solid #cbd5e1',
-              background: canGoForward ? 'linear-gradient(135deg, #8b5cf6, #ec4899)' : '#f1f5f9',
-              color: canGoForward ? '#fff' : '#cbd5e1',
+              width: 34, height: 34, borderRadius: 10, border: canGoForward ? '1px solid #c084fc' : '1px solid var(--vdms-border)',
+              background: canGoForward ? 'linear-gradient(135deg, #8b5cf6, #ec4899)' : 'var(--vdms-border-soft)',
+              color: canGoForward ? '#fff' : 'var(--vdms-border)',
               cursor: canGoForward ? 'pointer' : 'not-allowed',
               fontSize: 20, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               transition: 'transform 160ms ease, filter 160ms ease, box-shadow 160ms ease',
               flexShrink: 0,
             }}
           >→</button>
-          <span style={{ cursor: 'pointer', color: '#0284c7' }} onClick={() => {
-            host._pushFolderNav([], null);
-            host.setState({ docGroupFilter: 'all', vesselFilter: 'all', docCategoryFilter: 'all', docGroupLevelFilter: 'all', docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', catFilter: 'all', textFilter: '', docScopeType: 'vessels' });
-          }}>Home</span>
-          <span>›</span>
-          <span
-            style={{ cursor: stackLevel === 0 && !docMainFolder ? 'default' : 'pointer', color: stackLevel === 0 && !docMainFolder ? '#0f172a' : '#0284c7', fontWeight: stackLevel === 0 && !docMainFolder ? 600 : 400 }}
-            onClick={() => {
-              host._pushFolderNav([], null);
-              host.setState({ docGroupFilter: 'all', vesselFilter: 'all', docCategoryFilter: 'all', docGroupLevelFilter: 'all', docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', catFilter: 'all', textFilter: '', docScopeType: 'vessels' });
-            }}
-          >
-            Documents
-          </span>
-         {folderPathStack.map((item, idx) => {
+        {folderPathStack.map((item, idx) => {
+          if (idx === 0 && (item.id === 'sites_root' || item.name === 'SharePoint Sites' || item.name === 'Sites Documents')) {
+            return null;
+          }
             const isLast = idx === folderPathStack.length - 1;
             return (
               <React.Fragment key={item.id + idx}>
@@ -2592,16 +4785,21 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     if (atKaizenRoot && idx === 0) {
                       const newStack = folderPathStack.slice(0, 1);
                       host._pushFolderNav(newStack, 'Kaizen - Knowledge Bank');
+                      host.setState(deriveDocFiltersFromStack(newStack));
                       triggerFolderRefresh(newStack, 'kaizen');
                     } else if (idx === 0) {
                       const mainFolder = item.name as MainFolderKey;
                       const newStack = folderPathStack.slice(0, 1);
                       host._pushFolderNav(newStack, mainFolder);
+                      // Always re-sync the Main folder / Sub-folder dropdowns to
+                      // this breadcrumb jump, not only for the three named
+                      // departments below — a live SharePoint top-level folder
+                      // name landing here needs the same reset.
+                      host.setState(deriveDocFiltersFromStack(newStack));
                       if (mainFolder === 'Technical & Crewing' || mainFolder === 'Commercial & Chartering' || mainFolder === 'Insurance') {
                         host.setState({
                           vesselFilter: 'all',
                           docScopeType: 'vessels',
-                          docCategoryFilter: 'all',
                           docGroupLevelFilter: 'all',
                           docLeafCategoryFilter: 'all',
                           docSubCategoryFilter: 'all',
@@ -2620,7 +4818,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       host.setState({
                         vesselFilter: item.name,
                         docScopeType: 'vessels',
-                        docCategoryFilter: 'all',
+                        ...deriveDocFiltersFromStack(newStack),
                         docGroupLevelFilter: 'all',
                         docLeafCategoryFilter: 'all',
                         docSubCategoryFilter: 'all',
@@ -2631,10 +4829,19 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     } else {
                       const newStack = folderPathStack.slice(0, idx + 1);
                       host._pushFolderNav(newStack, docMainFolder);
+                      // Breadcrumb navigation must re-sync the Main folder /
+                      // Sub-folder dropdowns to match the folder now being
+                      // viewed — the dropdowns' own onChange handlers already
+                      // do this when a folder is picked from them, but a
+                      // breadcrumb click bypasses those, so it needs its own
+                      // sync here.
+                      host.setState(newStack[0]?.id === 'sites_root'
+                        ? deriveLiveNavFilterState(newStack)
+                        : deriveDocFiltersFromStack(newStack));
                       triggerFolderRefresh(newStack);
                     }
                   }}
-                  style={{ cursor: isLast ? 'default' : 'pointer', color: isLast ? '#0f172a' : '#0284c7', fontWeight: isLast ? 600 : 400 }}
+                  style={{ cursor: isLast ? 'default' : 'pointer', color: isLast ? 'var(--vdms-text)' : '#0284c7', fontWeight: isLast ? 600 : 400 }}
                 >
                   {item.name}
                 </span>
@@ -2643,14 +4850,16 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           })}
         </div>
 
-        {/* Module Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
+        {/* Module Header — the Folder/List toggle is pinned as the last,
+            non-shrinking child so it sits at the same top-right spot in both
+            views; the variable-width action buttons wrap to its left. */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <div style={{ flex: '0 1 auto', minWidth: 160 }}>
+            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--vdms-text)', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 20 }}>📁</span>
               {currentFolderNode ? currentFolderNode.name : 'Documents'}
             </h2>
-            <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>
+            <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--vdms-text-muted)' }}>
               {docViewMode === 'list'
                 ? `${filtered.length} rows · flattened list view`
                 : stackLevel === 0
@@ -2669,60 +4878,121 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               && !atSitesRoot && !atSharedDocsRoot && !atDocsRoot
               && !host.state.documentFilesLoading
               && (
-              <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: allCurrentFolderFiles.length > 0 ? '#15803d' : '#64748b' }}>
+              <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: allCurrentFolderFiles.length > 0 ? '#15803d' : 'var(--vdms-text-muted)' }}>
                 {allCurrentFolderFiles.length > 0 ? '✅ Attached' : '⚪ Not Attached'}
               </div>
             )}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {/* Folder view / List view Pill Toggle */}
-            <div style={{ display: 'inline-flex', background: '#fff', border: '1px solid #cbd5e1', borderRadius: 8, padding: 3, gap: 2 }}>
-              <button
-                onClick={openFolderViewFromListContext}
-                style={{
-                  padding: '5px 12px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                  background: docViewMode === 'folder' ? '#0f172a' : 'transparent',
-                  color: docViewMode === 'folder' ? '#fff' : '#64748b',
+          {(host.state.documentSites || []).length > 1 && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--vdms-text)', fontWeight: 600 }}>
+              SharePoint site
+              <select
+                aria-label="Select SharePoint site"
+                value={host.state.activeDocumentSite || ''}
+                onChange={event => {
+                  const siteKey = event.target.value || '';
+                  void host._switchDocumentSite(siteKey).catch(error => {
+                    alert(error?.message || 'Could not switch site.');
+                  });
                 }}
+                style={{ minWidth: 230, padding: '9px 12px', border: '1px solid var(--vdms-text-faint)', borderRadius: 7, background: 'var(--vdms-surface)', color: 'var(--vdms-text)' }}
               >
-                ⊞ Folder view
-              </button>
-              <button
-                onClick={openListViewFromFolderContext}
-                style={{
-                  padding: '5px 12px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                  background: docViewMode === 'list' ? '#0f172a' : 'transparent',
-                  color: docViewMode === 'list' ? '#fff' : '#64748b',
-                }}
-              >
-                ☰ List view
-              </button>
-            </div>
+                {host.state.documentSites.map(site => (
+                  <option key={site.site_key} value={site.site_key}>
+                    {site.sp_site_name || site.site_key}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
-            {/* Archive Button */}
-            <button
-              disabled={(docViewMode === 'list' ? listViewSelectedFiles.size : folderViewSelectedFiles.size) === 0}
-              onClick={() => {
-                const selectedFiles = docViewMode === 'list'
-                  ? groupedList.flatMap(row => row.files
-                    .filter(file => listViewSelectedFiles.has(file.id))
-                    .map(file => ({ id: file.id, name: file.name, folderPath: row.subFolderPath, department: row.group, vesselName: row.vesselName })))
-                  : allCurrentFolderFiles
-                    .filter(file => folderViewSelectedFiles.has(file.id || file.name))
-                    .map(file => ({ id: file.id || file.name, name: file.name, folderPath: currentFolderName || '', department: docMainFolder || '', vesselName: currentVesselNameFromStack || '' }));
-                void host._archiveSelectedDocuments(selectedFiles);
-              }}
-              style={{
-                background: (docViewMode === 'list' ? listViewSelectedFiles.size : folderViewSelectedFiles.size) > 0 ? '#d97706' : '#f1f5f9',
-                color: (docViewMode === 'list' ? listViewSelectedFiles.size : folderViewSelectedFiles.size) > 0 ? '#fff' : '#94a3b8',
-                border: 'none', borderRadius: 8,
-                padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-              }}
-            >
-              📦 Archive{((docViewMode === 'list' ? listViewSelectedFiles.size : folderViewSelectedFiles.size) > 0) ? ` (${docViewMode === 'list' ? listViewSelectedFiles.size : folderViewSelectedFiles.size})` : ''}
-            </button>
+          <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 10 }}>
+
+            {/* New Folder Button — sits just before Archive. In the plain
+                SharePoint folder tree (Sites / Shared Documents / Documents)
+                it opens a popup (CreateFolderModal) that creates a folder at
+                — or at an edited variant of — the path currently open, via
+                Graph directly, with an option to create a vessel instead.
+                In the vessel-organized Folder/List views it reuses the
+                existing Add Folder popup, which needs a real SharePoint
+                folder id (so it's disabled where none can be resolved yet,
+                e.g. before a vessel/department has been opened). */}
+            {(() => {
+              const usesArchivePicker = atSitesRoot || atSharedDocsRoot || atDocsRoot;
+              const rootCtx = usesArchivePicker ? resolveArchiveRootContext() : null;
+              const vesselCtx = usesArchivePicker ? null : resolveVesselFolderContext();
+              const canCreateFolder = usesArchivePicker ? !!rootCtx : !!vesselCtx;
+              return (
+                <button
+                  disabled={!canCreateFolder}
+                  onClick={() => {
+                    if (usesArchivePicker) {
+                      if (!rootCtx) { alert('Open a folder first to create a folder inside it.'); return; }
+                      host._openCreateFolderDialog(rootCtx.siteId, rootCtx.driveId, rootCtx.folderId, rootCtx.folderName);
+                      return;
+                    }
+                    if (!vesselCtx) { alert('Open a vessel or department folder first to create a folder inside it.'); return; }
+                    host._openAddFolderDialog(vesselCtx);
+                  }}
+                  style={{
+                    background: canCreateFolder ? '#0284c7' : 'var(--vdms-border-soft)',
+                    color: canCreateFolder ? '#fff' : 'var(--vdms-text-faint)',
+                    border: 'none', borderRadius: 8,
+                    padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: canCreateFolder ? 'pointer' : 'not-allowed',
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                  }}
+                  title={canCreateFolder ? 'Create a new folder here' : 'Open a folder first to create a folder inside it'}
+                >
+                  📁 New Folder
+                </button>
+              );
+            })()}
+
+            {/* Archive Button — in the plain SharePoint folder tree (Sites /
+                Shared Documents / Documents) there's no per-file checkbox
+                selection to archive, so this opens a popup to pick folders
+                and/or files instead. In the vessel-organized List/Folder
+                views it still archives whatever's already checked there. */}
+            {(() => {
+              const usesArchivePicker = atSitesRoot || atSharedDocsRoot || atDocsRoot;
+              const selectionCount = docViewMode === 'list' ? listViewSelectedFiles.size : folderViewSelectedFiles.size;
+              const isActive = usesArchivePicker || selectionCount > 0;
+              return (
+                <button
+                  disabled={!usesArchivePicker && selectionCount === 0}
+                  onClick={() => {
+                    if (usesArchivePicker) {
+                      const ctx = resolveArchiveRootContext();
+                      if (!ctx) {
+                        alert('Open a folder first to archive files or folders from it.');
+                        return;
+                      }
+                      host._openArchivePicker(ctx.siteId, ctx.driveId, ctx.folderId, ctx.folderName);
+                      return;
+                    }
+                    const selectedFiles = docViewMode === 'list'
+                      ? groupedList.flatMap(row => row.files
+                        .filter(file => listViewSelectedFiles.has(file.id))
+                        .map(file => ({ id: file.id, name: file.name, folderPath: row.subFolderPath, department: row.group, vesselName: row.vesselName })))
+                      : allCurrentFolderFiles
+                        .filter(file => folderViewSelectedFiles.has(file.id || file.name))
+                        .map(file => ({ id: file.id || file.name, name: file.name, folderPath: currentFolderName || '', department: docMainFolder || '', vesselName: currentVesselNameFromStack || '' }));
+                    void host._archiveSelectedDocuments(selectedFiles);
+                  }}
+                  style={{
+                    background: isActive ? '#d97706' : 'var(--vdms-border-soft)',
+                    color: isActive ? '#fff' : 'var(--vdms-text-faint)',
+                    border: 'none', borderRadius: 8,
+                    padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: isActive ? 'pointer' : 'not-allowed',
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                  }}
+                  title={usesArchivePicker ? 'Choose folders or files to archive' : undefined}
+                >
+                  📦 Archive{(!usesArchivePicker && selectionCount > 0) ? ` (${selectionCount})` : ''}
+                </button>
+              );
+            })()}
 
             {/* Global Delete Button - List View */}
             {docViewMode === 'list' && (
@@ -2736,9 +5006,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   host._openFileDeleteDialog(filesToDelete);
                 }}
                 style={{
-                  background: listViewSelectedFiles.size > 0 ? '#fff5f5' : '#f8fafc',
-                  color: listViewSelectedFiles.size > 0 ? '#ef4444' : '#cbd5e1',
-                  border: `1px solid ${listViewSelectedFiles.size > 0 ? '#fca5a5' : '#e2e8f0'}`,
+                  background: listViewSelectedFiles.size > 0 ? '#fff5f5' : 'var(--vdms-surface-alt)',
+                  color: listViewSelectedFiles.size > 0 ? '#ef4444' : 'var(--vdms-border)',
+                  border: `1px solid ${listViewSelectedFiles.size > 0 ? '#fca5a5' : 'var(--vdms-border)'}`,
                   borderRadius: 8, padding: '7px 16px', fontSize: 13, fontWeight: 600,
                   cursor: listViewSelectedFiles.size > 0 ? 'pointer' : 'not-allowed',
                   display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -2767,9 +5037,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   host._openFileDeleteDialog(filesToDelete);
                 }}
                 style={{
-                  background: folderViewSelectedFiles.size > 0 ? '#fff5f5' : '#f8fafc',
-                  color: folderViewSelectedFiles.size > 0 ? '#ef4444' : '#cbd5e1',
-                  border: `1px solid ${folderViewSelectedFiles.size > 0 ? '#fca5a5' : '#e2e8f0'}`,
+                  background: folderViewSelectedFiles.size > 0 ? '#fff5f5' : 'var(--vdms-surface-alt)',
+                  color: folderViewSelectedFiles.size > 0 ? '#ef4444' : 'var(--vdms-border)',
+                  border: `1px solid ${folderViewSelectedFiles.size > 0 ? '#fca5a5' : 'var(--vdms-border)'}`,
                   borderRadius: 8, padding: '7px 16px', fontSize: 13, fontWeight: 600,
                   cursor: folderViewSelectedFiles.size > 0 ? 'pointer' : 'not-allowed',
                   display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -2969,93 +5239,39 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             })()}
 
           </div>
+
+          {/* Folder view / List view Pill Toggle — fixed position */}
+          <div style={{ display: 'inline-flex', flexShrink: 0, background: 'var(--vdms-surface)', border: '1px solid var(--vdms-border)', borderRadius: 8, padding: 3, gap: 2 }}>
+            <button
+              onClick={openFolderViewFromListContext}
+              style={{
+                padding: '5px 12px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                background: docViewMode === 'folder' ? 'var(--vdms-toggle-active-bg)' : 'transparent',
+                color: docViewMode === 'folder' ? 'var(--vdms-toggle-active-text)' : 'var(--vdms-text-muted)',
+              }}
+            >
+              ⊞ Folder view
+            </button>
+            <button
+              onClick={openListViewFromFolderContext}
+              style={{
+                padding: '5px 12px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                background: docViewMode === 'list' ? 'var(--vdms-toggle-active-bg)' : 'transparent',
+                color: docViewMode === 'list' ? 'var(--vdms-toggle-active-text)' : 'var(--vdms-text-muted)',
+              }}
+            >
+              ☰ List view
+            </button>
+          </div>
         </div>
 
-        {/* ── Filter Toolbar ── */}
-        <div style={{ background: '#fff', borderRadius: 10, padding: '10px 12px', border: '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {/* 3 Scope Options: 1st Option = Specific Vessels, 2nd Option = Common for all vessels, 3rd Option = Kaizen - Knowledge Bank */}
-          {docViewMode === 'list' && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingBottom: 6, borderBottom: '1px solid #f1f5f9' }}>
-              <div style={{ display: 'inline-flex', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 8, padding: 3, gap: 4, flexWrap: 'wrap' }}>
-                <button
-                  onClick={() => host.setState({ docScopeType: 'vessels', vesselFilter: 'all', docGroupFilter: 'all', docCategoryFilter: 'all', docGroupLevelFilter: 'all', docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', catFilter: 'all', docListPage: 0, folderPathStack: [], docMainFolder: null })}
-                  style={{
-                    padding: '6px 14px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                    background: docScopeType === 'vessels' ? '#0284c7' : 'transparent',
-                    color: docScopeType === 'vessels' ? '#fff' : '#475569',
-                    display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease',
-                  }}
-                >
-                  <span>🚢</span> 1. Specific Vessels
-                </button>
-                <button
-                  onClick={() => host.setState({ docScopeType: 'common', vesselFilter: 'all', docGroupFilter: 'all', docCategoryFilter: 'all', docGroupLevelFilter: 'all', docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', catFilter: 'all', docListPage: 0, folderPathStack: [], docMainFolder: null })}
-                  style={{
-                    padding: '6px 14px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                    background: docScopeType === 'common' ? '#0284c7' : 'transparent',
-                    color: docScopeType === 'common' ? '#fff' : '#475569',
-                    display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease',
-                  }}
-                >
-                  <span>📁</span> 2. Common for all vessels
-                </button>
-                <button
-                  onClick={() => {
-                    host.setState({
-                      docScopeType: 'kaizen',
-                      vesselFilter: 'all',
-                      docGroupFilter: 'all',
-                      docCategoryFilter: 'all',
-                      docGroupLevelFilter: 'all',
-                      docLeafCategoryFilter: 'all',
-                      docSubCategoryFilter: 'all',
-                      catFilter: 'all',
-                      docListPage: 0,
-                      folderPathStack: [{ id: 'kaizen_root', name: 'Kaizen - Knowledge Bank' }],
-                      docMainFolder: 'Kaizen - Knowledge Bank',
-                    });
-                    void host._mergeLiveSharePointFiles(['Kaizen - Knowledge Bank']).catch(() => undefined);
-                  }}
-                  style={{
-                    padding: '6px 14px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                    background: docScopeType === 'kaizen' ? '#0284c7' : 'transparent',
-                    color: docScopeType === 'kaizen' ? '#fff' : '#475569',
-                    display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease',
-                  }}
-                >
-                  <span>📚</span> 3. Kaizen - Knowledge Bank
-                </button>
-                <button
-                  onClick={() => {
-                    host.setState({
-                      docScopeType: 'sites',
-                      vesselFilter: 'all',
-                      docGroupFilter: 'all',
-                      docCategoryFilter: 'all',
-                      docGroupLevelFilter: 'all',
-                      docLeafCategoryFilter: 'all',
-                      docSubCategoryFilter: 'all',
-                      catFilter: 'all',
-                      docListPage: 0,
-                      folderPathStack: [{ id: 'sites_root', name: 'SharePoint Sites' }],
-                      docMainFolder: 'SharePoint Sites',
-                    });
-                    if ((host.state.documentSites || []).length === 0) {
-                      void host._loadDocumentSites().catch(() => undefined);
-                    }
-                  }}
-                  style={{
-                    padding: '6px 14px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                    background: docScopeType === 'sites' ? '#0284c7' : 'transparent',
-                    color: docScopeType === 'sites' ? '#fff' : '#475569',
-                    display: 'inline-flex', alignItems: 'center', gap: 6, transition: 'all 0.15s ease',
-                  }}
-                >
-                  <span>🌐</span> SharePoint Sites
-                </button>
-              </div>
+        <CopilotSearchPanel host={host} />
 
-              <span style={{ fontSize: 12, color: '#64748b' }}>
+        {/* ── Filter Toolbar ── */}
+        <div style={{ background: 'var(--vdms-surface)', borderRadius: 10, padding: '10px 12px', border: '1px solid var(--vdms-border)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {docViewMode === 'list' && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingBottom: 6, borderBottom: '1px solid var(--vdms-border-soft)' }}>
+              <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>
                 {docScopeType === 'vessels' && `Showing documents for ${vesselFilter !== 'all' ? vesselFilter : 'individual vessels'}`}
                 {docScopeType === 'common' && 'Showing documents shared across all vessels (Common for all ships)'}
                 {docScopeType === 'kaizen' && 'Showing global Kaizen - Knowledge Bank documents'}
@@ -3063,52 +5279,53 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 {docScopeType === 'documents' && 'Showing Communication Site · Documents library'}
                 {docScopeType === 'sites' && 'Showing connected SharePoint sites & document libraries'}
               </span>
+              <button
+                type="button"
+                onClick={() => host._exportVesselsExcel()}
+                disabled={host.state.vesselsExcelExportBusy}
+                title="Download a full vessel + folder summary (.xlsx) — independent of the filters above"
+                style={{
+                  border: '1px solid #bae6fd', background: host.state.vesselsExcelExportBusy ? 'var(--vdms-border-soft)' : '#f0f9ff',
+                  color: host.state.vesselsExcelExportBusy ? 'var(--vdms-text-faint)' : '#0369a1', borderRadius: 8,
+                  padding: '6px 12px', fontSize: 12, fontWeight: 600,
+                  cursor: host.state.vesselsExcelExportBusy ? 'not-allowed' : 'pointer',
+                  display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
+                }}
+              >
+                {host.state.vesselsExcelExportBusy ? '⏳ Exporting…' : '⬇ Export vessels report (.xlsx)'}
+              </button>
             </div>
           )}
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
             <div style={{ position: 'relative', flex: '1 1 180px', minWidth: 160 }}>
-              <span style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 12 }}>🔍</span>
-              <input
-                type="text"
-                placeholder="Filter by vessel, main folder, document section, path..."
+              <span style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--vdms-text-faint)', fontSize: 12, zIndex: 1 }}>🔍</span>
+              {/* Debounced: typing feeds this page's expensive per-render
+                  recompute (groupCatActive's recursive folder walk / fleet-wide
+                  row scan below), which used to run once per keystroke and made
+                  the box freeze for 15-20s while it caught up. DebouncedSearchInput
+                  keeps the box itself responsive (local state) and only pushes
+                  into host.setState / _scheduleGlobalSearch 300ms after typing
+                  stops. See DebouncedSearchInput.tsx's doc comment. */}
+              <DebouncedSearchInput
                 value={textFilter}
-                onChange={e => host.setState({ textFilter: e.target.value, docListPage: 0 })}
-                style={{ width: '100%', padding: '6px 10px 6px 28px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, outline: 'none', boxSizing: 'border-box' }}
+                placeholder="Search vessel, file name (partial ok), folder, group, category, path..."
+                title="Matches any format/file type. You can combine terms — e.g. a vessel name plus a partial file name — separated by spaces; each word can match a different field."
+                style={{ width: '100%', padding: '6px 26px 6px 28px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, outline: 'none', boxSizing: 'border-box' }}
+                onChange={nextValue => {
+                  host.setState({ textFilter: nextValue, docListPage: 0, searchDropdownActiveIndex: -1 });
+                  // Fleet-wide backend lookup, debounced: finds which
+                  // vessels (beyond whatever's already loaded into `rows`)
+                  // contain a match and lazily loads them, so this box
+                  // actually searches the whole fleet rather than only
+                  // vessels the user has already opened this session.
+                  host._scheduleGlobalSearch(nextValue);
+                }}
               />
             </div>
-            {docScopeType === 'sites' && (host.state.documentSites || []).length > 0 && (
+            {docScopeType !== 'kaizen' && MAIN_FOLDERS.length > 0 && (
               <select
-                aria-label="Select SharePoint site"
-                value={host.state.activeDocumentSite || ''}
-                disabled={host.state.documentLiveFoldersLoading}
-                onChange={e => {
-                  const newSite = e.target.value;
-                  void host._switchDocumentSite(newSite).catch(err => alert(err?.message || 'Could not switch site.'));
-                }}
-                style={{
-                  padding: '6px 12px',
-                  borderRadius: 8,
-                  border: '2px solid #0284c7',
-                  fontSize: 12,
-                  fontWeight: 700,
-                  background: '#f0f9ff',
-                  color: '#0369a1',
-                  outline: 'none',
-                  maxWidth: 220,
-                  cursor: 'pointer',
-                }}
-                title="Select SharePoint site to display"
-              >
-                {host.state.documentSites.map(s => (
-                  <option key={s.site_key} value={s.site_key}>
-                    🌐 {s.sp_site_name || s.site_key}
-                  </option>
-                ))}
-              </select>
-            )}
-            {docScopeType !== 'kaizen' && (
-              <select
+                aria-label="Group filter"
                 value={docGroupFilter}
                 onChange={e => {
                   const val = e.target.value;
@@ -3125,7 +5342,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     host.setState({ docGroupFilter: val, docCategoryFilter: 'all', docGroupLevelFilter: 'all', docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', catFilter: 'all', docListPage: 0 });
                   }
                 }}
-                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 160 }}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 160 }}
               >
                 <option value="all">All main folders</option>
                 {allGroups.map(g => (
@@ -3133,30 +5350,16 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 ))}
               </select>
             )}
-            {(docScopeType === 'vessels' || docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents') && (mainFolderPage || docViewMode === 'list') && (
+            {/* Vessel filter — available in both Folder view and List view,
+                not only at the department vessel-tile page or in List view
+                (mainFolderPage-only case used to hide it everywhere else in
+                Folder view browsing). */}
+            {(docScopeType === 'vessels' || docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents') && (
               <select
+                aria-label="Vessel filter"
                 value={mainFolderPage ? (vesselFilter === 'all' ? '' : vesselFilter) : vesselFilter}
-                onChange={e => {
-                  const val = e.target.value;
-                  if (docViewMode === 'folder' && mainFolderPage && docMainFolder) {
-                    if (val && val !== 'all') {
-                      const vesselMatch = vessels.find(v => v.name.trim().toLowerCase() === val.trim().toLowerCase());
-                      const vesselId = vesselMatch?.id || val;
-                      host._pushFolderNav(
-                        [{ id: docMainFolder, name: docMainFolder }, { id: String(vesselId), name: val }],
-                        docMainFolder
-                      );
-                    } else {
-                      host._pushFolderNav([{ id: docMainFolder, name: docMainFolder }], docMainFolder);
-                    }
-                  }
-                  host.setState({ vesselFilter: val || 'all', docListPage: 0 });
-                  if (val !== 'all' && val !== 'Not Listed') {
-                    void host._loadVesselRowsFromApi(val).catch(() => undefined);
-                    void host._loadFilesForVessel(val).catch(() => undefined);
-                  }
-                }}
-                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 160 }}
+                onChange={e => applyVesselFilterSelection(e.target.value)}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 160 }}
               >
                 {!mainFolderPage && <option value="all">All vessels</option>}
                 {mainFolderPage && <option value="">Select vessel</option>}
@@ -3176,57 +5379,172 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               </select>
             )}
             <select
+              aria-label="Main folder filter"
               value={docCategoryFilter}
-              onChange={e => host.setState({ docCategoryFilter: e.target.value, docGroupLevelFilter: 'all', docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', catFilter: e.target.value, docListPage: 0 })}
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 180 }}
+              onChange={e => {
+                const val = e.target.value;
+                host.setState({ docCategoryFilter: val, docGroupLevelFilter: 'all', docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', docSubfolderOtherFilter: 'all', catFilter: val, docListPage: 0 });
+                if (val !== 'all') navigateToLiveMainFolder(val);
+              }}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
             >
-              <option value="all">All document sections</option>
-              {documentSectionOptions.map(section => <option key={section} value={section}>{section}</option>)}
+              <option value="all">All main folders</option>
+              {mainFolderOptions.map(folder => <option key={folder} value={folder}>{folder}</option>)}
             </select>
+            {subfolderTree.length > 0 ? (
+              <FolderTreeSelect
+                tree={subfolderTree}
+                value={docSubfolderOtherFilter}
+                onChange={(val, path) => {
+                  // Keep the "All categories" dropdown in step with whatever
+                  // was just picked here: a folder that matches one of the
+                  // fixed category names selects that category too, and
+                  // clearing the tree back to "All sub-folders" clears the
+                  // category dropdown the same way.
+                  const matchedCategory = val === 'all' ? 'all' : (findCategoryForFolderName(val) || docLeafCategoryFilter);
+                  host.setState({
+                    docSubfolderOtherFilter: val,
+                    docLeafCategoryFilter: matchedCategory,
+                    docSubCategoryFilter: 'all',
+                    docListPage: 0,
+                  });
+                  if (val === 'all') return;
+                  if (atSitesRoot) navigateToLiveSubfolder(val);
+                  else navigateToDeptSubfolder(path);
+                }}
+                allLabel="All sub-folders"
+                title="Folders that aren't a main department or a vessel (e.g. Report, Share with...)"
+              />
+            ) : scopedMainFolderForSubfolders ? (
+              <select
+                value="all"
+                disabled
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-faint)', outline: 'none', maxWidth: 180, cursor: 'not-allowed' }}
+                title={`"${scopedMainFolderForSubfolders}" has no sub-folders`}
+              >
+                <option value="all">No folder found</option>
+              </select>
+            ) : null}
+            {/* "Groups" filter — fixed Drawings/Manuals taxonomy (see
+                drawingCategories/manualCategories above), bound to
+                docGroupLevelFilter. Picking a group scopes the "All
+                categories" dropdown right after it (categoryOptions) to
+                that group's categories, and resets anything deeper
+                (category / sub-category / sub-folder tree) so the three
+                stay in sync. */}
             <select
+              aria-label="Document type filter"
               value={docGroupLevelFilter}
-              onChange={e => host.setState({ docGroupLevelFilter: e.target.value, docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', docListPage: 0 })}
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 180 }}
+              onChange={e => {
+                const val = e.target.value;
+                host.setState({
+                  docGroupLevelFilter: val,
+                  docLeafCategoryFilter: 'all',
+                  docSubCategoryFilter: 'all',
+                  docListPage: 0,
+                });
+              }}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 160 }}
             >
               <option value="all">All groups</option>
-              {groupLevelOptions.map(group => <option key={group} value={group}>{group}</option>)}
+              <option value="Drawings">Drawings</option>
+              <option value="Manuals">Manuals</option>
             </select>
+            {categoryOptions.length > 0 ? (
+              <select
+                aria-label="Category filter"
+                value={docLeafCategoryFilter}
+                onChange={e => {
+                  const val = e.target.value;
+                  // Mirror the pick into the Sub-folder tree so the two
+                  // filters never disagree: picking "all" here clears the
+                  // tree back to "All sub-folders" too, and picking a real
+                  // category jumps the tree to whichever sub-folder node
+                  // matches it, when one exists.
+                  if (val === 'all') {
+                    host.setState({ docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', docSubfolderOtherFilter: 'all', docListPage: 0 });
+                    return;
+                  }
+                  const match = findSubfolderNodeForCategory(val);
+                  host.setState({
+                    docLeafCategoryFilter: val,
+                    docSubCategoryFilter: 'all',
+                    docSubfolderOtherFilter: match ? match.name : docSubfolderOtherFilter,
+                    docListPage: 0,
+                  });
+                  if (match) {
+                    if (atSitesRoot) navigateToLiveSubfolder(match.name);
+                    else navigateToDeptSubfolder(match.path);
+                  }
+                }}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
+              >
+                <option value="all">All categories</option>
+                {categoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
+              </select>
+            ) : (
+              <select aria-label="Category filter" value="all" disabled style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-faint)', outline: 'none', maxWidth: 180, cursor: 'not-allowed' }}>
+                <option value="all">No categories found</option>
+              </select>
+            )}
+            {subCategoryOptions.length > 0 ? (
+              <select
+                aria-label="Sub-category filter"
+                value={docSubCategoryFilter}
+                onChange={e => {
+                  host.setState({ docSubCategoryFilter: e.target.value, docListPage: 0 });
+                }}
+                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
+              >
+                <option value="all">All sub-categories</option>
+                {subCategoryOptions.map(subCategory => <option key={subCategory} value={subCategory}>{subCategory}</option>)}
+              </select>
+            ) : (
+              <select aria-label="Sub-category filter" value="all" disabled style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-faint)', outline: 'none', maxWidth: 180, cursor: 'not-allowed' }}>
+                <option value="all">No sub-categories found</option>
+              </select>
+            )}
             <select
-              value={docLeafCategoryFilter}
-              onChange={e => host.setState({ docLeafCategoryFilter: e.target.value, docSubCategoryFilter: 'all', docListPage: 0 })}
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 180 }}
-            >
-              <option value="all">All categories</option>
-              {categoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
-            </select>
-            <select
-              value={docSubCategoryFilter}
-              onChange={e => host.setState({ docSubCategoryFilter: e.target.value, docListPage: 0 })}
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 180 }}
-            >
-              <option value="all">All sub-categories</option>
-              {subCategoryOptions.map(subCategory => <option key={subCategory} value={subCategory}>{subCategory}</option>)}
-            </select>
-            <select
+              aria-label="Attachment status filter"
               value={attachmentFilter}
               onChange={e => host.setState({ attachmentFilter: e.target.value as any, docListPage: 0 })}
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none', maxWidth: 180 }}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
             >
               <option value="all">All attachment status</option>
               <option value="attached">Attachment Available</option>
               <option value="not_attached">Attachment Required</option>
             </select>
             <select
+              aria-label="Sort filter"
               value={docListSort}
               onChange={e => host.setState({ docListSort: e.target.value as any, docListPage: 0 })}
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 12, background: '#fff', outline: 'none' }}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none' }}
             >
               <option value="default">Default order</option>
               <option value="name_az">Name A–Z</option>
               <option value="newest">Newest</option>
             </select>
 
-            {(documentFilesLoading || vesselLoadingName || documentVesselsLoadingMore) && (
+            {/* vesselLoadingName / documentVesselsLoadingMore / documentFilesLoading
+                are ALL per-vessel background loads: every setter of
+                documentFilesLoading (_loadVesselRowsFromApi,
+                _mergeLiveSharePointFiles — walked by _loadFilesForVessel,
+                _fetchApprovedFilesForVessel, and the Sites-scope
+                "this folder matches a known vessel" prefetch below) sets it
+                alongside vesselLoadingName for a specific vessel, and that
+                vessel is frequently NOT the one the user is currently
+                looking at — e.g. browsing SharePoint Sites can trigger a
+                background load for a vessel-named folder, and the flag
+                stays on (with that vessel's name) even after navigating
+                elsewhere, since nothing resets it on scope/folder change.
+                Previously only the vesselLoadingName/documentVesselsLoadingMore
+                *branch* was scope-gated while documentFilesLoading was OR'd
+                in unconditionally — so this still rendered "Loading
+                <stale vessel>..." on Shared Documents whenever a background
+                vessel walk happened to be in flight. None of these three
+                flags mean anything outside the vessels scope, so the whole
+                banner is gated on it. */}
+            {(docScopeType === 'vessels' && (documentFilesLoading || vesselLoadingName || documentVesselsLoadingMore)) && (
               <div style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px',
                 borderRadius: 8, background: '#eff6ff', border: '1px solid #bfdbfe',
@@ -3236,20 +5554,95 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 <span>{vesselLoadingName ? `Loading ${vesselLoadingName}...` : (documentVesselsLoadingMore ? 'Loading vessels...' : 'Syncing live files...')}</span>
               </div>
             )}
-            <div style={{ display: 'flex', border: '1px solid #cbd5e1', borderRadius: 8, overflow: 'hidden', marginLeft: 'auto' }}>
-              <button
-                onClick={openFolderViewFromListContext}
-                style={{ padding: '5px 10px', background: docViewMode === 'folder' ? '#e2e8f0' : '#fff', border: 'none', cursor: 'pointer', fontSize: 13 }}
-                title="Folder view"
-              >::</button>
-              <button
-                onClick={openListViewFromFolderContext}
-                style={{ padding: '5px 10px', background: docViewMode === 'list' ? '#e2e8f0' : '#fff', border: 'none', borderLeft: '1px solid #cbd5e1', cursor: 'pointer', fontSize: 13 }}
-                title="List view"
-              >☰</button>
-            </div>
+            {/* The Folder view / List view toggle used to be duplicated here
+                (a second, compact "::"/"☰" pair) in addition to the pill
+                toggle in the Module Header above. Because this Filter
+                Toolbar row's own contents change between view modes (which
+                selects are shown/enabled) and wraps on narrow widths, a
+                `marginLeft: 'auto'`-positioned toggle here visibly jumped
+                position on every switch. There is now a single toggle, in
+                the Module Header, which does not move. */}
           </div>
         </div>
+
+        {/* Vessel's other main folders — a vessel commonly has a folder under
+            several main folders (Technical & Crewing, Commercial &
+            Chartering, Insurance, ...). This is the "which main folders have
+            this vessel" side strip: every main folder siteVesselFolderPaths
+            recorded a folder for the selected vessel under, as a row of
+            chips next to the Main folder dropdown. Clicking one jumps
+            straight into that vessel's folder there (navigateToLiveMainFolder
+            already prefers the vessel's own sub-folder over the main
+            folder's root when a vessel is selected — see its definition
+            above), and the chip for wherever you're currently standing is
+            highlighted. Only rendered when the vessel actually has more than
+            one home; a single-main-folder vessel gets nothing extra here. */}
+        {docViewMode === 'folder' && !docCompareMode &&
+          (docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents') &&
+          vesselMainFolders.length > 1 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 11, color: 'var(--vdms-text-muted)', fontWeight: 600 }}>
+                {vesselFilter} is also under:
+              </span>
+              {vesselMainFolders.map(m => {
+                const active = docCategoryFilter.trim().toLowerCase() === m.trim().toLowerCase();
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => {
+                      // Mirror the "All main folders" dropdown's own
+                      // onChange exactly (below): it sets the filter fields
+                      // itself, immediately, rather than leaving them to be
+                      // derived later from wherever navigateToLiveMainFolder
+                      // manages to land. The dropdown visibly updates the
+                      // moment it's used; this chip, calling
+                      // navigateToLiveMainFolder alone with no filter update
+                      // of its own, showed nothing changing at all whenever
+                      // that call's own navigation didn't resolve (a slow or
+                      // failed Graph fetch for a main folder never opened
+                      // this session) — the click looked like a complete
+                      // no-op instead of at least switching the Main folder
+                      // filter/highlighted chip right away.
+                      host.setState({
+                        docCategoryFilter: m,
+                        docGroupLevelFilter: 'all',
+                        docLeafCategoryFilter: 'all',
+                        docSubCategoryFilter: 'all',
+                        docSubfolderOtherFilter: 'all',
+                        catFilter: m,
+                        docListPage: 0,
+                      });
+                      navigateToLiveMainFolder(m);
+                    }}
+                    disabled={active}
+                    title={active ? `Currently viewing ${vesselFilter} under ${m}` : `Jump to ${vesselFilter} under ${m}`}
+                    style={{
+                      padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600,
+                      border: active ? '1px solid #2563eb' : '1px solid var(--vdms-border)',
+                      background: active ? '#dbeafe' : 'var(--vdms-surface)',
+                      color: active ? '#1d4ed8' : 'var(--vdms-text-muted)',
+                      cursor: active ? 'default' : 'pointer',
+                    }}
+                  >
+                    {m}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => host.setState({ docCompareMode: true })}
+                title={`Show ${vesselFilter}'s folders from all ${vesselMainFolders.length} main folders side by side`}
+                style={{
+                  padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600,
+                  border: '1px dashed #94a3b8', background: 'var(--vdms-surface)', color: 'var(--vdms-text-muted)', cursor: 'pointer',
+                  marginLeft: 4,
+                }}
+              >
+                ⊞⊞ Compare all {vesselMainFolders.length}
+              </button>
+            </div>
+          )}
 
         {/* Success Message Banner */}
         {docUploadMsg && (
@@ -3259,7 +5652,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           </div>
         )}
 
-        {docViewMode === 'folder' ? (
+        {docCompareMode && vesselMainFolders.length > 1 ? (
+          renderVesselCompareGrid()
+        ) : docViewMode === 'folder' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24, marginTop: 4 }}>
 
             {/* Level 0: Main Departments + Kaizen - Knowledge Bank */}
@@ -3324,15 +5719,15 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                               }
                             }}
                             style={{
-                              background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
+                              background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)', padding: 18,
                               display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
                               boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
                             }}
                           >
                             <div style={{ width: 44, height: 44, borderRadius: 10, background: item.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{item.emoji}</div>
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.key}</div>
-                              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                              <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.key}</div>
+                              <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>
                                 {item.key === 'Kaizen - Knowledge Bank' ? 'Knowledge base' :
                                  item.key === 'Shared Documents' ? `${activeLiveSite?.sp_site_name || 'Selected site'} · SharePoint Library` :
                                  item.key === 'Documents' ? 'Site Documents Library' :
@@ -3341,18 +5736,18 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                  `${displayVessels.length} vessels`}
                               </div>
                             </div>
-                            <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
+                            <span style={{ color: 'var(--vdms-text-faint)', fontSize: 16 }}>›</span>
                           </div>
                         ))}
                       </div>
                 {(textFilter || vesselFilter !== 'all' || docGroupFilter !== 'all' || docCategoryFilter !== 'all' || docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all' || docSubCategoryFilter !== 'all' || attachmentFilter !== 'all') && (
-                  <div style={{ marginTop: 24, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
-                    <div style={{ padding: '14px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-                      <strong style={{ color: '#0f172a', fontSize: 14 }}>Filtered document results</strong>
-                      <span style={{ color: '#64748b', fontSize: 12 }}>{groupedList.length} folder{groupedList.length === 1 ? '' : 's'}</span>
+                  <div style={{ marginTop: 24, background: 'var(--vdms-surface)', border: '1px solid var(--vdms-border)', borderRadius: 12, overflow: 'hidden' }}>
+                    <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--vdms-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                      <strong style={{ color: 'var(--vdms-text)', fontSize: 14 }}>Filtered document results</strong>
+                      <span style={{ color: 'var(--vdms-text-muted)', fontSize: 12 }}>{groupedList.length} folder{groupedList.length === 1 ? '' : 's'}</span>
                     </div>
                     {groupedList.length === 0 ? (
-                      <div style={{ padding: 28, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>No documents match the selected filters.</div>
+                      <div style={{ padding: 28, textAlign: 'center', color: 'var(--vdms-text-faint)', fontSize: 13 }}>No documents match the selected filters.</div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column' }}>
                         {groupedList.slice(0, PAGE_ROWS).map(result => (
@@ -3360,11 +5755,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             key={result.groupKey}
                             type="button"
                             onClick={() => host._pushFolderNav([{ id: result.groupKey, name: result.subFolderPath.split(' > ').pop() || result.subCategory }], result.group as 'Technical & Crewing' | 'Commercial & Chartering' | 'Insurance' | 'Kaizen - Knowledge Bank' | 'Knowledge Bank')}
-                            style={{ border: 0, borderBottom: '1px solid #f1f5f9', background: '#fff', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, textAlign: 'left', cursor: 'pointer' }}
+                            style={{ border: 0, borderBottom: '1px solid var(--vdms-border-soft)', background: 'var(--vdms-surface)', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, textAlign: 'left', cursor: 'pointer' }}
                           >
                             <span style={{ minWidth: 0 }}>
-                              <strong style={{ display: 'block', color: '#0f172a', fontSize: 13 }}>{result.subFolderPath.split(' > ').pop() || result.subCategory}</strong>
-                              <span style={{ display: 'block', color: '#64748b', fontSize: 11, marginTop: 3 }}>{result.vesselName} · {result.group} · {result.category}</span>
+                              <strong style={{ display: 'block', color: 'var(--vdms-text)', fontSize: 13 }}>{result.subFolderPath.split(' > ').pop() || result.subCategory}</strong>
+                              <span style={{ display: 'block', color: 'var(--vdms-text-muted)', fontSize: 11, marginTop: 3 }}>{result.vesselName} · {result.group} · {result.category}</span>
                             </span>
                             <span style={{ color: '#0284c7', fontSize: 12, whiteSpace: 'nowrap' }}>{result.files.length} file{result.files.length === 1 ? '' : 's'} ›</span>
                           </button>
@@ -3383,9 +5778,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
                   if (sitesList.length === 0) {
                     return (
-                      <div style={{ background: '#fff', borderRadius: 14, border: '1px dashed #cbd5e1', padding: 48, textAlign: 'center', color: '#94a3b8' }}>
+                      <div style={{ background: 'var(--vdms-surface)', borderRadius: 14, border: '1px dashed var(--vdms-border)', padding: 48, textAlign: 'center', color: 'var(--vdms-text-faint)' }}>
                         <div style={{ fontSize: 32, marginBottom: 8 }}>🌐</div>
-                        <div style={{ fontWeight: 600, color: '#475569', fontSize: 15 }}>No configured document site found</div>
+                        <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>No configured document site found</div>
                         <div style={{ fontSize: 13, marginTop: 4 }}>Configure a SharePoint document site before browsing its libraries.</div>
                       </div>
                     );
@@ -3397,11 +5792,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         <div style={{ fontSize: 13, fontWeight: 700, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                           Connected SharePoint Sites ({sitesList.length})
                         </div>
-                        <span style={{ fontSize: 12, color: '#64748b' }}>Select a SharePoint site to view document libraries</span>
+                        <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>Select a SharePoint site to view document libraries</span>
                       </div>
 
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
-                        {sitesList.map((site, sIdx) => {
+                        {sitesList
+                        .filter(site => !textFilter || (site.sp_site_name || site.site_key || '').toLowerCase().includes(textFilter.trim().toLowerCase()))
+                        .map((site, sIdx) => {
                           const siteName = site.sp_site_name || site.site_key;
                           const siteId = site.site_id || site.site_key;
                           const isActive = site.site_key === host.state.activeDocumentSite;
@@ -3413,22 +5810,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                 host._pushFolderNav([...folderPathStack, { id: siteNodeId, name: siteName }], 'SharePoint Sites');
                               }}
                               style={{
-                                background: '#fff', borderRadius: 14, border: isActive ? '2px solid #0284c7' : '1px solid #e2e8f0',
+                                background: 'var(--vdms-surface)', borderRadius: 14, border: isActive ? '2px solid #0284c7' : '1px solid var(--vdms-border)',
                                 padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
                                 boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'all 0.15s ease',
                               }}
                             >
                               <div style={{
-                                width: 48, height: 48, borderRadius: 12, background: isActive ? '#e0f2fe' : '#f8fafc',
+                                width: 48, height: 48, borderRadius: 12, background: isActive ? '#e0f2fe' : 'var(--vdms-surface-alt)',
                                 display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24,
                               }}>
                                 🌐
                               </div>
                               <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontWeight: 700, fontSize: 15, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                   {siteName}
                                 </div>
-                                <div style={{ fontSize: 12, color: '#64748b', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
                                   <span>SharePoint Site</span>
                                   {isActive && (
                                     <span style={{ background: '#dcfce7', color: '#15803d', fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4 }}>
@@ -3460,31 +5857,50 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
                   if (!drivesList) {
                     return (
-                      <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+                      <div style={{ padding: 40, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>
                         <div style={{ fontSize: 24, marginBottom: 8, animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</div>
                         <div>Loading SharePoint document libraries for {siteNode?.name}...</div>
                       </div>
                     );
                   }
 
+                  // SharePoint auto-provisions "system" libraries (Site
+                  // Assets, Style Library, Form Templates, ...) on every
+                  // site — a site with more features on can easily return
+                  // 4-6 of these alongside the real content library, and
+                  // they're never where a user's own files live. The
+                  // backend now flags each drive with `is_system` and a
+                  // best-effort `item_count` (immediate children of the
+                  // library root); hide system libraries by default here so
+                  // this grid isn't cluttered with libraries no one uses,
+                  // and show an item-count badge on the rest so it's obvious
+                  // at a glance which one is actually empty.
+                  const systemLibraries = drivesList.filter(d => d.is_system);
+                  const showSystem = host._systemLibrariesRevealed.has(effectiveSiteId);
+                  const visibleDrives = (showSystem ? drivesList : drivesList.filter(d => !d.is_system))
+                    .filter(drive => !textFilter || (drive.name || '').toLowerCase().includes(textFilter.trim().toLowerCase()));
+
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <div style={{ fontSize: 13, fontWeight: 700, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                          Libraries in {siteNode?.name} ({drivesList.length})
+                          Libraries in {siteNode?.name} ({visibleDrives.length})
                         </div>
-                        <span style={{ fontSize: 12, color: '#64748b' }}>Select a document library to browse folders and files</span>
+                        <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>Select a document library to browse folders and files</span>
                       </div>
 
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
-                        {drivesList.map((drive, dIdx) => (
+                        {visibleDrives.map((drive, dIdx) => {
+                          const hasCount = typeof drive.item_count === 'number';
+                          const isEmpty = hasCount && drive.item_count === 0;
+                          return (
                           <div
                             key={drive.id + dIdx}
                             onClick={() => {
-                              host._pushFolderNav([...folderPathStack, { id: `drive:${drive.id}`, name: drive.name }], 'SharePoint Sites');
+                              pushLiveFolderNav([...folderPathStack, { id: `drive:${drive.id}`, name: drive.name }]);
                             }}
                             style={{
-                              background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0',
+                              background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)',
                               padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
                               boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
                             }}
@@ -3496,15 +5912,42 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                               📚
                             </div>
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 700, fontSize: 15, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                 {drive.name}
                               </div>
-                              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Document Library</div>
+                              <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <span>Document Library</span>
+                                {hasCount && (
+                                  <span style={{
+                                    fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
+                                    background: isEmpty ? 'var(--vdms-border)' : '#dcfce7',
+                                    color: isEmpty ? 'var(--vdms-text-muted)' : '#15803d',
+                                  }}>
+                                    {isEmpty ? 'empty' : `${drive.item_count} item${drive.item_count === 1 ? '' : 's'}`}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                             <span style={{ color: '#0284c7', fontSize: 18, fontWeight: 700 }}>›</span>
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
+
+                      {systemLibraries.length > 0 && (
+                        <button
+                          onClick={() => {
+                            if (showSystem) { host._systemLibrariesRevealed.delete(effectiveSiteId); }
+                            else { host._systemLibrariesRevealed.add(effectiveSiteId); }
+                            host.forceUpdate();
+                          }}
+                          style={{ alignSelf: 'flex-start', border: 'none', background: 'transparent', color: '#0284c7', cursor: 'pointer', fontSize: 12, padding: '4px 2px' }}
+                        >
+                          {showSystem
+                            ? `Hide ${systemLibraries.length} system librar${systemLibraries.length === 1 ? 'y' : 'ies'}`
+                            : `Show ${systemLibraries.length} more (SharePoint system librar${systemLibraries.length === 1 ? 'y' : 'ies'})`}
+                        </button>
+                      )}
                     </div>
                   );
                 }
@@ -3536,7 +5979,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 // Cannot render without a resolved drive — show a loading/error state
                 if (!rawDriveId) {
                   return (
-                    <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+                    <div style={{ padding: 40, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>
                       <div style={{ fontSize: 24, marginBottom: 8 }}>⏳</div>
                       <div>Resolving SharePoint document library{siteNode?.name ? ` for ${siteNode.name}` : ''}...</div>
                     </div>
@@ -3547,7 +5990,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
                 if (folderData.loading && folderData.items.length === 0) {
                   return (
-                    <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+                    <div style={{ padding: 40, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>
                       <div style={{ fontSize: 24, marginBottom: 8, animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</div>
                       <div>Loading contents of {currentNode?.name || 'folder'}...</div>
                     </div>
@@ -3557,90 +6000,202 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 const baseChildFolders = folderData.items.filter(item => item.folder || (!item.file && item.name && !item.name.includes('.')));
                 const childFiles = folderData.items.filter(item => item.file || (item.name && item.name.includes('.')));
 
-                // Build merged child folders list including optimistic / dynamically uploaded folders
-                const liveFolderMap = new Map<string, any>();
-                baseChildFolders.forEach(f => {
-                  if (f.name) liveFolderMap.set(f.name.toLowerCase(), f);
+                // NOTE: this used to merge host.state.rows (vessel rows, aggregated across
+                // ALL sites since GET /api/vessels has no site scoping) and
+                // host.state.uploadedFilesByFolder (keyed by a bare path string with no
+                // site/drive affinity) into the folder list shown here. Neither source
+                // carries any site/drive identity, so at a drive root it injected other
+                // sites' vessel names (and, one level deeper, vessel folder-template
+                // category names) as phantom folders — exactly the "different folders"
+                // / "mvtest45" / "Technical & Crewing" symptom reported for the Sites
+                // browser, whose fabricated paths then 404 against the real Graph
+                // /children endpoint. This is a real SharePoint site/drive browser, so it
+                // must show exactly what Graph returns for the current site/drive.
+                // Vessel filter in Folder view: once a vessel is picked, show only
+                // that vessel's folder — or the parent folders leading to it —
+                // until the user is inside it, then show its contents as usual.
+                const currentDrivePath = folderPathStack.slice(3).map(node => node.name).join('/');
+                const insideSelectedVessel = vesselFilter === 'all' || folderPathStack.slice(3).some(node => {
+                  const matched = matchFolderToVessel(node.name);
+                  return !!matched && vesselNamesEqual(matched, vesselFilter);
                 });
-
-                // Inspect uploadedFilesByFolder & rows for any uploaded subfolders beneath currentNode
-                const currentSegments = folderPathStack.slice(3).map(n => n.name.trim()).filter(Boolean);
-                const currentNodeName = (currentNode?.name || '').trim().toLowerCase();
-
-                // 1. Check uploadedFilesByFolder
-                Object.entries(host.state.uploadedFilesByFolder || {}).forEach(([key, fList]) => {
-                  if (!Array.isArray(fList) || fList.length === 0) return;
-                  if (host._appDeletedItemIds.has(key)) return;
-                  if (/^01[A-Za-z0-9]{15,}$/.test(key.trim())) return;
-                  const keyClean = key.replace(/\\/g, '/');
-                  const keySegs = keyClean.split(/[>/]/).map(s => s.trim()).filter(Boolean);
-                  if (keySegs.length === 0) return;
-
-                  let targetChildSeg: string | null = null;
-                  if (currentSegments.length > 0) {
-                    const startsWithCurrent = currentSegments.every((seg, idx) => keySegs[idx]?.toLowerCase() === seg.toLowerCase());
-                    if (startsWithCurrent && keySegs.length > currentSegments.length) {
-                      targetChildSeg = keySegs[currentSegments.length];
-                    }
-                  } else if (isDriveRoot && keySegs.length > 0) {
-                    targetChildSeg = keySegs[0];
-                  } else if (currentNodeName) {
-                    const idx = keySegs.findIndex(s => s.toLowerCase() === currentNodeName);
-                    if (idx !== -1 && idx + 1 < keySegs.length) {
-                      targetChildSeg = keySegs[idx + 1];
-                    }
+                const vesselScopedChildFolders = insideSelectedVessel
+                  ? baseChildFolders
+                  : baseChildFolders.filter(item => {
+                    const matched = matchFolderToVessel(item.name);
+                    if (matched && vesselNamesEqual(matched, vesselFilter)) return true;
+                    return isPathOnSelectedVesselBranch(currentDrivePath ? `${currentDrivePath}/${item.name}` : item.name);
+                  });
+                // ── Group / Category filter in Folder view ──
+                // A Graph folder listing has no group/category of its own, so
+                // when either filter is set Folder view shows every file *under*
+                // the current folder whose folder path passes
+                // pathMatchesGroupCategory (partial-word rule, same as List view).
+                //
+                // Source of truth: the backend recursive walk of the current
+                // folder (GET …/folders/{id}/recursive, names/paths only — no
+                // tag lookups), fetched once per folder and cached here for 5
+                // minutes. The old client-side walk (≤200 folders, level by
+                // level) never reached e.g. Documents > … > SS367-MAERSK FERRATO
+                // > ELECT from the library root, so "Electrical" alone found
+                // nothing. While the walk is in flight, or if it fails, results
+                // from folder listings already cached in the browser are shown.
+                const groupCatOnly = docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all';
+                // Also drive the recursive subtree walk off a plain text search, not just
+                // the Group/Category filter. Previously a text search only matched files
+                // directly inside the folder currently open (vesselScopedChildFiles below);
+                // a file several levels deeper that matched the search term never surfaced
+                // unless the user happened to open every intermediate folder first.
+                const groupCatActive = groupCatOnly || !!textFilter;
+                const groupCatMatchRelPath = new Map<string, string[]>();
+                let groupCatMatchedFiles: any[] = [];
+                let groupCatSearching = false;
+                let groupCatTruncated = false;
+                if (groupCatActive && effectiveSiteId && rawDriveId) {
+                  const treeKey = `${effectiveSiteId}::${rawDriveId}::${currentFolderId}`;
+                  let tree = groupCatTreeCache.get(treeKey);
+                  if (tree && tree.status !== 'loading' && Date.now() - tree.at > GROUP_CAT_TREE_TTL_MS) {
+                    groupCatTreeCache.delete(treeKey);
+                    tree = undefined;
+                  }
+                  if (!tree) {
+                    const loading: GroupCatTreeEntry = { status: 'loading', items: [], truncated: false, at: Date.now() };
+                    groupCatTreeCache.set(treeKey, loading);
+                    tree = loading;
+                    const url = `${host._base()}/api/sites/${encodeURIComponent(effectiveSiteId)}/drives/${encodeURIComponent(rawDriveId)}` +
+                      `/folders/${encodeURIComponent(currentFolderId)}/recursive?include_tags=false&max_items=8000`;
+                    host._fetchJson(url)
+                      .then((data: any) => {
+                        groupCatTreeCache.set(treeKey, {
+                          status: 'done',
+                          items: Array.isArray(data?.folders) ? data.folders : [],
+                          truncated: !!data?.truncated,
+                          at: Date.now(),
+                        });
+                      })
+                      .catch(() => {
+                        groupCatTreeCache.set(treeKey, { status: 'error', items: [], truncated: false, at: Date.now() });
+                      })
+                      .then(() => host._scheduleForceUpdate());
                   }
 
-                  if (targetChildSeg && isDisplayableFolderName(targetChildSeg)) {
-                    const norm = targetChildSeg.toLowerCase();
-                    if (!liveFolderMap.has(norm)) {
-                      liveFolderMap.set(norm, {
-                        id: `sf_${targetChildSeg}`,
-                        name: targetChildSeg,
-                        folder: { childCount: fList.length },
-                        webUrl: '',
-                        lastModifiedDateTime: 'Just now',
+                  const baseNames = folderPathStack.slice(3).map(n => n.name);
+                  const seenIds = new Set<string>();
+                  const considerFile = (file: any, relFolderNames: string[]): void => {
+                    const id = String(file.id || '');
+                    if (id && seenIds.has(id)) return;
+                    const fullNames = [...baseNames, ...relFolderNames];
+                    if (!pathMatchesGroupCategory(fullNames.join(' > '), docGroupLevelFilter, docLeafCategoryFilter)) return;
+                    if (!insideSelectedVessel) {
+                      const inVessel = fullNames.some(seg => {
+                        const matched = matchFolderToVessel(seg);
+                        return !!matched && vesselNamesEqual(matched, vesselFilter);
+                      });
+                      if (!inVessel) return;
+                    }
+                    if (textFilter && !matchesSearchTokens(textFilter, file.name, ...relFolderNames)) return;
+                    if (id) seenIds.add(id);
+                    groupCatMatchedFiles.push(file);
+                    if (id) groupCatMatchRelPath.set(id, relFolderNames);
+                  };
+
+                  if (tree.status === 'done') {
+                    // Recursive walk: `path` is relative to the current folder
+                    // and ends with the item's own name.
+                    tree.items.forEach((item: any) => {
+                      if (!item || item.is_folder || !item.name) return;
+                      const parts = String(item.path || item.name).split('/').filter(Boolean);
+                      considerFile({
+                        id: item.id,
+                        name: item.name,
+                        size: item.size,
+                        lastModifiedDateTime: item.last_modified_date_time || item.created_date_time,
+                        web_url: item.web_url,
+                      }, parts.slice(0, -1));
+                    });
+                    groupCatTruncated = tree.truncated;
+                  } else {
+                    groupCatSearching = tree.status === 'loading';
+                    // Interim / fallback: folder listings already in the browser
+                    // cache (folders the user has opened or that were prefetched).
+                    const queue: { id: string; names: string[] }[] = [{ id: currentFolderId, names: [] }];
+                    let visited = 0;
+                    while (queue.length > 0 && visited < 2000) {
+                      const node = queue.shift()!;
+                      visited++;
+                      const entry = host._siteFolderItemsCache.get(`${effectiveSiteId}::${rawDriveId}::${node.id}`);
+                      if (!entry || entry.loading) {
+                        if (tree.status === 'error') groupCatTruncated = true;
+                        continue;
+                      }
+                      (entry.items || []).forEach((it: any) => {
+                        if (!it?.name) return;
+                        // Graph facets first; the name-has-a-dot guess only when
+                        // neither facet is present ("NK CERT.&Shipyard Cert" is
+                        // a folder despite the dot).
+                        const isFolderItem = it.folder ? true : (it.file ? false : !String(it.name).includes('.'));
+                        if (isFolderItem) {
+                          if (it.id) queue.push({ id: it.id, names: [...node.names, it.name] });
+                          return;
+                        }
+                        considerFile(it, node.names);
                       });
                     }
                   }
-                });
 
-                // 2. Check rows
-                (host.state.rows || []).forEach(r => {
-                  if (!r.subFolderPath || host._appDeletedItemIds.has(r.uploadFolderId)) return;
-                  const rSegs = r.subFolderPath.split(/[>/]/).map(s => s.trim()).filter(Boolean);
-                  if (rSegs.length === 0) return;
-
-                  let targetChildSeg: string | null = null;
-                  if (currentSegments.length > 0) {
-                    const startsWithCurrent = currentSegments.every((seg, idx) => rSegs[idx]?.toLowerCase() === seg.toLowerCase());
-                    if (startsWithCurrent && rSegs.length > currentSegments.length) {
-                      targetChildSeg = rSegs[currentSegments.length];
-                    }
-                  } else if (isDriveRoot && rSegs.length > 0) {
-                    targetChildSeg = rSegs[0];
-                  } else if (currentNodeName) {
-                    const idx = rSegs.findIndex(s => s.toLowerCase() === currentNodeName);
-                    if (idx !== -1 && idx + 1 < rSegs.length) {
-                      targetChildSeg = rSegs[idx + 1];
-                    }
-                  }
-
-                  if (targetChildSeg && isDisplayableFolderName(targetChildSeg)) {
-                    const norm = targetChildSeg.toLowerCase();
-                    if (!liveFolderMap.has(norm)) {
-                      liveFolderMap.set(norm, {
-                        id: r.uploadFolderId || `sf_${targetChildSeg}`,
-                        name: targetChildSeg,
-                        folder: { childCount: 1 },
-                        webUrl: '',
-                        lastModifiedDateTime: 'Just now',
+                  // Merge in results from the backend's full-text document
+                  // search (VesselEmail.tsx _triggerGlobalSearch → GET
+                  // /api/dashboard/documents, kicked off debounced by every
+                  // keystroke in the search box above and stashed in
+                  // host.state.rows tagged groupKey ending ":search"). That
+                  // backend search scans every document the site has
+                  // indexed (name + full folder path + vessel), unlike the
+                  // walk just above, which is capped at max_items (currently
+                  // 8000 nodes) and 8 folder levels deep — so on a large
+                  // tree (e.g. NKSDocMan's Shared Documents root, with every
+                  // vessel under it) a real match past that cap was silently
+                  // reported as "no files here" even though it existed. This
+                  // is what makes combined queries reliable — vessel name
+                  // alone, vessel + main folder/category, vessel + file
+                  // name, vessel + sub-category + file name — regardless of
+                  // where in the tree, or how deep, the match actually
+                  // lives.
+                  if (textFilter) {
+                    (host.state.rows || []).forEach(r => {
+                      if (!(r.groupKey || '').endsWith(':search')) return;
+                      if (!r.fileId || seenIds.has(r.fileId)) return;
+                      if (!insideSelectedVessel) {
+                        const rowVessel = getListViewLabels(r).vessel;
+                        if (!rowVessel || !vesselNamesEqual(rowVessel, vesselFilter)) return;
+                      }
+                      if (!matchesSearchTokens(textFilter, r.fileName, r.vesselName, r.subFolderPath)) return;
+                      seenIds.add(r.fileId);
+                      // subFolderPath is "SharePoint Sites > <site> > <library> > …";
+                      // drop that 3-segment prefix so the breadcrumb shown here
+                      // matches the "relative to the current folder" shape the
+                      // Graph-walk results above use.
+                      const relFolderNamesForRow = (r.subFolderPath || '')
+                        .split('>')
+                        .map(s => s.trim())
+                        .filter(Boolean)
+                        .slice(3);
+                      groupCatMatchedFiles.push({
+                        id: r.fileId,
+                        name: r.fileName,
+                        size: r.fileSize,
+                        lastModifiedDateTime: r.fileUploadedAt,
+                        web_url: null,
                       });
-                    }
+                      groupCatMatchRelPath.set(r.fileId, relFolderNamesForRow);
+                    });
                   }
-                });
+                }
 
-                const childFolders = Array.from(liveFolderMap.values());
+                const childFolders = groupCatActive
+                  ? []
+                  : (textFilter
+                    ? vesselScopedChildFolders.filter(item => matchesSearchTokens(textFilter, item.name))
+                    : vesselScopedChildFolders);
 
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -3663,10 +6218,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                               <div
                                 key={sf.id || sf.name + idx}
                                 onClick={() => {
-                                  host._pushFolderNav([...folderPathStack, { id: sf.id, name: sf.name }], 'SharePoint Sites');
+                                  pushLiveFolderNav([...folderPathStack, { id: sf.id, name: sf.name }]);
                                 }}
                                 style={{
-                                  background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
+                                  background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)', padding: 18,
                                   display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
                                   boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
                                 }}
@@ -3678,21 +6233,21 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   📁
                                 </div>
                                 <div style={{ flex: 1, minWidth: 0 }}>
-                                  <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                     {sf.name}
                                   </div>
-                                  <div style={{ fontSize: 12, color: '#64748b', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                  <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                     {sfLoading2 ? (
-                                      <span style={{ color: '#94a3b8', fontSize: 10 }}>{sfTotal2 > 0 ? `${sfTotal2} items` : '···'}</span>
+                                      <span style={{ color: 'var(--vdms-text-faint)', fontSize: 10 }}>{sfTotal2 > 0 ? `${sfTotal2} items` : '···'}</span>
                                     ) : (
                                       <>
-                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFolderCount2 ?? 0) > 0 ? '#e0f2fe' : '#f1f5f9', color: (sfFolderCount2 ?? 0) > 0 ? '#0369a1' : '#94a3b8', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📁 {sfFolderCount2 ?? 0}</span>
-                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFileCount2 ?? 0) > 0 ? '#dcfce7' : '#f1f5f9', color: (sfFileCount2 ?? 0) > 0 ? '#15803d' : '#94a3b8', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📄 {sfFileCount2 ?? 0}</span>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFolderCount2 ?? 0) > 0 ? '#e0f2fe' : 'var(--vdms-border-soft)', color: (sfFolderCount2 ?? 0) > 0 ? '#0369a1' : 'var(--vdms-text-faint)', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📁 {sfFolderCount2 ?? 0}</span>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFileCount2 ?? 0) > 0 ? '#dcfce7' : 'var(--vdms-border-soft)', color: (sfFileCount2 ?? 0) > 0 ? '#15803d' : 'var(--vdms-text-faint)', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📄 {sfFileCount2 ?? 0}</span>
                                       </>
                                     )}
                                   </div>
                                 </div>
-                                <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
+                                <span style={{ color: 'var(--vdms-text-faint)', fontSize: 16 }}>›</span>
                               </div>
                             );
                           })}
@@ -3702,54 +6257,49 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
                     {/* Files Section */}
                     {(() => {
-                      const liveFilesMap = new Map<string, any>();
-                      childFiles.forEach(f => {
-                        if (f.name) liveFilesMap.set(f.name.toLowerCase(), f);
-                      });
-
-                      // Also merge any files from uploadedFilesByFolder matching this folder
-                      const candidateUploadKeys = [
-                        currentFolderId,
-                        currentFolderId.toLowerCase(),
-                        currentNode?.id,
-                        currentNode?.name,
-                        currentNode?.name?.toLowerCase(),
-                        folderPathStack.slice(3).map(n => n.name).join(' > '),
-                        folderPathStack.slice(3).map(n => n.name).join(' > ').toLowerCase(),
-                        folderPathStack.slice(3).map(n => n.name).join('/'),
-                        folderPathStack.slice(3).map(n => n.name).join('/').toLowerCase(),
-                      ].filter(Boolean) as string[];
-
-                      candidateUploadKeys.forEach(k => {
-                        const localUploads = host.state.uploadedFilesByFolder[k] || [];
-                        localUploads.forEach((upFile: any) => {
-                          if (upFile?.name && !liveFilesMap.has(upFile.name.toLowerCase())) {
-                            liveFilesMap.set(upFile.name.toLowerCase(), {
-                              id: upFile.id || upFile.name,
-                              name: upFile.name,
-                              file: {},
-                              size: upFile.size,
-                              lastModifiedDateTime: upFile.date || 'Just now',
-                              webUrl: upFile.webUrl || '',
-                            });
-                          }
-                        });
-                      });
-
-                      const displayChildFiles = Array.from(liveFilesMap.values());
+                      // NOTE: this used to also merge host.state.uploadedFilesByFolder,
+                      // matched by a bare path/name string with no site or drive
+                      // affinity — the same cross-site contamination risk as the
+                      // folders merge above. This is a real SharePoint site/drive
+                      // browser, so files shown here must come only from Graph
+                      // (childFiles), not from a non-site-scoped local cache.
+                      // Loose files outside the selected vessel's folder aren't that
+                      // vessel's documents.
+                      const vesselScopedChildFiles = insideSelectedVessel ? childFiles : [];
+                      const textFilteredChildFiles = textFilter
+                        ? vesselScopedChildFiles.filter(item => matchesSearchTokens(textFilter, item.name))
+                        : vesselScopedChildFiles;
+                      // Group / Category active → the subtree search results
+                      // computed above (path-based, same rule as List view);
+                      // otherwise this folder's own files.
+                      const displayChildFiles = groupCatActive ? groupCatMatchedFiles : textFilteredChildFiles;
+                      const groupCatLabel = [
+                        docGroupLevelFilter !== 'all' ? docGroupLevelFilter : null,
+                        docLeafCategoryFilter !== 'all' ? docLeafCategoryFilter : null,
+                      ].filter(Boolean).join(' › ');
 
                       return (
                         <>
                           {displayChildFiles.length > 0 && (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                              <div style={{ fontSize: 12, fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                                Files ({displayChildFiles.length})
+                              <div style={{ fontSize: 12, fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                <span>
+                                  {groupCatOnly ? `${groupCatLabel} files in this folder (${displayChildFiles.length})` : `Files (${displayChildFiles.length})`}
+                                </span>
+                                {groupCatActive && groupCatSearching && (
+                                  <span style={{ fontSize: 11, fontWeight: 600, color: '#1d4ed8', textTransform: 'none', letterSpacing: 0 }}>Searching sub-folders…</span>
+                                )}
+                                {groupCatActive && !groupCatSearching && groupCatTruncated && (
+                                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--vdms-text-muted)', textTransform: 'none', letterSpacing: 0 }}>Large folder — open a sub-folder to search it fully</span>
+                                )}
                               </div>
-                              <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+                              <div style={{ background: 'var(--vdms-surface)', borderRadius: 12, border: '1px solid var(--vdms-border)', overflow: 'hidden' }}>
                                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                                   <thead>
-                                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
+                                    <tr style={{ background: 'var(--vdms-surface-alt)', borderBottom: '1px solid var(--vdms-border)', color: 'var(--vdms-text-muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
                                       <th style={{ padding: '10px 16px' }}>FILE NAME</th>
+                                      <th style={{ padding: '10px 16px' }}>VESSEL</th>
+                                      <th style={{ padding: '10px 16px' }}>FOLDER PATH</th>
                                       <th style={{ padding: '10px 16px' }}>SIZE</th>
                                       <th style={{ padding: '10px 16px' }}>DATE MODIFIED</th>
                                       <th style={{ padding: '10px 16px', textAlign: 'right' }}>ACTION</th>
@@ -3760,31 +6310,77 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                       const fileSize = typeof file.size === 'number'
                                         ? (file.size > 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : `${(file.size / 1024).toFixed(1)} KB`)
                                         : (file.size || '—');
-                                      const fileDate = file.lastModifiedDateTime
-                                        ? (typeof file.lastModifiedDateTime === 'string' && file.lastModifiedDateTime.includes('T') ? new Date(file.lastModifiedDateTime).toLocaleString() : file.lastModifiedDateTime)
-                                        : '—';
+                                      const fileDate = (() => {
+                                        if (!file.lastModifiedDateTime) return '—';
+                                        const parsed = new Date(file.lastModifiedDateTime);
+                                        return isNaN(parsed.getTime()) ? String(file.lastModifiedDateTime) : parsed.toLocaleString();
+                                      })();
                                       const fileUrl = file.web_url || file.webUrl || file.download_url || '';
+                                      // Vessel for this file: prefer a vessel name found in the
+                                      // current folder path itself (a live folder/sub-folder that
+                                      // IS a recognized vessel), then fall back to the matching DB
+                                      // row's own vessel metadata; "Not Listed" (with the same X
+                                      // mark used in List view) when neither resolves one.
+                                      // Sub-folder path below the current folder (only set
+                                      // for Group/Category subtree results).
+                                      const relFolderNames: string[] = (file.id && groupCatMatchRelPath.get(file.id)) || [];
+                                      const fileFolderNames = [...folderPathStack.map(n => n.name), ...relFolderNames];
+                                      const fileBreadcrumb = fileFolderNames.join(' > ');
+                                      // matchFolderToVessel (not an exact-name lookup) so a
+                                      // misspelt vessel folder such as "022024 Duchess Emeralad"
+                                      // still resolves to its vessel.
+                                      const folderPathVesselMatch = fileFolderNames
+                                        .map(name => matchFolderToVessel(name))
+                                        .filter(Boolean)
+                                        .pop() || null;
+                                      const matchRow = (host.state.rows || []).find(r => r.fileId === file.id);
+                                      const rowVessel = matchRow ? getListViewLabels(matchRow).vessel : null;
+                                      const effectiveVessel = folderPathVesselMatch ||
+                                        (rowVessel && rowVessel !== 'Not Listed' && rowVessel !== 'Vessel name not listed' ? rowVessel : null);
 
                                       return (
-                                        <tr key={file.id || file.name + idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                                          <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10 }}>
+                                        <tr key={file.id || file.name + idx} style={{ borderBottom: '1px solid var(--vdms-border-soft)' }}>
+                                          <td style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--vdms-text)', display: 'flex', alignItems: 'center', gap: 10 }}>
                                             <span style={{ fontSize: 18 }}>📄</span>
-                                            <span
-                                              onClick={() => {
-                                                if (fileUrl) {
-                                                  window.open(fileUrl, '_blank');
-                                                } else {
-                                                  void host._openDocumentFile(file.id, file.name, folderPathStack.map(n => n.name).join(' > '));
-                                                }
-                                              }}
-                                              style={{ cursor: 'pointer', color: '#0284c7', textDecoration: 'underline' }}
-                                              title={`Click to view/download ${file.name}`}
-                                            >
-                                              {file.name}
+                                            <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                                              <span
+                                                onClick={() => {
+                                                  if (fileUrl) {
+                                                    window.open(fileUrl, '_blank');
+                                                  } else {
+                                                    void host._openDocumentFile(file.id, file.name, fileBreadcrumb);
+                                                  }
+                                                }}
+                                                style={{ cursor: 'pointer', color: '#0284c7', textDecoration: 'underline' }}
+                                                title={`Click to view/download ${file.name}`}
+                                              >
+                                                {file.name}
+                                              </span>
+                                              {relFolderNames.length > 0 && (
+                                                <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--vdms-text-muted)', marginTop: 2 }} title={fileBreadcrumb}>
+                                                  {relFolderNames.join(' › ')}
+                                                </span>
+                                              )}
                                             </span>
                                           </td>
-                                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{fileSize}</td>
-                                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{fileDate}</td>
+                                          <td style={{ padding: '12px 16px' }}>
+                                            {effectiveVessel ? (
+                                              <span style={{ color: 'var(--vdms-text)', fontWeight: 600 }}>{effectiveVessel}</span>
+                                            ) : (
+                                              <span
+                                                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#ffedd5', color: '#c2410c', borderRadius: 6, padding: '2px 7px', fontSize: 11, fontWeight: 700 }}
+                                                title="No vessel associated with this file"
+                                              >
+                                                <span aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 14, height: 14, borderRadius: '50%', background: '#c2410c', color: '#fff', fontSize: 9, fontWeight: 800, lineHeight: 1 }}>✕</span>
+                                                Not Listed
+                                              </span>
+                                            )}
+                                          </td>
+                                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)', fontSize: 12 }} title={fileBreadcrumb || undefined}>
+                                            {fileBreadcrumb || '—'}
+                                          </td>
+                                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)' }}>{fileSize}</td>
+                                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)' }}>{fileDate}</td>
                                           <td style={{ padding: '12px 16px', textAlign: 'right' }}>
                                             <button
                                               type="button"
@@ -3792,7 +6388,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                                 if (fileUrl) {
                                                   window.open(fileUrl, '_blank');
                                                 } else {
-                                                  void host._openDocumentFile(file.id, file.name, folderPathStack.map(n => n.name).join(' > '));
+                                                  void host._openDocumentFile(file.id, file.name, fileBreadcrumb);
                                                 }
                                               }}
                                               style={{
@@ -3813,11 +6409,54 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           )}
 
                           {childFolders.length === 0 && displayChildFiles.length === 0 && (
-                            <div style={{ background: '#fff', borderRadius: 14, border: '1px dashed #cbd5e1', padding: 48, textAlign: 'center', color: '#94a3b8' }}>
-                              <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
-                              <div style={{ fontWeight: 600, color: '#475569', fontSize: 15 }}>This folder is empty</div>
-                              <div style={{ fontSize: 13, marginTop: 4 }}>No files or subfolders found in this directory. You can upload files or folders using the buttons above.</div>
-                            </div>
+                            folderData.error ? (
+                              <div style={{ background: 'var(--vdms-surface)', borderRadius: 14, border: '1px dashed #fca5a5', padding: 48, textAlign: 'center', color: 'var(--vdms-text-faint)' }}>
+                                <div style={{ fontSize: 32, marginBottom: 8 }}>⚠️</div>
+                                <div style={{ fontWeight: 600, color: '#b91c1c', fontSize: 15 }}>Couldn't load this folder</div>
+                                <div style={{ fontSize: 13, marginTop: 4 }}>The request to SharePoint failed — this may not actually be empty. Try again.</div>
+                                <button
+                                  type="button"
+                                  onClick={() => void host._refreshSiteFolder(effectiveSiteId, rawDriveId, currentFolderId)}
+                                  style={{ marginTop: 12, border: '1px solid #fca5a5', background: '#fef2f2', color: '#b91c1c', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                                >
+                                  ↻ Retry
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{ background: 'var(--vdms-surface)', borderRadius: 14, border: '1px dashed var(--vdms-border)', padding: 48, textAlign: 'center', color: 'var(--vdms-text-faint)' }}>
+                                <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
+                                {groupCatActive ? (
+                                  groupCatSearching ? (
+                                    <>
+                                      <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>Searching for {groupCatLabel} files…</div>
+                                      <div style={{ fontSize: 13, marginTop: 4 }}>Looking through the sub-folders of {currentNode?.name || 'this folder'}.</div>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>No {groupCatLabel} files here</div>
+                                      <div style={{ fontSize: 13, marginTop: 4 }}>
+                                        No folder under {currentNode?.name || 'this folder'} matches
+                                        {docGroupLevelFilter !== 'all' ? ` ${docGroupLevelFilter}` : ''}
+                                        {docGroupLevelFilter !== 'all' && docLeafCategoryFilter !== 'all' ? ' and' : ''}
+                                        {docLeafCategoryFilter !== 'all' ? ` ${docLeafCategoryFilter}` : ''}
+                                        {vesselFilter !== 'all' ? ` for ${vesselFilter}` : ''}, or those folders have no files.
+                                        {groupCatTruncated ? ' Large folder — open a sub-folder to search it fully.' : ''}
+                                      </div>
+                                    </>
+                                  )
+                                ) : insideSelectedVessel ? (
+                                  <>
+                                    <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>This folder is empty</div>
+                                    <div style={{ fontSize: 13, marginTop: 4 }}>No files or subfolders found in this directory. You can upload files or folders using the buttons above.</div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>No folder for {vesselFilter} here</div>
+                                    <div style={{ fontSize: 13, marginTop: 4 }}>Nothing in this folder belongs to the selected vessel. Choose "All vessels" to see everything.</div>
+                                  </>
+                                )}
+                              </div>
+                            )
                           )}
                         </>
                       );
@@ -3835,7 +6474,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   'Shared Documents'
                 )
               ) : (
-                <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+                <div style={{ padding: 40, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>
                   Loading configured document site...
                 </div>
               )
@@ -3849,7 +6488,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   'Documents'
                 )
               ) : (
-                <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>
+                <div style={{ padding: 40, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>
                   Loading configured document site...
                 </div>
               )
@@ -3875,17 +6514,17 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             host.setState({ vesselFilter: 'all', docScopeType: 'common' });
                           }}
                           style={{
-                            background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
+                            background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)', padding: 18,
                             display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
                             boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
                           }}
                         >
                           <div style={{ width: 44, height: 44, borderRadius: 10, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>📁</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{commonDisplayName}</div>
-                            <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Shared {docMainFolder} documents</div>
+                            <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{commonDisplayName}</div>
+                            <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>Shared {docMainFolder} documents</div>
                           </div>
-                          <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
+                          <span style={{ color: 'var(--vdms-text-faint)', fontSize: 16 }}>›</span>
                         </div>
                       </div>
                     </div>
@@ -3904,6 +6543,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       (!docMainFolder || row.group.trim().toLowerCase() === docMainFolder.trim().toLowerCase()) &&
                       row.category.trim().toLowerCase() === catFilter.trim().toLowerCase()
                     ))
+                    .filter(v => !textFilter || v.name.toLowerCase().includes(textFilter.trim().toLowerCase()))
                     .map(v => (
                     <div
                       key={v.id}
@@ -3912,14 +6552,14 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         host.setState({ vesselFilter: v.name, docScopeType: 'vessels' });
                         host._loadFilesForVessel(v.name).catch(() => undefined);
                       }}
-                      style={{ background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }}
+                      style={{ background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)', padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }}
                     >
                       <div style={{ width: 44, height: 44, borderRadius: 10, background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#0284c7' }}>🚢</div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.name}</div>
-                        <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>Vessel</div>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.name}</div>
+                        <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>Vessel</div>
                       </div>
-                      <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
+                      <span style={{ color: 'var(--vdms-text-faint)', fontSize: 16 }}>›</span>
                     </div>
                     ))}
 
@@ -3931,7 +6571,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           }
                         }}
                         style={{
-                          background: documentVesselsLoadingMore ? '#f8fafc' : '#f0f9ff',
+                          background: documentVesselsLoadingMore ? 'var(--vdms-surface-alt)' : '#f0f9ff',
                           borderRadius: 14,
                           border: '2px dashed #0284c7',
                           padding: 18,
@@ -3955,7 +6595,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           <div style={{ fontWeight: 700, fontSize: 14, color: '#0284c7', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {documentVesselsLoadingMore ? 'Loading vessels...' : `More vessels (+${Math.min(8, vessels.length - documentVesselCount)})`}
                           </div>
-                          <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                          <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>
                             {documentVesselsLoadingMore ? 'Please wait...' : `Load next batch (${documentVesselCount} of ${vessels.length} shown)`}
                           </div>
                         </div>
@@ -4003,7 +6643,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         void host._refreshFolderFiles(realFolderId, subGroupKey, true).catch(() => undefined);
                       }}
                       style={{
-                        background: '#fff', borderRadius: 14, border: '1px solid #e2e8f0', padding: 18,
+                        background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)', padding: 18,
                         display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
                         boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'transform 0.15s, box-shadow 0.15s',
                       }}
@@ -4015,16 +6655,16 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         📁
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sfName}</div>
-                        <div style={{ fontSize: 12, color: '#64748b', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sfName}</div>
+                        <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                           <span>{isAtCategoryLevel ? 'Document Section' : (stackLevel === 3 ? 'Category' : 'Sub-Category')}</span>
                           {(() => {
                             const fc = subfolderFileCountMap.get(sfName) ?? subfolderFileCountMap.get(sfName.trim().toLowerCase()) ?? 0;
                             const fsc = subfolderFolderCountMap.get(sfName) ?? subfolderFolderCountMap.get(sfName.trim().toLowerCase()) ?? 0;
                             return (
                               <>
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: fsc > 0 ? '#e0f2fe' : '#f1f5f9', color: fsc > 0 ? '#0369a1' : '#94a3b8', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px', whiteSpace: 'nowrap' }}>📁 {fsc}</span>
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: fc > 0 ? '#dcfce7' : '#f1f5f9', color: fc > 0 ? '#15803d' : '#94a3b8', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px', whiteSpace: 'nowrap' }}>📄 {fc}</span>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: fsc > 0 ? '#e0f2fe' : 'var(--vdms-border-soft)', color: fsc > 0 ? '#0369a1' : 'var(--vdms-text-faint)', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px', whiteSpace: 'nowrap' }}>📁 {fsc}</span>
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: fc > 0 ? '#dcfce7' : 'var(--vdms-border-soft)', color: fc > 0 ? '#15803d' : 'var(--vdms-text-faint)', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px', whiteSpace: 'nowrap' }}>📄 {fc}</span>
                               </>
                             );
                           })()}
@@ -4035,7 +6675,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           </div>
                         )}
                       </div>
-                      <span style={{ color: '#94a3b8', fontSize: 16 }}>›</span>
+                      <span style={{ color: 'var(--vdms-text-faint)', fontSize: 16 }}>›</span>
                     </div>
                     );
                   })}
@@ -4044,10 +6684,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               </div>
             ) : visibleCurrentFolderFiles.length > 0 ? (
               /* Folder File Items List */
-              <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+              <div style={{ background: 'var(--vdms-surface)', borderRadius: 12, border: '1px solid var(--vdms-border)', overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
-                    <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
+                    <tr style={{ background: 'var(--vdms-surface-alt)', borderBottom: '1px solid var(--vdms-border)', color: 'var(--vdms-text-muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
                       <th style={{ padding: '10px 16px', width: 40, textAlign: 'center' }}></th>
                       <th style={{ padding: '10px 16px' }}>FILE NAME</th>
                       <th style={{ padding: '10px 16px' }}>SIZE</th>
@@ -4067,7 +6707,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             ? [currentVesselNameFromStack, docMainFolder, ...folderPathStack.slice(2).map(n => n.name)].filter(Boolean).join(' > ')
                             : (currentFolderNode?.name || '')));
                       return (
-                        <tr key={file.name + idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <tr key={file.name + idx} style={{ borderBottom: '1px solid var(--vdms-border-soft)' }}>
                           <td style={{ padding: '12px 16px', textAlign: 'center', width: 40 }}>
                             <input
                               type="checkbox"
@@ -4082,7 +6722,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                               style={{ width: 16, height: 16, accentColor: '#ef4444', cursor: 'pointer' }}
                             />
                           </td>
-                          <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                          <td style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--vdms-text)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                             <span style={{ fontSize: 18 }}>{(file as any).pending ? '⏳' : '📄'}</span>
                             <span
                               onClick={() => {
@@ -4150,8 +6790,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                               }
                             })()}
                           </td>
-                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.size}</td>
-                          <td style={{ padding: '12px 16px', color: '#64748b' }}>{file.date}</td>
+                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)' }}>{file.size}</td>
+                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)' }}>{file.date}</td>
                           <td style={{ padding: '12px 16px', textAlign: 'right' }}>
                             <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
                               <button
@@ -4169,7 +6809,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         : (currentFolderNode?.name || '')));
                                   void host._openDocumentFile(fileId, file.name, currentPath);
                                 }}
-                                style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#0078d4' }}
+                                style={{ border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface)', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#0078d4' }}
                                 title={`View or download ${file.name}`}
                               >
                                 View / Download
@@ -4222,8 +6862,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   }}>
                     📁
                   </div>
-                  <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#0f172a' }}>This folder is empty</h3>
-                  <p style={{ margin: 0, fontSize: 13, color: '#64748b', maxWidth: 320, lineHeight: 1.5 }}>
+                  <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: 'var(--vdms-text)' }}>This folder is empty</h3>
+                  <p style={{ margin: 0, fontSize: 13, color: 'var(--vdms-text-muted)', maxWidth: 320, lineHeight: 1.5 }}>
                     Use the Upload button in the top-right to add a document.
                   </p>
                 </div>
@@ -4251,20 +6891,20 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       <div
                         key={item.id}
                         style={{
-                          background: '#fff', borderRadius: 8, border: '1px solid #fed7aa', padding: '10px 14px',
+                          background: 'var(--vdms-surface)', borderRadius: 8, border: '1px solid #fed7aa', padding: '10px 14px',
                           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
                         }}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                           <span style={{ fontSize: 18 }}>{item.item_type === 'folder' ? '📁' : '📄'}</span>
                           <div>
-                            <span style={{ fontWeight: 600, fontSize: 13, color: '#1e293b' }}>{item.name}</span>
-                            <span style={{ fontSize: 11, color: '#64748b', marginLeft: 8 }}>Path: {item.spo_path}</span>
+                            <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--vdms-text)' }}>{item.name}</span>
+                            <span style={{ fontSize: 11, color: 'var(--vdms-text-muted)', marginLeft: 8 }}>Path: {item.spo_path}</span>
                           </div>
                         </div>
                         <button
                           onClick={() => host._dismissAnomaly(item.id)}
-                          style={{ background: '#fff', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}
+                          style={{ background: 'var(--vdms-surface)', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}
                         >
                           ✕ Dismiss
                         </button>
@@ -4280,49 +6920,64 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           /* ── LIST VIEW ── */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {/* Table wrapper */}
-            <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0', overflowX: 'auto', width: '100%' }}>
-              <table style={{ width: '100%', minWidth: 950, borderCollapse: 'collapse', fontSize: 12 }}>
+            <div style={{ background: 'var(--vdms-surface)', borderRadius: 12, border: '1px solid var(--vdms-border)', boxShadow: '0 1px 2px rgba(15,23,42,0.04)', overflow: 'hidden', width: '100%' }}>
+             <div style={{ overflowX: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
+              <table style={{ width: '100%', minWidth: 1420, borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', fontSize: 12 }}>
+                <colgroup>
+                  <col style={{ width: 48 }} />
+                  <col style={{ width: 150 }} />
+                  <col style={{ width: 130 }} />
+                  <col style={{ width: 160 }} />
+                  <col style={{ width: 130 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 220 }} />
+                  <col />
+                  <col style={{ width: 82 }} />
+                  <col style={{ width: 150 }} />
+                  <col style={{ width: 150 }} />
+                </colgroup>
                 <thead>
-                  <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0', color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
-                    <th style={{ padding: '10px 10px', width: 44, textAlign: 'center' }}>SR.</th>
-                    <th style={{ padding: '10px 12px' }}>VESSEL NAME</th>
-                    <th style={{ padding: '10px 12px' }}>MAIN FOLDER</th>
-                    <th style={{ padding: '10px 12px' }}>DOCUMENT SECTION</th>
-                    <th style={{ padding: '10px 12px' }}>GROUP</th>
-                    <th style={{ padding: '10px 12px' }}>CATEGORY</th>
-                    <th style={{ padding: '10px 12px' }}>SUB-CATEGORY</th>
-                    <th style={{ padding: '10px 12px' }}>FOLDER PATH</th>
-                    <th style={{ padding: '10px 12px' }}>FILE NAME</th>
-                    <th style={{ padding: '10px 12px' }}>SIZE</th>
-                    <th style={{ padding: '10px 12px' }}>DATE &amp; TIME UPLOADED</th>
-                    <th style={{ padding: '10px 12px', textAlign: 'right' }}>ATTACHMENT</th>
+                  <tr>
+                    <th style={{ ...LIST_TH, textAlign: 'center' }}>#</th>
+                    <th style={LIST_TH}>Vessel</th>
+                    <th style={LIST_TH}>Domain</th>
+                    <th style={LIST_TH}>Main folder</th>
+                    <th style={LIST_TH}>Group</th>
+                    <th style={LIST_TH}>Category</th>
+                    <th style={LIST_TH}>Sub category</th>
+                    <th style={LIST_TH}>Folder path</th>
+                    <th style={LIST_TH}>File name</th>
+                    <th style={{ ...LIST_TH, textAlign: 'right' }}>Size</th>
+                    <th style={LIST_TH}>Uploaded</th>
+                    <th style={{ ...LIST_TH, textAlign: 'center' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {pageGroupedRows.length === 0 ? (
                     <tr>
                       <td colSpan={12} style={{ padding: '48px 16px', textAlign: 'center' }}>
-                        {(host.state.loading || (Boolean(vesselLoadingName) && filtered.length === 0) || (documentFilesLoading && allRows.length === 0) || (documentVesselsLoadingMore && filtered.length === 0)) ? (
+                        {(host.state.loading || (Boolean(vesselLoadingName) && filtered.length === 0) || (documentFilesLoading && allRows.length === 0) || (documentVesselsLoadingMore && filtered.length === 0) || (docScopeType === 'sites' && Array.from(host._siteFolderItemsCache.values()).some(entry => entry.loading))) ? (
                           <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
                             <div style={{
                               width: 32, height: 32, border: '3px solid #e0f2fe',
                               borderTop: '3px solid #0284c7', borderRadius: '50%',
                               animation: 'spin 0.8s linear infinite',
                             }} />
-                            <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a' }}>
+                            <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--vdms-text)' }}>
                               {vesselLoadingName
                                 ? `Loading documents and attachments for ${vesselLoadingName}...`
                                 : (documentVesselsLoadingMore ? 'Loading more vessels...' : 'Loading vessel documents from SharePoint...')}
                             </div>
-                            <div style={{ fontSize: 11, color: '#64748b', maxWidth: 360 }}>
+                            <div style={{ fontSize: 11, color: 'var(--vdms-text-muted)', maxWidth: 360 }}>
                               Please wait while folder structures and live files are loaded.
                             </div>
                           </div>
                         ) : (
                           <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
                             <div style={{ fontSize: 28 }}>🔍</div>
-                            <div style={{ fontWeight: 600, fontSize: 13, color: '#475569' }}>No documents found</div>
-                            <div style={{ color: '#94a3b8', fontSize: 12, maxWidth: 400 }}>
+                            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--vdms-text-secondary)' }}>No documents found</div>
+                            <div style={{ color: 'var(--vdms-text-faint)', fontSize: 12, maxWidth: 400 }}>
                               {textFilter || vesselFilter !== 'all' || docGroupFilter !== 'all' || docCategoryFilter !== 'all' || docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all' || docSubCategoryFilter !== 'all'
                                 ? 'No rows match your current filter criteria.'
                                 : 'No documents or folders are available for this section.'}
@@ -4367,70 +7022,87 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     const rowFileIds = r.files.map(f => f.id);
                     const rowSelectedCount = rowFileIds.filter(id => listViewSelectedFiles.has(id)).length;
                     const listViewLabels = getListViewLabels(r);
+                    const rowDomain = (r.domain || '').trim();
+                    const zebra = idx % 2 === 1;
+                    // Folder path shown from the library root down ("Documents ›
+                    // type of vessel › Bow Fraternity › Sea-Trial"); the full
+                    // path stays in the tooltip.
+                    const pathSegments = (r.subFolderPath || '').split(/\s*>\s*/).map(seg => seg.trim()).filter(Boolean);
+                    const libraryIdx = pathSegments.findIndex(seg => /^(documents|shared documents|sites documents|site library|general documents)$/i.test(seg));
+                    const shortPath = (libraryIdx >= 0 ? pathSegments.slice(libraryIdx) : pathSegments).join(' › ');
 
                     return (
-                      <tr key={`${r.groupKey}-${idx}`} style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.1s' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')}
-                        onMouseLeave={e => (e.currentTarget.style.background = '')}
+                      <tr key={`${r.groupKey}-${idx}`}
+                        style={{ borderBottom: '1px solid var(--vdms-border-soft)', background: zebra ? 'var(--vdms-surface-alt)' : 'var(--vdms-surface)', transition: 'background 0.1s' }}
+                        onMouseEnter={e => (e.currentTarget.style.background = '#f0f9ff')}
+                        onMouseLeave={e => (e.currentTarget.style.background = zebra ? 'var(--vdms-surface-alt)' : 'var(--vdms-surface)')}
                       >
-                        <td style={{ padding: '10px 10px', color: '#94a3b8', fontSize: 11, fontFamily: 'monospace', textAlign: 'center', verticalAlign: 'top' }}>{globalIdx}</td>
-                        <td style={{ padding: '10px 12px', fontWeight: 700, color: '#0f172a', verticalAlign: 'top' }}>
+                        <td style={{ ...LIST_TD, textAlign: 'center', color: 'var(--vdms-text-faint)', fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>{globalIdx}</td>
+                        <td style={{ ...LIST_TD, fontWeight: 700, color: 'var(--vdms-text)' }}>
                           {listViewLabels.vessel === 'Not Listed' || listViewLabels.vessel === 'Vessel name not listed' ? (
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#ffedd5', color: '#c2410c', borderRadius: 6, padding: '2px 7px', fontSize: 11, fontWeight: 700 }}>
+                            <span style={{ ...LIST_PILL, background: '#ffedd5', color: '#c2410c' }} title="No vessel associated with this file">
+                              <span aria-hidden="true" style={LIST_X_DOT}>✕</span>
                               Not Listed
                             </span>
                           ) : listViewLabels.vessel === 'Common for all vessels' ? (
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#fef3c7', color: '#92400e', borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 700 }}>
-                              <span>📁</span> Common for all vessels
-                            </span>
+                            <span style={{ ...LIST_PILL, background: '#fef3c7', color: '#92400e' }}>📁 Common for all vessels</span>
                           ) : listViewLabels.vessel === 'Kaizen - Knowledge Bank' ? (
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: '#ede9fe', color: '#6b21a8', borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 700 }}>
-                              <span>📚</span> Kaizen - Knowledge Bank
-                            </span>
+                            <span style={{ ...LIST_PILL, background: '#ede9fe', color: '#6b21a8' }}>📚 Kaizen - Knowledge Bank</span>
                           ) : (
-                            listViewLabels.vessel
+                            <span style={LIST_WRAP} title={listViewLabels.vessel}>{listViewLabels.vessel}</span>
                           )}
                         </td>
-                        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
-                          <span style={{
-                            display: 'inline-block', borderRadius: 8, padding: '3px 8px', fontSize: 11, fontWeight: 600,
-                            background: listViewLabels.mainFolder === 'Main folder not assigned' ? '#f1f5f9' : (listViewLabels.mainFolder === 'Kaizen - Knowledge Bank' ? '#ede9fe' : (listViewLabels.mainFolder === 'Insurance' ? '#fef3c7' : (listViewLabels.mainFolder === 'Commercial & Chartering' ? '#dcfce7' : '#eff6ff'))),
-                            color: listViewLabels.mainFolder === 'Main folder not assigned' ? '#64748b' : (listViewLabels.mainFolder === 'Kaizen - Knowledge Bank' ? '#6b21a8' : (listViewLabels.mainFolder === 'Insurance' ? '#b45309' : (listViewLabels.mainFolder === 'Commercial & Chartering' ? '#15803d' : '#2563eb'))),
-                            fontStyle: listViewLabels.mainFolder === 'Main folder not assigned' ? 'italic' : 'normal',
-                          }}>
-                            {listViewLabels.mainFolder}
-                          </span>
+                        <td style={LIST_TD}>
+                          {rowDomain ? (
+                            <span style={{ ...LIST_PILL, background: '#e0e7ff', color: '#3730a3', whiteSpace: 'normal' }} title={rowDomain}>
+                              <span style={LIST_WRAP}>{rowDomain}</span>
+                            </span>
+                          ) : <ListMissingMark title="No domain tag assigned" />}
                         </td>
-                        <td style={{ padding: '10px 12px', fontWeight: 600, color: listViewLabels.documentSection === 'Document section not assigned' ? '#94a3b8' : '#334155', fontStyle: listViewLabels.documentSection === 'Document section not assigned' ? 'italic' : 'normal', verticalAlign: 'top' }}>
-                          {listViewLabels.documentSection}
+                        <td style={LIST_TD}>
+                          {listViewLabels.mainFolder ? (
+                            <span
+                              title={listViewLabels.mainFolder}
+                              style={{
+                                ...LIST_PILL, maxWidth: '100%', whiteSpace: 'normal',
+                                background: listViewLabels.mainFolder === 'Kaizen - Knowledge Bank' ? '#ede9fe' : (listViewLabels.mainFolder === 'Insurance' ? '#fef3c7' : (listViewLabels.mainFolder === 'Commercial & Chartering' ? '#dcfce7' : '#eff6ff')),
+                                color: listViewLabels.mainFolder === 'Kaizen - Knowledge Bank' ? '#6b21a8' : (listViewLabels.mainFolder === 'Insurance' ? '#b45309' : (listViewLabels.mainFolder === 'Commercial & Chartering' ? '#15803d' : '#2563eb')),
+                              }}
+                            >
+                              <span style={LIST_WRAP}>{listViewLabels.mainFolder}</span>
+                            </span>
+                          ) : <ListMissingMark title="No main folder" />}
                         </td>
-                        <td style={{ padding: '10px 12px', fontWeight: 600, color: listViewLabels.group === 'Group not assigned' ? '#94a3b8' : '#1e293b', fontStyle: listViewLabels.group === 'Group not assigned' ? 'italic' : 'normal', verticalAlign: 'top' }}>
-                          {listViewLabels.group}
+                        <td style={LIST_TD}>
+                          {listViewLabels.group ? (
+                            <span style={{ ...LIST_PILL, background: '#f3e8ff', color: '#7e22ce', whiteSpace: 'normal' }}>
+                              <span style={LIST_WRAP}>{listViewLabels.group}</span>
+                            </span>
+                          ) : <ListMissingMark title="No group tag assigned" />}
                         </td>
-                        <td style={{ padding: '10px 12px', fontWeight: 700, color: listViewLabels.category === 'Category not assigned' ? '#94a3b8' : '#1e293b', fontStyle: listViewLabels.category === 'Category not assigned' ? 'italic' : 'normal', verticalAlign: 'top' }}>
-                          {listViewLabels.category}
+                        <td style={{ ...LIST_TD, fontWeight: 600, color: 'var(--vdms-text)' }}>
+                          {listViewLabels.category
+                            ? <span style={LIST_WRAP} title={listViewLabels.category}>{listViewLabels.category}</span>
+                            : <ListMissingMark title="No category tag assigned" />}
                         </td>
-                        <td style={{ padding: '10px 12px', fontWeight: 600, color: (listViewLabels.subCategory === 'Sub-category not assigned' || !listViewLabels.subCategory) ? '#94a3b8' : '#1e293b', fontStyle: (listViewLabels.subCategory === 'Sub-category not assigned' || !listViewLabels.subCategory) ? 'italic' : 'normal', verticalAlign: 'top' }}>
-                          {listViewLabels.subCategory || 'Sub-category not assigned'}
+                        <td style={LIST_TD}>
+                          {listViewLabels.subCategory
+                            ? <span style={LIST_WRAP} title={listViewLabels.subCategory}>{listViewLabels.subCategory}</span>
+                            : <ListMissingMark title="No sub category tag assigned" />}
                         </td>
-                        <td style={{ padding: '10px 12px', color: '#64748b', fontSize: 11, verticalAlign: 'top' }} title={r.subFolderPath}>
+                        <td style={LIST_TD} title={r.subFolderPath}>
                           <button
                             type="button"
                             onClick={() => openFolderViewForListRow(r)}
                             style={{
-                              border: 'none',
-                              background: 'transparent',
-                              color: '#0284c7',
-                              cursor: 'pointer',
-                              textAlign: 'left',
-                              padding: 0,
-                              fontSize: 11,
-                              maxWidth: '100%',
-                              textDecoration: 'underline',
-                            }}
-                            title="Open this path in Folder view"
+                              border: 'none', background: 'transparent', color: '#0369a1', cursor: 'pointer',
+                              textAlign: 'left', padding: 0, fontSize: 11.5, lineHeight: '17px', maxWidth: '100%',
+                              display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                              wordBreak: 'break-word',
+                            } as React.CSSProperties}
+                            title={`Open in Folder view: ${r.subFolderPath}`}
                           >
-                            {r.subFolderPath}
+                            {shortPath || r.subFolderPath}
                           </button>
                           {showDebugKeys && (
                             <div style={{ marginTop: 4, color: '#7c3aed', fontSize: 10, fontFamily: 'monospace', wordBreak: 'break-all' }}>
@@ -4438,11 +7110,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             </div>
                           )}
                         </td>
-                        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
+                        <td style={LIST_TD}>
                           {hasFiles ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
                               {r.files.map(file => (
-                                <div key={file.name} style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                <div key={file.id || file.name} style={{ ...LIST_FILE_LINE, gap: 8 }}>
                                   <input
                                     type="checkbox"
                                     checked={listViewSelectedFiles.has(file.id)}
@@ -4453,9 +7125,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         return { listViewSelectedFiles: next };
                                       });
                                     }}
-                                    style={{ width: 14, height: 14, accentColor: '#ef4444', cursor: 'pointer', flexShrink: 0 }}
+                                    style={{ width: 14, height: 14, accentColor: '#0284c7', cursor: 'pointer', flexShrink: 0, margin: 0 }}
+                                    aria-label={`Select ${file.name}`}
                                   />
-                                  <span style={{ fontSize: 14 }}>📄</span>
+                                  <span aria-hidden="true" style={{ fontSize: 13, flexShrink: 0 }}>📄</span>
                                   <span
                                     onClick={() => {
                                       if (file.id && !file.id.startsWith('file_')) {
@@ -4464,8 +7137,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         alert(`File "${file.name}" is pending — it will be available after approval.`);
                                       }
                                     }}
-                                    style={{ color: '#0284c7', textDecoration: 'underline', fontWeight: 600, cursor: 'pointer' }}
-                                    title={file.id && /^\d+$/.test(file.id) ? `${file.name} (pending approval - click to preview staged copy)` : `Click to open ${file.name}`}
+                                    style={{ ...LIST_ELLIPSIS, flex: '1 1 auto', color: '#0369a1', fontWeight: 600, cursor: 'pointer' }}
+                                    title={file.id && /^\d+$/.test(file.id) ? `${file.name} (pending approval - click to preview staged copy)` : file.name}
                                   >
                                     {file.name}{file.id && /^\d+$/.test(file.id) ? ' ⏳' : ''}
                                   </span>
@@ -4474,64 +7147,57 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                     const isUnidentified = (host?.state?.ocrUnidentifiedFiles || []).some(
                                       n => (n || '').trim().toLowerCase() === file.name.trim().toLowerCase()
                                     );
-
-                                    if (detectedVessel && !isUnidentified) {
-                                      return (
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            host._openVesselSuggestions([new File([], file.name)], detectedVessel);
-                                          }}
-                                          title={`View OCR Vessel Suggestion: ${detectedVessel}`}
-                                          style={{
-                                            background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)',
-                                            borderRadius: 6, padding: '1px 6px', fontSize: 10, color: '#0284c7',
-                                            cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 3,
-                                          }}
-                                        >
-                                          <span>✨</span> {detectedVessel}
-                                        </button>
-                                      );
-                                    } else {
-                                      return null;
-                                    }
+                                    if (!detectedVessel || isUnidentified) return null;
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          host._openVesselSuggestions([new File([], file.name)], detectedVessel);
+                                        }}
+                                        title={`View OCR Vessel Suggestion: ${detectedVessel}`}
+                                        style={{
+                                          background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)',
+                                          borderRadius: 6, padding: '1px 6px', fontSize: 10, color: '#0284c7', flexShrink: 0,
+                                          cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 3,
+                                        }}
+                                      >
+                                        <span>✨</span> {detectedVessel}
+                                      </button>
+                                    );
                                   })()}
                                 </div>
                               ))}
                             </div>
                           ) : (
-                            <span style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: 11 }}>—</span>
+                            <span style={{ ...LIST_FILE_LINE, color: 'var(--vdms-text-faint)' }}>—</span>
                           )}
                         </td>
-                        <td style={{ padding: '10px 12px', color: '#64748b', fontSize: 11, whiteSpace: 'nowrap', verticalAlign: 'top' }}>
-                          {hasFiles ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                              {r.files.map(file => <span key={file.id}>{file.size || '—'}</span>)}
-                            </div>
-                          ) : '—'}
+                        <td style={{ ...LIST_TD, textAlign: 'right', color: 'var(--vdms-text-muted)', fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>
+                          {hasFiles
+                            ? r.files.map(file => <div key={file.id || file.name} style={{ ...LIST_FILE_LINE, justifyContent: 'flex-end' }}>{file.size || '—'}</div>)
+                            : <span style={LIST_FILE_LINE}>—</span>}
                         </td>
-                        <td style={{ padding: '10px 12px', color: '#64748b', fontSize: 11, whiteSpace: 'nowrap', verticalAlign: 'top' }}>
-                          {hasFiles ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                              {r.files.map(file => (
-                                <span key={file.id} title={file.uploadedAt ? new Date(file.uploadedAt).toISOString() : undefined}>
-                                  {file.uploadedAt ? new Date(file.uploadedAt).toLocaleString() : '—'}
-                                </span>
-                              ))}
-                            </div>
-                          ) : '—'}
+                        <td style={{ ...LIST_TD, color: 'var(--vdms-text-muted)', fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>
+                          {hasFiles
+                            ? r.files.map(file => (
+                              <div key={file.id || file.name} style={LIST_FILE_LINE} title={file.uploadedAt ? new Date(file.uploadedAt).toISOString() : undefined}>
+                                {file.uploadedAt ? new Date(file.uploadedAt).toLocaleString() : '—'}
+                              </div>
+                            ))
+                            : <span style={LIST_FILE_LINE}>—</span>}
                         </td>
-                        <td style={{ padding: '10px 12px', textAlign: 'right', verticalAlign: 'top' }}>
-                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                            <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-                            <label style={{
-                              background: isUploading ? '#f1f5f9' : '#fff', border: '1px solid #cbd5e1', borderRadius: 6,
-                              padding: '3px 8px', fontSize: 11, fontWeight: 600,
-                              color: isUploading ? '#94a3b8' : '#334155',
-                              cursor: isUploading ? 'not-allowed' : 'pointer',
-                              display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
-                            }}>
+                        <td style={LIST_TD}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6 }}>
+                            <label
+                              title="Upload files into this folder"
+                              style={{
+                                ...LIST_ACTION_BTN,
+                                background: isUploading ? 'var(--vdms-border-soft)' : 'var(--vdms-surface)',
+                                color: isUploading ? 'var(--vdms-text-faint)' : 'var(--vdms-text)',
+                                cursor: isUploading ? 'not-allowed' : 'pointer',
+                              }}
+                            >
                               <input
                                 type="file"
                                 multiple
@@ -4545,7 +7211,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   host._openBulkUpload(bulkFiles, r.uploadFolderId, r.subFolderPath, r.vesselName);
                                 }}
                               />
-                              {isUploading ? '⏳...' : '↑ Upload'}
+                              {isUploading ? '⏳' : '↑ Upload'}
                             </label>
                             <button
                               type="button"
@@ -4561,31 +7227,38 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                 host._openFileDeleteDialog(filesToDelete);
                               }}
                               style={{
-                                border: `1px solid ${rowSelectedCount > 0 ? '#fca5a5' : '#e2e8f0'}`,
-                                background: rowSelectedCount > 0 ? '#fff5f5' : '#f8fafc',
-                                borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 600,
+                                ...LIST_ACTION_BTN,
+                                border: `1px solid ${rowSelectedCount > 0 ? '#fca5a5' : 'var(--vdms-border)'}`,
+                                background: rowSelectedCount > 0 ? '#fff5f5' : 'var(--vdms-surface-alt)',
                                 cursor: rowSelectedCount > 0 ? 'pointer' : 'not-allowed',
-                                color: rowSelectedCount > 0 ? '#ef4444' : '#cbd5e1',
-                                display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
+                                color: rowSelectedCount > 0 ? '#ef4444' : 'var(--vdms-text-faint)',
                               }}
                               title={rowSelectedCount > 0 ? `Delete ${rowSelectedCount} selected file(s)` : 'Select files to delete'}
                             >
-                              🗑{rowSelectedCount > 0 ? ` Delete (${rowSelectedCount})` : ' Delete'}
+                              🗑 {rowSelectedCount > 0 ? `(${rowSelectedCount})` : 'Delete'}
                             </button>
-                            </div>
+                            {r.canUpload && r.uploadFolderId && !r.uploadFolderId.includes('/') ? (
+                              <button
+                                type="button"
+                                onClick={() => host._openAddFolderDialog({
+                                  folderId: r.uploadFolderId,
+                                  folderLabel: r.subFolderPath,
+                                  vesselName: r.vesselName,
+                                })}
+                                style={{ ...LIST_ACTION_BTN, border: '1px solid #bae6fd', background: '#f0f9ff', color: '#0369a1' }}
+                                title="Add a subfolder here"
+                              >
+                                + Folder
+                              </button>
+                            ) : <span />}
                             <button
                               type="button"
-                              onClick={() => void host._openSharePointFolder(r)}
-                              title="Open this folder in SharePoint"
-                              aria-label={`Open ${r.subFolderPath} in SharePoint`}
-                              style={{
-                                width: 28, height: 27, padding: 0, borderRadius: 6,
-                                border: '1px solid #bfdbfe', background: '#eff6ff', color: '#1d4ed8',
-                                cursor: 'pointer', fontSize: 16, fontWeight: 700, lineHeight: 1,
-                                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                              }}
+                              onClick={() => { void host._openSharePointFolder(r); }}
+                              title="Open the folder containing these files in SharePoint Online"
+                              aria-label={`Open ${r.subFolderPath} in SharePoint Online`}
+                              style={{ ...LIST_ACTION_BTN, border: '1px solid #bfdbfe', background: '#eff6ff', color: '#1d4ed8' }}
                             >
-                              ↗
+                              ↗ Open
                             </button>
                           </div>
                         </td>
@@ -4594,9 +7267,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   })}
                 </tbody>
               </table>
+             </div>
 
               {/* Pagination footer */}
-              <div style={{ padding: '10px 14px', color: '#64748b', fontSize: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc', borderTop: '1px solid #e2e8f0' }}>
+              <div style={{ padding: '10px 14px', color: 'var(--vdms-text-muted)', fontSize: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--vdms-surface-alt)', borderTop: '1px solid var(--vdms-border)' }}>
                 <span>
                   Showing {filtered.length === 0 ? 0 : safePage * PAGE_ROWS + 1}–{Math.min((safePage + 1) * PAGE_ROWS, filtered.length)} of {filtered.length} rows
                 </span>
@@ -4604,16 +7278,16 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   <button
                     onClick={() => host.setState({ docListPage: Math.max(0, safePage - 1) })}
                     disabled={safePage === 0}
-                    style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 4, padding: '3px 8px', fontSize: 11, cursor: safePage === 0 ? 'not-allowed' : 'pointer', opacity: safePage === 0 ? 0.4 : 1 }}
+                    style={{ border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface)', borderRadius: 4, padding: '3px 8px', fontSize: 11, cursor: safePage === 0 ? 'not-allowed' : 'pointer', opacity: safePage === 0 ? 0.4 : 1 }}
                   >‹</button>
                   {Array.from({ length: totalPages }, (_, i) => (
                     <button
                       key={i}
                       onClick={() => host.setState({ docListPage: i })}
                       style={{
-                        border: i === safePage ? 'none' : '1px solid #cbd5e1',
-                        background: i === safePage ? '#0078d4' : '#fff',
-                        color: i === safePage ? '#fff' : '#334155',
+                        border: i === safePage ? 'none' : '1px solid var(--vdms-border)',
+                        background: i === safePage ? '#0078d4' : 'var(--vdms-surface)',
+                        color: i === safePage ? '#fff' : 'var(--vdms-text)',
                         borderRadius: 4, padding: '3px 8px', fontSize: 11,
                         fontWeight: i === safePage ? 700 : 400,
                         cursor: 'pointer',
@@ -4624,7 +7298,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   <button
                     onClick={() => host.setState({ docListPage: Math.min(totalPages - 1, safePage + 1) })}
                     disabled={safePage >= totalPages - 1}
-                    style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 4, padding: '3px 8px', fontSize: 11, cursor: safePage >= totalPages - 1 ? 'not-allowed' : 'pointer', opacity: safePage >= totalPages - 1 ? 0.4 : 1 }}
+                    style={{ border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface)', borderRadius: 4, padding: '3px 8px', fontSize: 11, cursor: safePage >= totalPages - 1 ? 'not-allowed' : 'pointer', opacity: safePage >= totalPages - 1 ? 0.4 : 1 }}
                   >›</button>
                 </div>
               </div>

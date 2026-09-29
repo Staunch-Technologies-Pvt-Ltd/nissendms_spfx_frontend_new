@@ -16,6 +16,10 @@ import { IVesselEmailProps } from './components/IVesselEmailProps';
 export interface IVesselEmailWebPartProps {
   apiBaseUrl: string;
   apiToken: string;
+  // Base URL of the standalone SharePoint AI Migration Assistant backend
+  // (frontend/src/webparts/vesselEmail/components/migrationAssistant/README.md)
+  // — a separate FastAPI process from apiBaseUrl above.
+  migrationApiBaseUrl: string;
 }
 
 export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEmailWebPartProps> {
@@ -59,6 +63,7 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
         sessionExpired: this._sessionExpired,
         sessionInitialized: this._sessionInitialized,
         siteUrl: this.context.pageContext.site.absoluteUrl,
+        migrationApiBaseUrl: this._migrationApiBaseUrl(),
       }
     );
 
@@ -203,7 +208,21 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
     return configured || 'https://nk-dms-dev.sg-nissenkaiun.com';
   }
 
-
+  // Base URL for the standalone SharePoint AI Migration Assistant backend —
+  // a separate process/database/Graph app registration from the main DMS
+  // API above. Defaults to the documented local-dev port (8020, see that
+  // module's README.md) when served from the local workbench; otherwise the
+  // property pane value must be set explicitly (there's no single "prod"
+  // default since this backend is deployed independently).
+  private _migrationApiBaseUrl(): string {
+    const configured = (this.properties.migrationApiBaseUrl || '').replace(/\/$/, '');
+    const hostedFromLocalDev = typeof window !== 'undefined' &&
+      /(?:debugManifestsFile|localhost:4321)/i.test(window.location.href);
+    if ((this.context.isServedFromLocalhost || hostedFromLocalDev) && !configured) {
+      return 'http://127.0.0.1:8020';
+    }
+    return configured;
+  }
 
   private _getEnvironmentMessage(): Promise<string> {
     if (!!this.context.sdks.microsoftTeams) { // running in Teams, office.com or Outlook
@@ -274,6 +293,10 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
                 }),
                 PropertyPaneTextField('apiToken', {
                   label: 'API Token'
+                }),
+                PropertyPaneTextField('migrationApiBaseUrl', {
+                  label: 'Migration API Base URL',
+                  description: 'Standalone SharePoint AI Migration Assistant backend (separate process — see components/migrationAssistant/README.md). Local dev default: http://localhost:8020'
                 })
               ]
             }

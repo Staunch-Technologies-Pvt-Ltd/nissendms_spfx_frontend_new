@@ -19,6 +19,8 @@ export interface BulkUploadProgress {
   status: 'queued' | 'uploading' | 'done' | 'failed';
   message?: string;
   size: string;
+  /** Direct SharePoint link to the uploaded file, once known — lets you verify the real destination. */
+  webUrl?: string | null;
 }
 
 export interface BulkUploadModalProps {
@@ -64,6 +66,7 @@ export function BulkUploadModal({
   const [elapsedSeconds, setElapsedSeconds] = React.useState(0);
   const [autoCloseSeconds, setAutoCloseSeconds] = React.useState<number | null>(null);
   const [currentIndex, setCurrentIndex] = React.useState(0);
+  const [lastSuccessWebUrl, setLastSuccessWebUrl] = React.useState<string | null>(null);
   const hasRunRef = React.useRef(false);
 
   // Elapsed timer while uploading
@@ -95,6 +98,7 @@ export function BulkUploadModal({
       const newUploads: Array<{ name: string; size: string; date: string; id?: string; uploadedAt: number }> = [];
       const successFilesList: File[] = []; // tracks files that uploaded OK — used for vessel suggestions
       const successUploadEntries: VesselSuggestionUploadEntry[] = [];
+      let lastWebUrl: string | null = null;
 
       for (let i = 0; i < files.length; i++) {
         const { file, relativePath } = files[i];
@@ -333,9 +337,11 @@ export function BulkUploadModal({
             return { uploadedFilesByFolder, rows: updatedRows };
           });
 
+          lastWebUrl = result.webUrl || lastWebUrl;
           updateProgress(progressId, {
             status: 'done',
             message: relativePath ? `→ ${relativePath}` : `→ ${targetSubFolderPath || 'current folder'}`,
+            webUrl: result.webUrl || null,
           });
         } catch (err: any) {
           host._clearUploadingFilePlaceholder(optimisticKeys, optimisticId);
@@ -348,6 +354,7 @@ export function BulkUploadModal({
       }
 
       setDone(true);
+      setLastSuccessWebUrl(lastWebUrl);
       setAutoCloseSeconds(10);
       void host._syncScheduler?.triggerNow().catch(() => undefined);
       if (targetSiteId && targetDriveId) {
@@ -490,15 +497,30 @@ export function BulkUploadModal({
                 )}
               </div>
               <div style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0 }}>{p.size}</div>
-              <div style={{
-                fontSize: 11, fontWeight: 700, flexShrink: 0, minWidth: 68, textAlign: 'right',
-                color: statusColor(p.status),
-              }}>
-                {p.status === 'done' ? '✓ Done'
-                  : p.status === 'failed' ? '✗ Failed'
-                  : p.status === 'uploading' ? 'Uploading…'
-                  : 'Queued'}
-              </div>
+              {p.status === 'done' && p.webUrl ? (
+                <a
+                  href={p.webUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Open this file in SharePoint"
+                  style={{
+                    fontSize: 11, fontWeight: 700, flexShrink: 0, minWidth: 68, textAlign: 'right',
+                    color: statusColor(p.status), textDecoration: 'none',
+                  }}
+                >
+                  ✓ Done 🔗
+                </a>
+              ) : (
+                <div style={{
+                  fontSize: 11, fontWeight: 700, flexShrink: 0, minWidth: 68, textAlign: 'right',
+                  color: statusColor(p.status),
+                }}>
+                  {p.status === 'done' ? '✓ Done'
+                    : p.status === 'failed' ? '✗ Failed'
+                    : p.status === 'uploading' ? 'Uploading…'
+                    : 'Queued'}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -530,6 +552,20 @@ export function BulkUploadModal({
               >
                 View Alerts
               </button>
+              {lastSuccessWebUrl && (
+                <a
+                  href={lastSuccessWebUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    background: '#f1f5f9', color: '#0f172a', border: '1px solid #e2e8f0', borderRadius: 10,
+                    minHeight: 44, padding: '10px 20px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                    whiteSpace: 'nowrap', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6,
+                  }}
+                >
+                  🔗 Open in SharePoint
+                </a>
+              )}
               <button
                 onClick={onClose}
                 style={{

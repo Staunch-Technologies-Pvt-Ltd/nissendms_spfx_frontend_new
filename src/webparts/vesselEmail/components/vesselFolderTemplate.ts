@@ -246,6 +246,14 @@ export const MAIN_FOLDERS: MainFolder[] = [
   },
 ];
 
+// NOTE: an earlier pass in this session deleted the functions below as
+// "dead code" based on a grep that missed DocumentsPage.tsx / FolderView.tsx
+// / ListView.tsx — those three files existed on the device but had never
+// been staged into that session, so the grep couldn't see their imports.
+// They are NOT dead: DocumentsPage.tsx (the actual Document Library /
+// flattened-tree view) and FolderView.tsx (the Folder View's Level-0/1
+// navigation) both call every one of these. Restored as-is.
+
 function dedupeNames(names: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];

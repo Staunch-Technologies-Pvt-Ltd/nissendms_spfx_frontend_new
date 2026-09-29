@@ -2,6 +2,7 @@ import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import type { OcrStagingItem, DocumentCategory, TagFieldDef } from '../types/ui';
 import { isMobileWidth, isTabletWidth } from '../responsive';
+import { clay } from '../clayTheme';
 
 // ── Production Term Store Taxonomy ───────────────────────────────────────────
 export const PRODUCTION_VESSELS: string[] = [
@@ -603,15 +604,16 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
       {pendingCreateSuggestions.length > 0 && (
         <div style={{
-          background: 'linear-gradient(90deg, #ecfdf5 0%, #eff6ff 100%)',
-          border: '1px solid #86efac',
-          borderRadius: 12,
-          padding: '12px 16px',
+          background: 'linear-gradient(135deg, #ecfdf5 0%, #ebf9ff 100%)',
+          border: `1px solid ${clay.accentSoft}`,
+          borderRadius: clay.radiusCard,
+          padding: '14px 18px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 12,
           flexWrap: 'wrap',
+          boxShadow: clay.shadowRaised,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
             <span style={{ fontSize: 18 }}>✨</span>
@@ -629,15 +631,19 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
             onClick={() => host._openSuggestedVesselsFromSidebar()}
             style={{
               padding: '8px 14px',
-              borderRadius: 9,
+              borderRadius: 10,
               border: 'none',
-              background: '#15803d',
+              background: clay.accentGradient,
               color: '#fff',
               fontSize: 12,
               fontWeight: 800,
               cursor: 'pointer',
               whiteSpace: 'nowrap',
+              boxShadow: clay.shadowButton,
+              transition: 'all 0.15s ease',
             }}
+            onMouseEnter={e => { e.currentTarget.style.background = clay.accentGradientHover; e.currentTarget.style.boxShadow = clay.shadowButton.replace('rgba(221,145,89,0.35)', 'rgba(199,122,62,0.42)'); }}
+            onMouseLeave={e => { e.currentTarget.style.background = clay.accentGradient; e.currentTarget.style.boxShadow = clay.shadowButton; }}
           >
             Review / Create Vessel
           </button>
@@ -645,10 +651,15 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
       )}
 
       {/* Staged / Unstaged Tab Strip */}
-      <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid #e2e8f0' }}>
+      <div style={{
+        display: 'flex',
+        gap: 8,
+        padding: '8px 10px 0',
+        borderBottom: `2px solid ${clay.accentSoft}`,
+      }}>
         {[
-          { key: 'staged' as const, label: '📋 Staging Queue', count: stagedItems.length, color: '#0284c7', desc: 'Ready for review & filing' },
-          { key: 'unstaged' as const, label: '⚠️ Needs Review', count: unstagedItems.length, color: '#dc2626', desc: 'Could not be auto-classified' },
+          { key: 'staged' as const, label: '📋 Staging Queue', count: stagedItems.length, color: clay.accentDark, bg: clay.accentSoft },
+          { key: 'unstaged' as const, label: '⚠️ Needs Review', count: unstagedItems.length, color: '#b45309', bg: '#fef3c7' },
         ].map(tab => {
           const isActive = activeQueueTab === tab.key;
           return (
@@ -660,21 +671,24 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
                 setSelectedUnstagedIds([]);
               }}
               style={{
-                padding: '12px 24px', border: 'none', background: 'none', cursor: 'pointer',
-                fontSize: 13, fontWeight: 700,
+                padding: '12px 18px', border: 'none', background: isActive ? clay.surfaceRaised : 'transparent', cursor: 'pointer',
+                fontSize: 13, fontWeight: 800,
                 color: isActive ? tab.color : '#64748b',
                 borderBottom: isActive ? `3px solid ${tab.color}` : '3px solid transparent',
                 marginBottom: -2, transition: 'all 0.15s',
                 display: 'flex', alignItems: 'center', gap: 8,
+                borderRadius: '14px 14px 0 0',
+                boxShadow: isActive ? 'inset 0 1px 0 rgba(255,255,255,0.8)' : 'none',
               }}
             >
               {tab.label}
               <span style={{
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                 minWidth: 22, height: 22, borderRadius: 11,
-                background: tab.count > 0 ? (isActive ? tab.color : '#e2e8f0') : '#f1f5f9',
-                color: tab.count > 0 ? (isActive ? '#fff' : '#475569') : '#94a3b8',
+                background: tab.count > 0 ? (isActive ? tab.color : tab.bg) : '#f1f5f9',
+                color: tab.count > 0 ? (isActive ? '#fff' : tab.color) : '#94a3b8',
                 fontSize: 11, fontWeight: 800,
+                boxShadow: 'inset 0 1px 2px rgba(255,255,255,0.7)',
               }}>
                 {tab.count}
               </span>
@@ -775,11 +789,14 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
                     setBatchModalOpen(true);
                   }}
                   style={{
-                    padding: '7px 16px', background: '#0284c7', border: 'none', borderRadius: 8,
+                    padding: '7px 16px', background: clay.accentGradient, border: 'none', borderRadius: 8,
                     fontSize: 12, fontWeight: 800, color: '#fff', cursor: 'pointer',
-                    boxShadow: '0 2px 8px rgba(2,132,199,0.35)',
+                    boxShadow: clay.shadowButton,
                     display: 'inline-flex', alignItems: 'center', gap: 6,
+                    transition: 'all 0.15s ease',
                   }}
+                  onMouseEnter={e => { e.currentTarget.style.background = clay.accentGradientHover; e.currentTarget.style.boxShadow = clay.shadowButton.replace('rgba(221,145,89,0.35)', 'rgba(199,122,62,0.42)'); }}
+                  onMouseLeave={e => { e.currentTarget.style.background = clay.accentGradient; e.currentTarget.style.boxShadow = clay.shadowButton; }}
                 >
                   <span>🚢 Assign Vessel ({selectedUnstagedIds.length})</span>
                 </button>
@@ -812,12 +829,12 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
 
       {/* Top Banner / Filter Bar */}
       <div style={{
-        background: '#fff', borderRadius: 12, padding: '16px 20px', border: '1px solid #e2e8f0',
+        background: 'linear-gradient(135deg, rgba(240,251,250,0.96), rgba(232,246,245,0.96))', borderRadius: clay.radiusCard, padding: '16px 20px', border: `1px solid ${clay.accentSoft}`,
         display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 14,
-        boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
+        boxShadow: clay.shadowRaised,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: '#475569' }}>Filter Source:</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: clay.textMuted }}>Filter Source:</span>
           {(['all', 'folder', 'direct'] as const).map(src => (
             <button
               key={src}
@@ -825,9 +842,9 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
               onClick={() => setFilterSource(src)}
               style={{
                 padding: '6px 14px', borderRadius: 20, border: '1px solid',
-                borderColor: filterSource === src ? '#0284c7' : '#cbd5e1',
-                background: filterSource === src ? '#e0f2fe' : '#fff',
-                color: filterSource === src ? '#0369a1' : '#475569',
+                borderColor: filterSource === src ? clay.accent : clay.accentSoft,
+                background: filterSource === src ? clay.accentSoft : clay.surface,
+                color: filterSource === src ? clay.accentDark : clay.textMuted,
                 fontSize: 12, fontWeight: 700, cursor: 'pointer', transition: 'all 0.15s',
               }}
             >
@@ -843,7 +860,7 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             style={{
-              padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1',
+              padding: '7px 12px', borderRadius: 8, border: `1px solid ${clay.accentSoft}`,
               fontSize: 12, width: isMobile ? '100%' : 220, outline: 'none',
             }}
           />
@@ -851,8 +868,8 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
             type="button"
             onClick={() => void fetchQueue(true)}
             style={{
-              padding: '7px 12px', borderRadius: 8, border: '1px solid #cbd5e1',
-              background: '#f8fafc', color: '#475569', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              padding: '7px 12px', borderRadius: 8, border: `1px solid ${clay.accentSoft}`,
+              background: clay.surfaceRaised, color: clay.textMuted, fontSize: 12, fontWeight: 600, cursor: 'pointer',
             }}
           >
             🔄 Refresh
@@ -863,8 +880,9 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
       {/* Success Notification */}
       {actionSuccess && (
         <div style={{
-          background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 10, padding: '12px 16px',
+          background: 'linear-gradient(135deg, #ecfdf5 0%, #e0f2fe 100%)', border: `1px solid ${clay.pillActiveBg}`, borderRadius: clay.radiusCard, padding: '12px 16px',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#15803d', fontSize: 13,
+          boxShadow: clay.shadowRaised,
         }}>
           <div>
             <strong>✓ {actionSuccess.message}</strong>
@@ -890,16 +908,16 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
       )}
 
       {/* Queue Table */}
-      <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+      <div style={{ background: 'linear-gradient(180deg, #f4fbfb 0%, #eefaf9 100%)', borderRadius: clay.radiusCard, border: `1px solid ${clay.accentSoft}`, overflow: 'hidden', boxShadow: clay.shadowRaised }}>
         {loading && items.length === 0 ? (
-          <div style={{ padding: 40, textAlign: 'center', color: '#64748b', fontSize: 14 }}>
+          <div style={{ padding: 40, textAlign: 'center', color: clay.textMuted, fontSize: 14 }}>
             ⏳ Loading OCR staging queue...
           </div>
         ) : filteredItems.length === 0 ? (
           <div style={{ padding: 48, textAlign: 'center' }}>
             <div style={{ fontSize: 36, marginBottom: 8 }}>🎉</div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>No Documents Pending Review</div>
-            <div style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: clay.text }}>No Documents Pending Review</div>
+            <div style={{ fontSize: 13, color: clay.textMuted, marginTop: 4 }}>
               When folders or single files are uploaded, they sit here for AI auto-tagging and user verification.
             </div>
           </div>
@@ -924,9 +942,9 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
               const isSelected = selectedUnstagedIds.includes(item.id);
 
               return (
-                <div key={item.id} style={{ border: isSelected ? '2px solid #0284c7' : '1px solid #e2e8f0', borderRadius: 12, padding: 12, background: isSelected ? '#f0f9ff' : '#fff' }}>
+                <div key={item.id} style={{ border: isSelected ? `2px solid ${clay.accent}` : `1px solid ${clay.accentSoft}`, borderRadius: 12, padding: 12, background: isSelected ? clay.surfaceRaised : clay.surface }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', wordBreak: 'break-word' }}>{item.filename}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: clay.text, wordBreak: 'break-word' }}>{item.filename}</div>
                     {activeQueueTab === 'unstaged' && (
                       <input
                         type="checkbox"
@@ -971,7 +989,7 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
                     <strong>Source:</strong> {item.upload_source === 'folder' ? 'Folder' : 'Direct'}
                   </div>
                   <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
-                    <button type="button" onClick={() => handleOpenEdit(item)} style={{ minHeight: 44, background: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
+                    <button type="button" onClick={() => handleOpenEdit(item)} style={{ minHeight: 44, background: clay.surfaceRaised, color: clay.text, border: `1px solid ${clay.accentSoft}`, borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Edit</button>
                     {item.status === 'needs_review' ? (
                       <button type="button" disabled={!!promotingIds[item.id]} onClick={() => handlePromoteToStaged(item)} style={{ minHeight: 44, background: promotingIds[item.id] ? '#94a3b8' : '#d97706', color: '#fff', border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: promotingIds[item.id] ? 'not-allowed' : 'pointer' }}>
                         {promotingIds[item.id] ? 'Moving...' : 'Move to Staging'}
@@ -1000,7 +1018,7 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
           <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', minWidth: isTablet ? 1120 : 980, borderCollapse: 'collapse', fontSize: 13, textAlign: 'left' }}>
             <thead>
-              <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: 11, textTransform: 'uppercase' }}>
+              <tr style={{ background: clay.surfaceRaised, borderBottom: `1px solid ${clay.accentSoft}`, color: clay.textMuted, fontSize: 11, textTransform: 'uppercase' }}>
                 {activeQueueTab === 'unstaged' && (
                   <th style={{ padding: '12px 12px', width: 36, textAlign: 'center' }}>
                     <input
@@ -1019,7 +1037,7 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
                   </th>
                 )}
                 <th style={{ padding: '12px 16px', width: 56 }}>#</th>
-                <th style={{ padding: '12px 16px', position: 'sticky', left: activeQueueTab === 'unstaged' ? 92 : 56, zIndex: 3, background: '#f8fafc' }}>Document Name</th>
+                <th style={{ padding: '12px 16px', position: 'sticky', left: activeQueueTab === 'unstaged' ? 92 : 56, zIndex: 3, background: clay.surfaceRaised }}>Document Name</th>
                 <th style={{ padding: '12px 16px' }}>Source</th>
                 <th style={{ padding: '12px 16px' }}>Status &amp; AI Match</th>
                 <th style={{ padding: '12px 16px' }}>SharePoint Metadata Tags</th>
@@ -1058,7 +1076,7 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
                 ].filter(Boolean).length;
 
                 return (
-                  <tr key={item.id} style={{ borderBottom: '1px solid #f1f5f9', background: isSelected ? '#f0f9ff' : '#fff' }}>
+                  <tr key={item.id} style={{ borderBottom: `1px solid ${clay.accentSoft}`, background: isSelected ? clay.surfaceRaised : clay.surface }}>
                     {activeQueueTab === 'unstaged' && (
                       <td style={{ padding: '14px 12px', textAlign: 'center' }}>
                         <input
@@ -1075,11 +1093,11 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
                         />
                       </td>
                     )}
-                    <td style={{ padding: '14px 16px', color: '#94a3b8', fontWeight: 600 }}>{idx + 1}</td>
-                    
+                    <td style={{ padding: '14px 16px', color: clay.textMuted, fontWeight: 600 }}>{idx + 1}</td>
+
                     {/* Filename, Preview & Scanned Time */}
-                    <td style={{ padding: '14px 16px', maxWidth: 230, position: 'sticky', left: activeQueueTab === 'unstaged' ? 92 : 56, zIndex: 2, background: isSelected ? '#f0f9ff' : '#fff' }}>
-                      <div style={{ fontWeight: 700, color: '#0f172a', wordBreak: 'break-word' }}>
+                    <td style={{ padding: '14px 16px', maxWidth: 230, position: 'sticky', left: activeQueueTab === 'unstaged' ? 92 : 56, zIndex: 2, background: isSelected ? clay.surfaceRaised : clay.surface }}>
+                      <div style={{ fontWeight: 700, color: clay.text, wordBreak: 'break-word' }}>
                         {item.filename}
                       </div>
                       {item.ocr_text_preview && (
@@ -1300,28 +1318,28 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
             aria-modal="true"
             onClick={e => e.stopPropagation()}
             style={{
-              width: isMobile ? '95vw' : 600, maxWidth: '95vw', background: '#fff', borderRadius: 16,
-              boxShadow: '0 25px 60px rgba(0,0,0,0.3)', overflow: 'hidden',
+              width: isMobile ? '95vw' : 600, maxWidth: '95vw', background: clay.surface, borderRadius: clay.radiusCard,
+              boxShadow: clay.shadowRaisedHover, overflow: 'hidden',
               display: 'flex', flexDirection: 'column', maxHeight: '90vh',
             }}
           >
             {/* Modal Header */}
             <div style={{
-              padding: '18px 24px', borderBottom: '1px solid #e2e8f0', background: '#f8fafc',
+              padding: '18px 24px', borderBottom: `1px solid ${clay.accentSoft}`, background: clay.surfaceRaised,
               display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             }}>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: '#0f172a' }}>
+                <div style={{ fontSize: 16, fontWeight: 800, color: clay.text }}>
                   Review &amp; Edit SharePoint Metadata Tags
                 </div>
-                <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                <div style={{ fontSize: 12, color: clay.textMuted, marginTop: 2 }}>
                   {editingItem.filename}
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setEditingItem(null)}
-                style={{ background: 'none', border: 'none', fontSize: 20, color: '#94a3b8', cursor: 'pointer' }}
+                style={{ background: 'none', border: 'none', fontSize: 20, color: clay.textMuted, cursor: 'pointer' }}
               >
                 ✕
               </button>
@@ -1544,14 +1562,14 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
 
             {/* Modal Footer */}
             <div style={{
-              padding: '14px 24px', borderTop: '1px solid #e2e8f0', background: '#f8fafc',
+              padding: '14px 24px', borderTop: `1px solid ${clay.accentSoft}`, background: clay.surfaceRaised,
               display: 'flex', justifyContent: 'flex-end', gap: 10, flexDirection: isMobile ? 'column' : 'row',
             }}>
               <button
                 type="button"
                 onClick={() => setEditingItem(null)}
                 style={{
-                  background: '#fff', color: '#475569', border: '1px solid #cbd5e1',
+                  background: clay.surface, color: clay.textMuted, border: `1px solid ${clay.accentSoft}`,
                   borderRadius: 8, padding: '8px 16px', minHeight: 44, width: isMobile ? '100%' : 'auto', fontSize: 13, fontWeight: 600, cursor: 'pointer',
                 }}
               >
@@ -1562,9 +1580,10 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
                 disabled={isSavingEdit}
                 onClick={handleSaveTags}
                 style={{
-                  background: '#0284c7', color: '#fff', border: 'none',
+                  background: clay.accentGradient, color: '#fff', border: 'none',
                   borderRadius: 8, padding: '8px 20px', minHeight: 44, width: isMobile ? '100%' : 'auto', fontSize: 13, fontWeight: 700,
                   cursor: isSavingEdit ? 'wait' : 'pointer',
+                  boxShadow: clay.shadowButton,
                 }}
               >
                 {isSavingEdit ? '⏳ Saving...' : '💾 Save Tags'}
@@ -1597,7 +1616,7 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
           >
             {/* Header */}
             <div style={{
-              padding: '18px 24px', borderBottom: '1px solid #e2e8f0', background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
+              padding: '18px 24px', borderBottom: `1px solid ${clay.accentSoft}`, background: 'linear-gradient(135deg, #edfdf9 0%, #dff7ff 100%)',
               display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1704,7 +1723,7 @@ export const OcrStagingQueue: React.FC<OcrStagingQueueProps> = ({ host, categori
 
             {/* Footer */}
             <div style={{
-              padding: '14px 24px', borderTop: '1px solid #e2e8f0', background: '#f8fafc',
+              padding: '14px 24px', borderTop: `1px solid ${clay.accentSoft}`, background: clay.surfaceRaised,
               display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10,
             }}>
               <button

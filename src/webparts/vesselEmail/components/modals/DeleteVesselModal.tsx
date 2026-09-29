@@ -4,7 +4,7 @@ import { isMobileWidth } from '../responsive';
 
 /** A single dialog supports both one-vessel and bulk temporary deletion. */
 export function renderDeleteModal(host: VesselEmail): React.ReactElement {
-  const { deleteVesselIds, deleteVesselProgress, vessels, modalBusy, modalMsg, modalError, deleteAutoCloseSeconds } = host.state;
+  const { deleteVesselIds, deleteVesselProgress, vessels, modalBusy, modalMsg, modalError, deleteAutoCloseSeconds, deleteVesselReason } = host.state;
   const isMobile = isMobileWidth(host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
   const selected = vessels.filter(v => deleteVesselIds.has(v.id));
   const selectedCount = selected.length;
@@ -92,6 +92,20 @@ export function renderDeleteModal(host: VesselEmail): React.ReactElement {
         ) : (
           <div style={{ padding: 16, color: '#64748b', fontSize: 13 }}>No vessel selected.</div>
         )}
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+          Reason for deletion (optional)
+        </label>
+        <textarea
+          value={deleteVesselReason}
+          onChange={e => host.setState({ deleteVesselReason: e.target.value })}
+          disabled={modalBusy}
+          placeholder="e.g. Duplicate vessel entry, decommissioned, created in error..."
+          rows={2}
+          style={{
+            width: '100%', boxSizing: 'border-box', borderRadius: 6, border: '1px solid #cbd5e1',
+            padding: '8px 10px', fontSize: 13, fontFamily: 'inherit', resize: 'vertical', marginBottom: 12,
+          }}
+        />
         {modalMsg && <div style={{ background: '#dff6dd', color: '#107c10', padding: 8, borderRadius: 6, fontSize: 12, marginBottom: 12 }}>{modalMsg}</div>}
         {modalError && <div style={{ background: '#fde7e9', color: '#a4262c', padding: 8, borderRadius: 6, fontSize: 12, marginBottom: 12 }}>{modalError}</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, flexDirection: isMobile ? 'column' : 'row' }}>

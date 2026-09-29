@@ -2,35 +2,10 @@
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import { badge } from '../constants';
+import { clay } from '../clayTheme';
 import type { DocumentCategory, TagFieldDef } from '../types/ui';
-import { OcrStagingQueue, formatScannedTime } from './OcrStagingQueue';
+import { OcrStagingQueue } from './OcrStagingQueue';
 import { isMobileWidth, isTabletWidth } from '../responsive';
-
-interface OcrClassificationResult {
-  filename: string;
-  file_size: number;
-  content_type: string;
-  text_preview: string;
-  text_length: number;
-  detected_vessel: string | null;
-  detected_group: string;
-  detected_category: string;
-  detected_sub_category?: string;
-  detected_sub_category_1: string;
-  detected_sub_category_2: string;
-  detected_leaf: string;
-  suggested_path: string;
-  confidence: number;
-  matched_keywords: string[];
-  matched_category_id?: number | null;
-  matched_category_name?: string | null;
-  tag_fields?: TagFieldDef[];
-  suggested_tags?: Record<string, any>;
-  available_vessels: string[];
-  available_departments: string[];
-  drawing_taxonomy: Record<string, string[]>;
-  manual_taxonomy: Record<string, string[]>;
-}
 
 export function renderTemplatesPage(host: VesselEmail): React.ReactElement {
   return <TemplatesPageContainer host={host} />;
@@ -41,13 +16,12 @@ interface TemplatesPageContainerProps {
 }
 
 const TemplatesPageContainer: React.FC<TemplatesPageContainerProps> = ({ host }) => {
-  const { vessels } = host.state;
   const viewportWidth = host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200);
   const isMobile = isMobileWidth(viewportWidth);
   const isTablet = isTabletWidth(viewportWidth);
 
-  // Active Top Tab: 'queue' | 'ocr' | 'categories'
-  const [activeTab, setActiveTab] = React.useState<'queue' | 'ocr' | 'categories'>('queue');
+  // Active Top Tab: 'queue' | 'categories'
+  const [activeTab, setActiveTab] = React.useState<'queue' | 'categories'>('queue');
 
   // Categories list from API
   const [categories, setCategories] = React.useState<DocumentCategory[]>([]);
@@ -69,29 +43,6 @@ const TemplatesPageContainer: React.FC<TemplatesPageContainerProps> = ({ host })
   const [isSavingCategory, setIsSavingCategory] = React.useState<boolean>(false);
   const [categoryModalError, setCategoryModalError] = React.useState<string | null>(null);
 
-  // OCR Module Local State
-  const [selectedFile, setSelectedFile] = React.useState<File | null>(null);
-  const [isExtracting, setIsExtracting] = React.useState<boolean>(false);
-  const [extractError, setExtractError] = React.useState<string | null>(null);
-  const [ocrResult, setOcrResult] = React.useState<OcrClassificationResult | null>(null);
-  const [extractedAt, setExtractedAt] = React.useState<string | null>(null);
-
-  // Editable dynamic fields after extraction
-  const [dynamicTags, setDynamicTags] = React.useState<Record<string, any>>({});
-  const [selectedMatchCatId, setSelectedMatchCatId] = React.useState<number | null>(null);
-
-  // Upload & routing state
-  const [isUploading, setIsUploading] = React.useState<boolean>(false);
-  const [uploadSuccess, setUploadSuccess] = React.useState<{ path: string; filename: string } | null>(null);
-  const [uploadError, setUploadError] = React.useState<string | null>(null);
-
-  // Existing file mode (triggered from List/Folder View via ocrPendingItemId)
-  const [existingMode, setExistingMode] = React.useState<{ itemId: string; filename: string } | null>(null);
-  const [isMoveTagging, setIsMoveTagging] = React.useState<boolean>(false);
-  const [moveTagSuccess, setMoveTagSuccess] = React.useState<{ path: string; filename: string } | null>(null);
-
-  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
-
   // Fetch categories from API
   const fetchCategories = React.useCallback(async () => {
     setLoadingCategories(true);
@@ -112,214 +63,6 @@ const TemplatesPageContainer: React.FC<TemplatesPageContainerProps> = ({ host })
   React.useEffect(() => {
     void fetchCategories();
   }, [fetchCategories]);
-
-  // ── Detect ocrPendingItemId from host state ──
-  React.useEffect(() => {
-    const { ocrPendingItemId, ocrPendingFilename } = host.state;
-    if (!ocrPendingItemId) return;
-
-    host.setState({ ocrPendingItemId: null, ocrPendingFilename: null });
-
-    setActiveTab('ocr');
-    setExistingMode({ itemId: ocrPendingItemId, filename: ocrPendingFilename || 'document' });
-    setOcrResult(null);
-    setSelectedFile(null);
-    setUploadSuccess(null);
-    setMoveTagSuccess(null);
-    setExtractError(null);
-    setIsExtracting(true);
-
-    const base = host._base();
-    const form = new FormData();
-    form.append('item_id', ocrPendingItemId);
-    form.append('filename', ocrPendingFilename || 'document');
-
-    fetch(`${base}/api/ocr/classify-existing-file`, {
-      method: 'POST',
-      headers: host._uploadHeaders(),
-      body: form,
-    })
-      .then(async res => {
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || `Server returned status ${res.status}`);
-        }
-        return res.json() as Promise<OcrClassificationResult>;
-      })
-      .then(data => {
-        setOcrResult(data);
-        setSelectedMatchCatId(data.matched_category_id || null);
-        setDynamicTags({
-          vessel: data.suggested_tags?.vessel || data.detected_vessel || '',
-          group: data.suggested_tags?.group || data.detected_group || 'Drawing',
-          category: data.suggested_tags?.category || data.detected_category || 'Basic',
-          sub_category: data.suggested_tags?.sub_category || data.detected_sub_category || '',
-          department: data.suggested_tags?.department || 'Technical & Crewing',
-          ...(data.suggested_tags || {}),
-        });
-      })
-      .catch((err: any) => {
-        setExtractError(err?.message || 'Failed to classify existing file.');
-      })
-      .finally(() => setIsExtracting(false));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [host.state.ocrPendingItemId]);
-
-  const vesselOptions = React.useMemo(() => {
-    const list = (vessels || []).map(v => v.name).filter(Boolean);
-    if (ocrResult?.available_vessels) {
-      ocrResult.available_vessels.forEach(v => {
-        if (!list.includes(v)) list.push(v);
-      });
-    }
-    return list.sort();
-  }, [vessels, ocrResult]);
-
-  // Active Category in OCR manual tab
-  const activeOcrCategory = React.useMemo(() => {
-    if (selectedMatchCatId) {
-      const found = categories.find(c => c.id === selectedMatchCatId);
-      if (found) return found;
-    }
-    return categories.find(c => c.name.toLowerCase() === (dynamicTags.category || '').toLowerCase()) || categories[0] || null;
-  }, [categories, selectedMatchCatId, dynamicTags.category]);
-
-  // Destination path resolved in OCR manual tab (folder ends at Category level)
-  const resolvedOcrPath = React.useMemo(() => {
-    let templateStr = activeOcrCategory?.dms_path_template || 'Technical & Crewing/{vessel}/Drawings and Manuals/{group}/{category}';
-    templateStr = templateStr.replace(/\/\{sub_?category\}/gi, '');
-    let p = templateStr;
-    for (const [k, v] of Object.entries(dynamicTags)) {
-      p = p.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v || '').trim());
-    }
-    p = p.replace(/\{[a-z0-9_]+\}/g, '');
-    p = p.replace(/\/+/g, '/').replace(/^\/+|\/+$/g, '');
-    return p || 'Technical & Crewing/All Vessels/Drawings and Manuals';
-  }, [activeOcrCategory, dynamicTags]);
-
-  // Handle manual file selection & extraction
-  const handleFileChange = async (file: File | undefined) => {
-    if (!file) return;
-    setSelectedFile(file);
-    setIsExtracting(true);
-    setExtractError(null);
-    setOcrResult(null);
-    setUploadSuccess(null);
-    setUploadError(null);
-
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const base = host._base();
-      const response = await fetch(`${base}/api/ocr/classify`, {
-        method: 'POST',
-        headers: host._uploadHeaders(),
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.detail || `Server returned status ${response.status}`);
-      }
-
-      const data: OcrClassificationResult = await response.json();
-      setOcrResult(data);
-      setExtractedAt(new Date().toISOString());
-      setSelectedMatchCatId(data.matched_category_id || null);
-
-      setDynamicTags({
-        vessel: data.suggested_tags?.vessel || data.detected_vessel || '',
-        group: data.suggested_tags?.group || data.detected_group || 'Drawing',
-        category: data.suggested_tags?.category || data.detected_category || 'Basic',
-        sub_category: data.suggested_tags?.sub_category || data.detected_sub_category || '',
-        department: data.suggested_tags?.department || 'Technical & Crewing',
-        ...(data.suggested_tags || {}),
-      });
-    } catch (err: any) {
-      setExtractError(err?.message || 'Failed to extract text and classify document.');
-    } finally {
-      setIsExtracting(false);
-    }
-  };
-
-  // Move & Tag for existing file
-  const handleMoveAndTag = async () => {
-    if (!existingMode) return;
-    setIsMoveTagging(true);
-    setUploadError(null);
-    setMoveTagSuccess(null);
-
-    try {
-      const base = host._base();
-      const form = new FormData();
-      form.append('item_id', existingMode.itemId);
-      form.append('target_path', resolvedOcrPath);
-      form.append('vessel_name', dynamicTags.vessel || '');
-      form.append('group', dynamicTags.group || 'Drawing');
-      form.append('category', dynamicTags.category || 'To be Classified');
-      form.append('sub_category', dynamicTags.sub_category || 'To be Classified');
-      form.append('department', dynamicTags.department || 'Technical & Crewing');
-
-      const res = await fetch(`${base}/api/ocr/move-and-tag-existing`, {
-        method: 'POST',
-        headers: host._uploadHeaders(),
-        body: form,
-      });
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.detail || `Move failed with status ${res.status}`);
-      }
-      setMoveTagSuccess({ path: resolvedOcrPath, filename: existingMode.filename });
-      setExistingMode(null);
-      if (dynamicTags.vessel) {
-        void host._mergeLiveSharePointFiles([dynamicTags.vessel]).catch(() => undefined);
-      }
-    } catch (err: any) {
-      setUploadError(err?.message || 'Failed to move and tag document.');
-    } finally {
-      setIsMoveTagging(false);
-    }
-  };
-
-  // Direct route & upload
-  const handleRouteAndUpload = async () => {
-    if (!selectedFile) return;
-    setIsUploading(true);
-    setUploadError(null);
-    setUploadSuccess(null);
-
-    try {
-      const base = host._base();
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-      formData.append('path', resolvedOcrPath);
-      formData.append('vessel_name', dynamicTags.vessel || '');
-      formData.append('group', dynamicTags.group || 'Technical & Crewing');
-      formData.append('category', dynamicTags.category || 'Drawings and Manuals');
-      formData.append('sub_category', dynamicTags.sub_category || '');
-
-      const response = await fetch(`${base}/api/ocr/route-and-upload`, {
-        method: 'POST',
-        headers: host._uploadHeaders(),
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.detail || `Upload failed with status ${response.status}`);
-      }
-
-      setUploadSuccess({ path: resolvedOcrPath, filename: selectedFile.name });
-      if (dynamicTags.vessel) {
-        void host._mergeLiveSharePointFiles([dynamicTags.vessel]).catch(() => undefined);
-      }
-    } catch (err: any) {
-      setUploadError(err?.message || 'Failed to route and upload document to SharePoint.');
-    } finally {
-      setIsUploading(false);
-    }
-  };
 
   // ── Open Category Create Modal ──
   const handleOpenNewCategory = () => {
@@ -441,14 +184,14 @@ const TemplatesPageContainer: React.FC<TemplatesPageContainerProps> = ({ host })
             <span>📑</span> Templates, Categories &amp; OCR Staging
           </h2>
           <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>
-            Manage category taxonomies, review OCR-staged documents, and auto-classify vessel files.
+            Manage category taxonomies and review OCR-staged documents.
           </p>
         </div>
 
-        {/* 3-Tab Pill Navigation */}
+        {/* 2-Tab Pill Navigation */}
         <div style={{
-          display: 'inline-flex', background: '#f1f5f9', borderRadius: 12, padding: 4,
-          border: '1px solid #e2e8f0', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.04)',
+          display: 'inline-flex', background: clay.bg, borderRadius: 12, padding: 4,
+          border: `1px solid ${clay.accentSoft}`, boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.04)',
           flexWrap: 'wrap',
         }}>
           {/* Tab 1: Queue */}
@@ -457,47 +200,32 @@ const TemplatesPageContainer: React.FC<TemplatesPageContainerProps> = ({ host })
             onClick={() => setActiveTab('queue')}
             style={{
               padding: '8px 18px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-              background: activeTab === 'queue' ? '#0284c7' : 'transparent',
-              color: activeTab === 'queue' ? '#fff' : '#475569',
-              boxShadow: activeTab === 'queue' ? '0 2px 6px rgba(2, 132, 199, 0.35)' : 'none',
+              background: activeTab === 'queue' ? clay.accentGradient : 'transparent',
+              color: activeTab === 'queue' ? '#fff' : clay.textMuted,
+              boxShadow: activeTab === 'queue' ? clay.shadowButton : 'none',
               display: 'inline-flex', alignItems: 'center', gap: 8, transition: 'all 0.15s ease',
             }}
           >
             <span>📥</span> Review Staging Queue
             {stagingBadgeCount > 0 && (
               <span style={{
-                fontSize: 11, background: activeTab === 'queue' ? '#fff' : '#0284c7',
-                color: activeTab === 'queue' ? '#0284c7' : '#fff', padding: '1px 7px', borderRadius: 12, fontWeight: 800,
+                fontSize: 11, background: activeTab === 'queue' ? '#fff' : clay.accent,
+                color: activeTab === 'queue' ? clay.accentDark : '#fff', padding: '1px 7px', borderRadius: 12, fontWeight: 800,
               }}>
                 {stagingBadgeCount}
               </span>
             )}
           </button>
 
-          {/* Tab 2: OCR Extractor */}
-          <button
-            type="button"
-            onClick={() => setActiveTab('ocr')}
-            style={{
-              padding: '8px 18px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-              background: activeTab === 'ocr' ? '#0284c7' : 'transparent',
-              color: activeTab === 'ocr' ? '#fff' : '#475569',
-              boxShadow: activeTab === 'ocr' ? '0 2px 6px rgba(2, 132, 199, 0.35)' : 'none',
-              display: 'inline-flex', alignItems: 'center', gap: 8, transition: 'all 0.15s ease',
-            }}
-          >
-            <span>🔍</span> Manual OCR Extractor
-          </button>
-
-          {/* Tab 3: Categories & Templates */}
+          {/* Tab 2: Categories & Templates */}
           <button
             type="button"
             onClick={() => setActiveTab('categories')}
             style={{
               padding: '8px 18px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-              background: activeTab === 'categories' ? '#0284c7' : 'transparent',
-              color: activeTab === 'categories' ? '#fff' : '#475569',
-              boxShadow: activeTab === 'categories' ? '0 2px 6px rgba(2, 132, 199, 0.35)' : 'none',
+              background: activeTab === 'categories' ? clay.accentGradient : 'transparent',
+              color: activeTab === 'categories' ? '#fff' : clay.textMuted,
+              boxShadow: activeTab === 'categories' ? clay.shadowButton : 'none',
               display: 'inline-flex', alignItems: 'center', gap: 8, transition: 'all 0.15s ease',
             }}
           >
@@ -515,264 +243,7 @@ const TemplatesPageContainer: React.FC<TemplatesPageContainerProps> = ({ host })
         />
       )}
 
-      {/* ── TAB 2: MANUAL OCR EXTRACTOR ── */}
-      {activeTab === 'ocr' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {/* Drop Zone */}
-          <div
-            onDragOver={e => e.preventDefault()}
-            onDrop={e => {
-              e.preventDefault();
-              if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-                void handleFileChange(e.dataTransfer.files[0]);
-              }
-            }}
-            style={{
-              background: '#ffffff', borderRadius: 14, border: '2px dashed #93c5fd',
-              padding: '36px 24px', textAlign: 'center', display: 'flex', flexDirection: 'column',
-              alignItems: 'center', gap: 12, cursor: 'pointer',
-            }}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp,.docx,.xlsx,.txt"
-              style={{ display: 'none' }}
-              onChange={e => {
-                if (e.target.files && e.target.files[0]) {
-                  void handleFileChange(e.target.files[0]);
-                }
-              }}
-            />
-            <div style={{
-              width: 56, height: 56, borderRadius: '50%', background: '#eff6ff',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, color: '#0284c7',
-            }}>
-              📤
-            </div>
-            <div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#1e293b' }}>
-                Upload Drawing or Document for Live OCR Classification
-              </div>
-              <div style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>
-                Supports PDF, Scanned Images (PNG, JPG, TIFF), Word (.docx), and Technical Drawings
-              </div>
-            </div>
-            <button
-              type="button"
-              style={{
-                background: '#0284c7', color: '#fff', border: 'none', borderRadius: 8,
-                padding: '8px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-              }}
-              onClick={e => {
-                e.stopPropagation();
-                fileInputRef.current?.click();
-              }}
-            >
-              📁 Browse Local File
-            </button>
-          </div>
-
-          {/* Loading */}
-          {isExtracting && (
-            <div style={{
-              background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 12, padding: '24px',
-              textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-            }}>
-              <div style={{ fontSize: 28, animation: 'spin 1.5s linear infinite' }}>⚙️</div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: '#166534' }}>
-                Analyzing Document &amp; Performing OCR Text Extraction...
-              </div>
-            </div>
-          )}
-
-          {extractError && (
-            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '14px 18px', color: '#991b1b', fontSize: 13 }}>
-              ❌ {extractError}
-            </div>
-          )}
-
-          {uploadSuccess && (
-            <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 12, padding: '18px', color: '#15803d', fontSize: 14, fontWeight: 700 }}>
-              ✓ File filed into SharePoint: <span style={{ fontFamily: 'monospace' }}>{uploadSuccess.path}</span>
-            </div>
-          )}
-
-          {/* Results Form with Dynamic Fields */}
-          {ocrResult && (
-            <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #cbd5e1', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', overflow: 'hidden' }}>
-              <div style={{
-                background: '#f8fafc', borderBottom: '1px solid #e2e8f0', padding: '16px 20px',
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              }}>
-                <div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a' }}>{ocrResult.filename}</div>
-                  <div style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 3 }}>
-                    <span>Extracted {ocrResult.text_length} characters • Match: {ocrResult.matched_category_name || 'Standard Taxonomy'}</span>
-                    <span>•</span>
-                    <span style={{ color: '#0369a1', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      <span style={{ fontSize: 11 }}>🕒</span>
-                      <span>Scanned: {formatScannedTime(extractedAt || new Date().toISOString())}</span>
-                    </span>
-                  </div>
-                </div>
-                <span style={{
-                  padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700,
-                  background: ocrResult.confidence >= 0.7 ? '#dcfce7' : '#fef3c7',
-                  color: ocrResult.confidence >= 0.7 ? '#15803d' : '#b45309',
-                }}>
-                  🎯 {(ocrResult.confidence * 100).toFixed(0)}% Match Confidence
-                </span>
-              </div>
-
-              <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 18 }}>
-                {/* Dynamic Category Selector */}
-                <div>
-                  <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#334155', marginBottom: 6 }}>
-                    📂 Document Category (from Templates Module)
-                  </label>
-                  <select
-                    value={selectedMatchCatId || ''}
-                    onChange={e => {
-                      const cid = Number(e.target.value);
-                      setSelectedMatchCatId(cid);
-                      const cat = categories.find(c => c.id === cid);
-                      if (cat) {
-                        setDynamicTags(prev => ({ ...prev, category: cat.name }));
-                      }
-                    }}
-                    style={{
-                      width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1',
-                      fontSize: 13, fontWeight: 700, color: '#0f172a', background: '#fff',
-                    }}
-                  >
-                    {categories.map(c => (
-                      <option key={c.id} value={c.id}>{c.name} ({c.department || 'General'})</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Dynamic Tag Fields Form */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
-                  {(activeOcrCategory?.tag_fields || [
-                    { key: 'vessel', label: 'Vessel Name', type: 'select_vessel', required: true },
-                    { key: 'group', label: 'Department', type: 'select_dept', required: true },
-                    { key: 'category', label: 'Category', type: 'text', required: true },
-                    { key: 'sub_category', label: 'Sub-Category', type: 'text', required: false },
-                  ]).map((field: TagFieldDef) => {
-                    const val = dynamicTags[field.key] ?? '';
-
-                    if (field.type === 'select_vessel') {
-                      return (
-                        <div key={field.key}>
-                          <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#334155', marginBottom: 4 }}>
-                            🚢 {field.label}
-                          </label>
-                          <select
-                            value={val}
-                            onChange={e => setDynamicTags(t => ({ ...t, [field.key]: e.target.value }))}
-                            style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, background: '#fff' }}
-                          >
-                            <option value="">-- Select Vessel --</option>
-                            {vesselOptions.map(v => <option key={v} value={v}>{v}</option>)}
-                          </select>
-                        </div>
-                      );
-                    }
-
-                    if (field.type === 'select_dept') {
-                      return (
-                        <div key={field.key}>
-                          <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#334155', marginBottom: 4 }}>
-                            🏢 {field.label}
-                          </label>
-                          <select
-                            value={val}
-                            onChange={e => setDynamicTags(t => ({ ...t, [field.key]: e.target.value }))}
-                            style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, background: '#fff' }}
-                          >
-                            <option value="Technical & Crewing">Technical & Crewing</option>
-                            <option value="Commercial & Chartering">Commercial & Chartering</option>
-                            <option value="Insurance">Insurance</option>
-                            <option value="Kaizen - Knowledge Bank">Kaizen - Knowledge Bank</option>
-                          </select>
-                        </div>
-                      );
-                    }
-
-                    if (field.type === 'select' && field.options && field.options.length > 0) {
-                      return (
-                        <div key={field.key}>
-                          <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#334155', marginBottom: 4 }}>
-                            📑 {field.label}
-                          </label>
-                          <select
-                            value={val}
-                            onChange={e => setDynamicTags(t => ({ ...t, [field.key]: e.target.value }))}
-                            style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, background: '#fff' }}
-                          >
-                            <option value="">-- Select {field.label} --</option>
-                            {field.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                          </select>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <div key={field.key}>
-                        <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#334155', marginBottom: 4 }}>
-                          🏷️ {field.label}
-                        </label>
-                        <input
-                          type="text"
-                          value={val}
-                          onChange={e => setDynamicTags(t => ({ ...t, [field.key]: e.target.value }))}
-                          style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, boxSizing: 'border-box' }}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Target SharePoint Path Preview */}
-                <div style={{ background: '#f1f5f9', borderRadius: 10, padding: '14px 18px', border: '1px solid #e2e8f0' }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>
-                    Resolved Target SharePoint Path
-                  </div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#0284c7', fontFamily: 'monospace', marginTop: 3 }}>
-                    📁 {resolvedOcrPath}
-                  </div>
-                </div>
-
-                {/* Action Buttons */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
-                  <button
-                    type="button"
-                    onClick={() => { setOcrResult(null); setSelectedFile(null); }}
-                    style={{ background: '#fff', border: '1px solid #cbd5e1', borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
-                  >
-                    Clear
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isUploading}
-                    onClick={handleRouteAndUpload}
-                    style={{
-                      background: isUploading ? '#94a3b8' : '#0078d4', color: '#fff', border: 'none',
-                      borderRadius: 8, padding: '10px 24px', fontSize: 13, fontWeight: 700, cursor: isUploading ? 'not-allowed' : 'pointer',
-                    }}
-                  >
-                    {isUploading ? '⏳ Uploading...' : '🚀 Auto-Segregate & Upload to SharePoint'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── TAB 3: DOCUMENT CATEGORIES & TAG FIELD MANAGEMENT ── */}
+      {/* ── TAB 2: DOCUMENT CATEGORIES & TAG FIELD MANAGEMENT ── */}
       {activeTab === 'categories' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
@@ -787,9 +258,9 @@ const TemplatesPageContainer: React.FC<TemplatesPageContainerProps> = ({ host })
             <button
               onClick={handleOpenNewCategory}
               style={{
-                background: '#0078d4', color: '#fff', border: 'none', borderRadius: 8,
+                background: clay.accentGradient, color: '#fff', border: 'none', borderRadius: 8,
                 padding: '8px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-                display: 'inline-flex', alignItems: 'center', gap: 6,
+                display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: clay.shadowButton,
               }}
             >
               ＋ New Category
@@ -980,7 +451,7 @@ const TemplatesPageContainer: React.FC<TemplatesPageContainerProps> = ({ host })
                   style={{ width: '100%', padding: '8px 12px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, fontFamily: 'monospace', boxSizing: 'border-box' }}
                 />
                 <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>
-                  Use placeholders matching field keys, e.g. <code style={{ color: '#0284c7' }}>{'{group}'}</code>, <code style={{ color: '#0284c7' }}>{'{vessel}'}</code>, <code style={{ color: '#0284c7' }}>{'{sub_category}'}</code>
+                  Use placeholders matching field keys, e.g. <code style={{ color: clay.accentDark }}>{'{group}'}</code>, <code style={{ color: clay.accentDark }}>{'{vessel}'}</code>, <code style={{ color: clay.accentDark }}>{'{sub_category}'}</code>
                 </div>
               </div>
 
@@ -1099,8 +570,8 @@ const TemplatesPageContainer: React.FC<TemplatesPageContainerProps> = ({ host })
                 disabled={isSavingCategory}
                 onClick={handleSaveCategory}
                 style={{
-                  background: isSavingCategory ? '#94a3b8' : '#0078d4', color: '#fff', border: 'none',
-                  borderRadius: 8, minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 22px', fontSize: 13, fontWeight: 700, cursor: isSavingCategory ? 'not-allowed' : 'pointer',
+                  background: isSavingCategory ? '#94a3b8' : clay.accentGradient, color: '#fff', border: 'none',
+                  borderRadius: 8, minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 22px', fontSize: 13, fontWeight: 700, cursor: isSavingCategory ? 'not-allowed' : 'pointer', boxShadow: !isSavingCategory ? clay.shadowButton : 'none',
                 }}
               >
                 {isSavingCategory ? 'Saving...' : 'Save Category'}

@@ -3,9 +3,11 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
+import { clay } from '../clayTheme';
+import { CopilotSearchPanel } from '../copilot/CopilotSearchPanel';
 
-type Site = { id: string; name?: string; display_name: string; web_url?: string; description?: string; thumbnail?: string };
-type Drive = { id: string; name: string; web_url?: string };
+ type Site = { id: string; site_key?: string; name?: string; display_name: string; web_url?: string; description?: string; thumbnail?: string; is_default?: boolean };
+type Drive = { id: string; name: string; web_url?: string; is_system?: boolean; item_count?: number | null };
 type FolderCounts = {
   direct_subfolders: number;
   direct_files: number;
@@ -138,15 +140,23 @@ function getSiteName(site: Site): string {
 }
 
 export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
-  const [sites, setSites] = React.useState<Site[]>(() => getInitialSite(host));
+  const [sites, setSites] = React.useState<Site[]>([]);
   const [query, setQuery] = React.useState('');
   const [expanded, setExpanded] = React.useState<string | null>(null);
   const [drives, setDrives] = React.useState<Record<string, Drive[]>>({});
+  // SharePoint auto-provisions "system" libraries (Site Assets, Style
+  // Library, Form Templates, ...) on every site alongside the real content
+  // library — a site with versioning/retention/publishing features on can
+  // easily show 4-6 of these. They're never where a user's files live, so
+  // they're hidden by default per-site and only shown on request via this
+  // toggle, keyed by site id.
+  const [showSystemLibraries, setShowSystemLibraries] = React.useState<Record<string, boolean>>({});
   const [context, setContext] = React.useState<Context | null>(null);
   const [items, setItems] = React.useState<Item[]>([]);
   const [crumbs, setCrumbs] = React.useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = React.useState(false);
   const [sitesLoading, setSitesLoading] = React.useState(true);
+    const [selectedSiteKey, setSelectedSiteKey] = React.useState('');
   const [message, setMessage] = React.useState('');
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [editing, setEditing] = React.useState<string | null>(null);
@@ -176,6 +186,21 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
 
   // In-memory client cache for folder views: enables 0ms instant folder switching
   const folderCacheRef = React.useRef<Map<string, FolderCacheEntry>>(new Map());
+
+  // Tracks the in-flight loadFolder/fetchSubfolderCounts request, if any.
+  // Neither used to be cancelled when a newer one started, so clicking
+  // through several sites/drives/folders in a row (exactly what "navigate
+  // to other sites" does) left every earlier click's /children and
+  // /subfolder-counts requests running to completion in the background, all
+  // competing with the latest click's own request for the browser's small
+  // per-origin connection pool — and adding to the real SharePoint Online
+  // request volume, which is what can tip the tenant into Graph/SPO
+  // throttling (the "Something's not right" Throttle.htm page). Aborting the
+  // previous one before starting a new one is the same fix already applied
+  // to the Documents module's site switcher (VesselEmail.tsx
+  // _switchDocumentSite / _siteSwitchAbort).
+  const loadFolderAbortRef = React.useRef<AbortController | null>(null);
+  const subfolderCountsAbortRef = React.useRef<AbortController | null>(null);
 
   const api = host._base();
   const headers = host._headers();
@@ -223,9 +248,13 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
 
   /** Async backfill for recursive counts so cold-cache folder views never block initial rendering */
   const fetchSubfolderCounts = React.useCallback(async (ctx: Context, folderId: string): Promise<void> => {
+    subfolderCountsAbortRef.current?.abort();
+    const controller = new AbortController();
+    subfolderCountsAbortRef.current = controller;
     setCountsLoading(true);
     try {
-      const response = await fetch(`${api}/api/sites/${encodeURIComponent(ctx.site.id)}/drives/${encodeURIComponent(ctx.drive.id)}/folders/${encodeURIComponent(folderId)}/subfolder-counts`, { headers });
+      const response = await fetch(`${api}/api/sites/${encodeURIComponent(ctx.site.id)}/drives/${encodeURIComponent(ctx.drive.id)}/folders/${encodeURIComponent(folderId)}/subfolder-counts`, { headers, signal: controller.signal });
+      if (controller.signal.aborted) return;
       if (response.ok) {
         const data = await response.json();
         const countsMap: Record<string, FolderCounts> = data.counts || {};
@@ -253,9 +282,15 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         }
       }
     } catch {
-      // Non-fatal: UI gracefully falls back to direct properties
+      // Non-fatal (including an abort from a newer call superseding this
+      // one): UI gracefully falls back to direct properties
     } finally {
-      setCountsLoading(false);
+      // Only the still-current call should clear the spinner — an aborted,
+      // superseded call finishing its cleanup must not flip countsLoading
+      // to false out from under the newer call that's still in flight.
+      if (subfolderCountsAbortRef.current === controller) {
+        setCountsLoading(false);
+      }
     }
   }, [api, headers]);
 
@@ -295,20 +330,23 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
 
   const loadSites = React.useCallback(async (): Promise<void> => {
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+    const timeoutId = window.setTimeout(() => controller.abort(), 25000);
     setSitesLoading(true);
     try {
-      const response = await fetch(`${api}/api/sites?limit=50`, { headers, signal: controller.signal });
+      const response = await fetch(`${api}/api/sites?limit=500`, { headers, signal: controller.signal });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Could not load sites');
       const discoveredSites: Site[] = data.sites || [];
-      setSites(previous => {
-        const currentSite = previous.find(site => site.id === host.props.siteId);
-        const merged = currentSite && !discoveredSites.some(site => site.id === currentSite.id)
-          ? [currentSite, ...discoveredSites]
-          : discoveredSites;
-        return merged;
-      });
+      setSites(discoveredSites);
+      const activeSite = host.state.activeDocumentSite || '';
+      const normalizeSiteValue = (value: string | null | undefined): string =>
+        String(value || '').trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+      const defaultSite = discoveredSites.find(site => {
+        const candidates = [site.site_key, site.id, site.name, site.display_name, site.web_url];
+        return candidates.some(value => normalizeSiteValue(value) === normalizeSiteValue(activeSite));
+      }) || discoveredSites.find(site => site.is_default) || discoveredSites[0];
+      const nextDefaultValue = defaultSite?.site_key || defaultSite?.id || defaultSite?.name || defaultSite?.display_name || '';
+      setSelectedSiteKey(nextDefaultValue);
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         setMessage('Site discovery is taking longer than expected. The current site is still available.');
@@ -390,11 +428,21 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       setFieldChoices({});
     }
 
+    // Abort whatever folder load is still in flight before starting this
+    // one — clicking through several sites/drives/folders in a row (see the
+    // note on loadFolderAbortRef above) used to leave every earlier click's
+    // request running uncancelled.
+    loadFolderAbortRef.current?.abort();
     const controller = new AbortController();
+    loadFolderAbortRef.current = controller;
     const timeoutId = window.setTimeout(() => controller.abort(), 15000);
     try {
       const response = await fetch(`${api}/api/sites/${encodeURIComponent(nextContext.site.id)}/drives/${encodeURIComponent(nextContext.drive.id)}/folders/${encodeURIComponent(folderId)}/children`, { headers, signal: controller.signal });
       const data = await response.json();
+      // Superseded by a newer loadFolder call while this one was in flight —
+      // drop the (now stale) result instead of applying it over whatever
+      // the newer call has already rendered.
+      if (loadFolderAbortRef.current !== controller) return;
       if (!response.ok) throw new Error(data.detail || 'Could not load folder');
       setContext(nextContext);
       const childItems: Item[] = data.items || [];
@@ -427,32 +475,21 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         void fetchSubfolderCounts(nextContext, folderId);
       }
 
-      // Prefetch immediate child folders in background so clicking into them is 0ms instant!
-      const directSubfolders = childItems.filter(i => i.folder && i.id);
-      if (directSubfolders.length > 0 && directSubfolders.length <= 6) {
-        setTimeout(() => {
-          directSubfolders.forEach(sub => {
-            const subKey = `${nextContext.drive.id}:${sub.id}`;
-            if (!folderCacheRef.current.has(subKey)) {
-              fetch(`${api}/api/sites/${encodeURIComponent(nextContext.site.id)}/drives/${encodeURIComponent(nextContext.drive.id)}/folders/${encodeURIComponent(sub.id)}/children`, { headers })
-                .then(r => r.json())
-                .then(subData => {
-                  if (subData && subData.items) {
-                    folderCacheRef.current.set(subKey, {
-                      items: subData.items,
-                      summaryCounts: subData.summary_counts || null,
-                      detectedVessel: subData.detected_vessel || '',
-                      detectedTags: subData.detected_tags || emptyTags,
-                      timestamp: Date.now(),
-                    });
-                  }
-                })
-                .catch(() => {});
-            }
-          });
-        }, 120);
-      }
+      // NOTE: this used to also fire a speculative /children fetch for every
+      // direct subfolder (up to 6) 120ms after opening this folder, purely so
+      // the *next* click would render instantly from cache. Combined with
+      // fetchSubfolderCounts() above (which already fans out a bounded but
+      // real burst of Graph calls for recursive counts) it meant every folder
+      // open could kick off a dozen-plus concurrent requests — visibly
+      // queuing up in the Network tab and contributing to Graph 429
+      // throttling, which made the *current* folder's own contents take a
+      // long time to appear. Removed: the 120s client cache below still makes
+      // a re-visited folder instant; a folder you haven't opened yet just
+      // fetches normally on click instead of speculatively in the background.
     } catch (error) {
+      // A superseded call's abort should be silent, not surfaced as a
+      // "timed out" error over whatever the newer call is now showing.
+      if (loadFolderAbortRef.current !== controller) return;
       if (!cached) {
         setMessage(error instanceof DOMException && error.name === 'AbortError'
           ? 'SharePoint folder loading timed out. Please retry.'
@@ -460,7 +497,12 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       }
     } finally {
       window.clearTimeout(timeoutId);
-      setLoading(false);
+      // Only the still-current call should clear the spinner/cache-revalidate
+      // state — a superseded call's cleanup must not flip `loading` to false
+      // out from under the newer call that's still in flight.
+      if (loadFolderAbortRef.current === controller) {
+        setLoading(false);
+      }
     }
   };
 
@@ -1428,7 +1470,20 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
     }
   };
 
+  const normalizeSiteSelectionValue = (value: string | null | undefined): string => {
+    return String(value || '').trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  };
+
   const filteredSites = sites.filter(site => `${site.display_name} ${site.description || ''}`.toLowerCase().includes(query.toLowerCase()));
+  const selectedSites = (() => {
+    const key = selectedSiteKey.trim();
+    if (!key) return filteredSites;
+    const matches = filteredSites.filter(site => {
+      const candidates = [site.site_key, site.id, site.name, site.display_name, site.web_url];
+      return candidates.some(value => normalizeSiteSelectionValue(value) === normalizeSiteSelectionValue(key));
+    });
+    return matches.length > 0 ? matches : filteredSites;
+  })();
 
   const renderTags = (item: Item): React.ReactElement => (
     <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
@@ -1464,7 +1519,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           ? `${count} folder${count === 1 ? '' : 's'}`
           : `${count} file${count === 1 ? '' : 's'}`;
         return (
-          <span style={{ color: '#64748b', fontSize: 11, fontStyle: 'italic', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ color: 'var(--vdms-text-muted)', fontSize: 11, fontStyle: 'italic', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             📁 Sub-folder ({label})
           </span>
         );
@@ -1489,7 +1544,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         <select
           value={bulkVessel}
           onChange={e => setBulkVessel(e.target.value)}
-          style={{ flex: 1, maxWidth: 260, padding: '5px 8px', borderRadius: 4, border: '1px solid #fbbf24', fontSize: 12, background: '#fff' }}
+          style={{ flex: 1, maxWidth: 260, padding: '5px 8px', borderRadius: 4, border: '1px solid #fbbf24', fontSize: 12, background: 'var(--vdms-surface)' }}
         >
           <option value="">— Select vessel —</option>
           {vesselOptions.map(v => <option key={v} value={v}>{v}</option>)}
@@ -1523,11 +1578,11 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         <div key={result.item_id} style={{ padding: '14px 0', borderBottom: '1px solid #fed7aa' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontWeight: 700, fontSize: 13, color: '#1e293b' }}>
+              <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--vdms-text)' }}>
                 📄 {result.filename || result.item_id}
               </span>
               {result.subfolder_name && (
-                <span style={{ background: '#f1f5f9', border: '1px solid #e2e8f0', color: '#475569', fontSize: 11, padding: '2px 8px', borderRadius: 12, fontWeight: 600 }}>
+                <span style={{ background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-border)', color: 'var(--vdms-text-secondary)', fontSize: 11, padding: '2px 8px', borderRadius: 12, fontWeight: 600 }}>
                   📁 {result.subfolder_name}
                 </span>
               )}
@@ -1557,8 +1612,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 const isVessel = field === 'vessel';
                 const isVesselNotInFile = isVessel && Boolean(result.vessel_in_filename_only || (ocr as any)?.vessel_in_filename_only);
                 return (
-                  <div key={field} style={{ background: '#fff', border: '1px solid #fed7aa', borderRadius: 6, padding: '8px 10px' }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+                  <div key={field} style={{ background: 'var(--vdms-surface)', border: '1px solid #fed7aa', borderRadius: 6, padding: '8px 10px' }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vdms-text-secondary)', marginBottom: 4 }}>
                       {fieldLabel}
                     </div>
                     <select
@@ -1567,7 +1622,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                         ...previous,
                         [result.item_id]: { ...emptyTags, ...(previous[result.item_id] || {}), [field]: event.target.value },
                       }))}
-                      style={{ width: '100%', padding: '6px 8px', border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 12, background: '#fff' }}
+                      style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--vdms-border)', borderRadius: 4, fontSize: 12, background: 'var(--vdms-surface)' }}
                     >
                       <option value="skip">Skip / Keep unchanged</option>
                       <option value="ocr" disabled={!ocr?.value}>
@@ -1588,7 +1643,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                         <select
                           value={result.proposed_tags?.vessel || ''}
                           onChange={event => updateProposedTag(result.item_id, 'vessel', event.target.value)}
-                          style={{ width: '100%', boxSizing: 'border-box', marginTop: 6, padding: 6, border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 12, background: '#fff' }}
+                          style={{ width: '100%', boxSizing: 'border-box', marginTop: 6, padding: 6, border: '1px solid var(--vdms-border)', borderRadius: 4, fontSize: 12, background: 'var(--vdms-surface)' }}
                         >
                           <option value="">— Select vessel —</option>
                           {vesselOptions.map(v => <option key={v} value={v}>{v}</option>)}
@@ -1599,7 +1654,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                           value={result.proposed_tags?.[field] || ''}
                           onChange={event => updateProposedTag(result.item_id, field, event.target.value)}
                           placeholder={`Enter ${fieldLabel}`}
-                          style={{ width: '100%', boxSizing: 'border-box', marginTop: 6, padding: 6, border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 12 }}
+                          style={{ width: '100%', boxSizing: 'border-box', marginTop: 6, padding: 6, border: '1px solid var(--vdms-border)', borderRadius: 4, fontSize: 12 }}
                         />
                       )
                     )}
@@ -1672,22 +1727,22 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         background: 'rgba(15,23,42,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
         <div style={{
-          background: '#fff', borderRadius: 16, padding: '28px 32px', width: '100%', maxWidth: 540,
+          background: 'var(--vdms-surface)', borderRadius: 16, padding: '28px 32px', width: '100%', maxWidth: 540,
           boxShadow: '0 20px 60px rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: 16,
         }}>
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={{ width: 40, height: 40, borderRadius: 10, background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>⚓</div>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 16, color: '#0f172a' }}>{taggingModal.title}</div>
-              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+              <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--vdms-text)' }}>{taggingModal.title}</div>
+              <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>
                 {taggingModal.finished ? `Completed (${doneCount} file${doneCount === 1 ? '' : 's'} updated)` : `Processing ${doneCount} of ${taggingModal.total} file(s)…`}
               </div>
             </div>
           </div>
 
           {/* Progress bar */}
-          <div style={{ height: 6, background: '#e2e8f0', borderRadius: 99, overflow: 'hidden' }}>
+          <div style={{ height: 6, background: 'var(--vdms-surface-alt)', borderRadius: 99, overflow: 'hidden' }}>
             <div style={{
               height: '100%', borderRadius: 99,
               background: taggingModal.finished && taggingModal.feed.some(f => f.status === 'failed') ? '#ef4444' : '#0284c7',
@@ -1698,8 +1753,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           {/* File feed list */}
           <div style={{
             maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4,
-            background: '#f8fafc', borderRadius: 10, padding: '10px 12px',
-            border: '1px solid #e2e8f0',
+            background: 'var(--vdms-surface-alt)', borderRadius: 10, padding: '10px 12px',
+            border: '1px solid var(--vdms-border)',
           }}>
             {taggingModal.feed.map((entry, idx) => (
               <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '3px 0' }}>
@@ -1708,7 +1763,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 </span>
                 <span style={{
                   flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  color: entry.status === 'pending' ? '#64748b' : entry.status === 'ok' ? '#15803d' : '#dc2626',
+                  color: entry.status === 'pending' ? 'var(--vdms-text-muted)' : entry.status === 'ok' ? '#15803d' : '#dc2626',
                   fontWeight: entry.status !== 'pending' ? 600 : 400,
                 }}>
                   {entry.name}
@@ -1766,14 +1821,14 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         background: 'rgba(15,23,42,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
         <div style={{
-          background: '#fff', borderRadius: 16, padding: '24px 28px', width: '100%', maxWidth: 460,
+          background: 'var(--vdms-surface)', borderRadius: 16, padding: '24px 28px', width: '100%', maxWidth: 460,
           boxShadow: '0 20px 60px rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: 16,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ width: 36, height: 36, borderRadius: 8, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>⚠️</div>
-            <div style={{ fontWeight: 700, fontSize: 16, color: '#0f172a' }}>Overwrite Existing Vessel Tags?</div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--vdms-text)' }}>Overwrite Existing Vessel Tags?</div>
           </div>
-          <div style={{ fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 13, color: 'var(--vdms-text-secondary)', lineHeight: 1.5 }}>
             This will overwrite existing vessel tags on <b>{confirmOverwrite.count}</b> file(s) with vessel <b>"{confirmOverwrite.vessel}"</b>.
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
@@ -1781,7 +1836,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
               type="button"
               onClick={() => setConfirmOverwrite(null)}
               style={{
-                padding: '8px 16px', background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1',
+                padding: '8px 16px', background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)', border: '1px solid var(--vdms-border)',
                 borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: 'pointer',
               }}
             >
@@ -1832,7 +1887,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         padding: 16,
       }}>
         <div style={{
-          background: '#fff', borderRadius: 16, padding: '24px 28px', width: '100%', maxWidth: 480,
+          background: 'var(--vdms-surface)', borderRadius: 16, padding: '24px 28px', width: '100%', maxWidth: 480,
           boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: 16,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -1844,25 +1899,25 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
               {icon}
             </div>
             <div>
-              <div style={{ fontWeight: 700, fontSize: 17, color: '#0f172a' }}>{modalTitle}</div>
-              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+              <div style={{ fontWeight: 700, fontSize: 17, color: 'var(--vdms-text)' }}>{modalTitle}</div>
+              <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>
                 {isSingle ? '1 Selected File' : (isSelection ? `${count} Selected Files` : `${count} Files (Folder Scope)`)}
               </div>
             </div>
           </div>
 
-          <div style={{ fontSize: 13, color: '#475569', lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ fontSize: 13, color: 'var(--vdms-text-secondary)', lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: 10 }}>
             {isSingle ? (
               <>
                 <div>You have selected <b>1 file</b> to process:</div>
                 <div style={{
-                  background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 8,
-                  padding: '10px 14px', fontSize: 13, fontWeight: 600, color: '#0f172a',
+                  background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-border)', borderRadius: 8,
+                  padding: '10px 14px', fontSize: 13, fontWeight: 600, color: 'var(--vdms-text)',
                   display: 'flex', alignItems: 'center', gap: 8, wordBreak: 'break-all',
                 }}>
                   📄 {names[0] || 'Selected file'}
                 </div>
-                <div style={{ color: '#64748b', fontSize: 12 }}>
+                <div style={{ color: 'var(--vdms-text-muted)', fontSize: 12 }}>
                   {mode === 'autoTagFromPath'
                     ? 'Only this selected file will be tagged using folder path taxonomy.'
                     : 'This selected file alone will be scanned with OCR and AI classification for review. Other files will not be touched.'}
@@ -1872,20 +1927,20 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
               <>
                 <div>You have selected <b>{count} files</b> to process:</div>
                 <div style={{
-                  background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 8,
-                  padding: '8px 12px', fontSize: 12, color: '#334155', maxHeight: 110,
+                  background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-border)', borderRadius: 8,
+                  padding: '8px 12px', fontSize: 12, color: 'var(--vdms-text)', maxHeight: 110,
                   overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4,
                 }}>
                   {names.slice(0, 10).map((name, idx) => (
                     <div key={idx} style={{ wordBreak: 'break-all' }}>📄 {name}</div>
                   ))}
                   {names.length > 10 && (
-                    <div style={{ color: '#64748b', fontStyle: 'italic' }}>
+                    <div style={{ color: 'var(--vdms-text-muted)', fontStyle: 'italic' }}>
                       ... and {names.length - 10} more files
                     </div>
                   )}
                 </div>
-                <div style={{ color: '#64748b', fontSize: 12 }}>
+                <div style={{ color: 'var(--vdms-text-muted)', fontSize: 12 }}>
                   Only these {count} selected files will be processed.
                 </div>
               </>
@@ -1894,7 +1949,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 <div>
                   No specific file selected. This will scan and auto-tag all <b>{count} file(s)</b>{isRecursive ? ' across all sub-folders' : ' in this folder'} for review.
                 </div>
-                <div style={{ color: '#64748b', fontSize: 12 }}>
+                <div style={{ color: 'var(--vdms-text-muted)', fontSize: 12 }}>
                   OCR text extraction and folder path taxonomy will be evaluated for each file. You can review suggestions before changes are saved.
                 </div>
               </>
@@ -1906,7 +1961,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
               type="button"
               onClick={() => setConfirmScanModal(null)}
               style={{
-                padding: '8px 16px', background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1',
+                padding: '8px 16px', background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)', border: '1px solid var(--vdms-border)',
                 borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer',
               }}
             >
@@ -1924,7 +1979,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 <button
                   type="button"
                   onClick={() => { const target = confirmScanModal.targetItemIds; setConfirmScanModal(null); void autoTagAndReview(target, 'all'); }}
-                  style={{ padding: '8px 14px', background: '#f8fafc', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                  style={{ padding: '8px 14px', background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)', border: '1px solid var(--vdms-border)', borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
                 >
                   🔍 Scan All Files ({count})
                 </button>
@@ -1941,7 +1996,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 <button
                   type="button"
                   onClick={() => { const target = confirmScanModal.targetItemIds; setConfirmScanModal(null); void scan(target, 'all'); }}
-                  style={{ padding: '8px 14px', background: '#f8fafc', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                  style={{ padding: '8px 14px', background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)', border: '1px solid var(--vdms-border)', borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
                 >
                   Scan All Files ({count})
                 </button>
@@ -1978,21 +2033,47 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
   };
 
   return (
-    <div style={{ padding: '28px 32px', background: '#f7fafc', minHeight: '100%' }}>
+    <div style={{ padding: '28px 32px', background: clay.bg, minHeight: '100%' }}>
+      {/* Renders as a fixed floating button + popup at bottom-right; doesn't affect layout here */}
+      <CopilotSearchPanel host={host} />
       {renderTaggingModal()}
       {renderConfirmOverwriteModal()}
       {renderConfirmScanModal()}
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', marginBottom: 24, flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ margin: 0, color: '#123044', fontSize: 28 }}>Sites</h1>
-          <p style={{ color: '#64748b', margin: '6px 0 0' }}>Browse libraries and tag documents across your tenant.</p>
+          <h1 style={{ margin: 0, color: clay.text, fontSize: 28 }}>Sites</h1>
+          <p style={{ color: clay.textMuted, margin: '6px 0 0' }}>Browse libraries and tag documents across your tenant.</p>
         </div>
+        {sites.length > 1 && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: clay.text, fontWeight: 600 }}>
+            SharePoint site
+            <select
+              aria-label="Select SharePoint site"
+              value={selectedSiteKey}
+              onChange={event => {
+                setSelectedSiteKey(event.target.value || '');
+                setContext(null);
+                setItems([]);
+                setCrumbs([]);
+                setExpanded(null);
+                setMessage('');
+              }}
+              style={{ minWidth: 230, padding: '9px 12px', border: 'none', borderRadius: clay.radiusButton, background: clay.surface, color: clay.text, boxShadow: clay.shadowRaised }}
+            >
+              {sites.map(site => (
+                <option key={site.site_key || site.id} value={site.site_key || site.id}>
+                  {site.display_name || getSiteName(site)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <input
           aria-label="Search sites"
           value={query}
           onChange={event => setQuery(event.target.value)}
           placeholder="Search sites"
-          style={{ width: 260, padding: '11px 14px', border: '1px solid #cbd5e1', borderRadius: 8 }}
+          style={{ width: 260, padding: '11px 14px', border: 'none', borderRadius: clay.radiusButton, background: clay.surface, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.22), inset -2px -2px 4px rgba(255,255,255,0.9)' }}
         />
       </div>
 
@@ -2008,29 +2089,69 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       {/* Sites grid */}
       {!context && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 16 }}>
-          {sitesLoading && <div style={{ color: '#64748b' }}>Loading sites...</div>}
-          {filteredSites.map(site => (
-            <div key={site.id} style={{ background: '#fff', border: '1px solid #dbe5ec', borderRadius: 10, padding: 18, boxShadow: '0 2px 8px #1230440d' }}>
+          {sitesLoading && <div style={{ color: clay.textMuted }}>Loading sites...</div>}
+          {selectedSites.map(site => (
+            <div key={site.id} style={{ background: clay.surface, border: 'none', borderRadius: clay.radiusCard, padding: 18, boxShadow: clay.shadowRaised }}>
               <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                <div style={{ width: 42, height: 42, background: '#e0f2fe', color: '#0284c7', display: 'grid', placeItems: 'center', borderRadius: 8, fontWeight: 700 }}>SP</div>
+                <div style={{ width: 42, height: 42, background: clay.iconBgGradient, color: clay.accentDark, display: 'grid', placeItems: 'center', borderRadius: clay.radiusIcon, fontWeight: 700, boxShadow: clay.shadowIcon }}>SP</div>
                 <div style={{ minWidth: 0 }}>
-                  <h2 style={{ margin: 0, fontSize: 16, color: '#123044', overflowWrap: 'anywhere' }}>{getSiteName(site)}</h2>
-                  <small style={{ color: '#64748b', display: 'block', overflowWrap: 'anywhere' }}>{site.web_url || site.id}</small>
+                  <h2 style={{ margin: 0, fontSize: 16, color: clay.text, overflowWrap: 'anywhere' }}>{getSiteName(site)}</h2>
+                  <small style={{ color: clay.textMuted, display: 'block', overflowWrap: 'anywhere' }}>{site.web_url || site.id}</small>
                 </div>
               </div>
-              <p style={{ color: '#64748b', fontSize: 13, minHeight: 34 }}>{site.description || 'SharePoint site'}</p>
-              <button onClick={() => void loadDrives(site)} style={{ padding: '9px 12px', border: '1px solid #0284c7', color: '#0369a1', background: '#f0f9ff', borderRadius: 7, cursor: 'pointer' }}>
+              <p style={{ color: clay.textMuted, fontSize: 13, minHeight: 34 }}>{site.description || 'SharePoint site'}</p>
+              <button
+                onClick={() => void loadDrives(site)}
+                onMouseEnter={e => { e.currentTarget.style.background = clay.accentSoftHover; e.currentTarget.style.boxShadow = clay.shadowRaisedHover; }}
+                onMouseLeave={e => { e.currentTarget.style.background = clay.accentSoft; e.currentTarget.style.boxShadow = 'none'; }}
+                style={{ padding: '9px 12px', border: 'none', color: clay.accentDark, background: clay.accentSoft, borderRadius: 7, cursor: 'pointer', transition: 'all 0.18s ease', boxShadow: 'none' }}
+              >
                 {expanded === site.id ? 'Hide libraries' : 'Show libraries'}
               </button>
-              {expanded === site.id && (
-                <div style={{ marginTop: 12, display: 'grid', gap: 6 }}>
-                  {(drives[site.id] || []).map(drive => (
-                    <button key={drive.id} onClick={() => chooseDrive(site, drive)} style={{ textAlign: 'left', padding: 10, border: '1px solid #e2e8f0', background: '#fff', borderRadius: 6, cursor: 'pointer' }}>
-                      📚 {drive.name}
-                    </button>
-                  ))}
-                </div>
-              )}
+              {expanded === site.id && (() => {
+                const allDrives = drives[site.id] || [];
+                const systemCount = allDrives.filter(d => d.is_system).length;
+                const showSystem = !!showSystemLibraries[site.id];
+                const visibleDrives = showSystem ? allDrives : allDrives.filter(d => !d.is_system);
+                return (
+                  <div style={{ marginTop: 12, display: 'grid', gap: 6 }}>
+                    {visibleDrives.length === 0 && (
+                      <div style={{ color: clay.textMuted, fontSize: 13, padding: '4px 2px' }}>
+                        No document libraries here — only SharePoint's built-in ones, hidden below.
+                      </div>
+                    )}
+                    {visibleDrives.map(drive => {
+                      const hasCount = typeof drive.item_count === 'number';
+                      const isEmpty = hasCount && drive.item_count === 0;
+                      return (
+                        <button
+                          key={drive.id}
+                          onClick={() => chooseDrive(site, drive)}
+                          style={{ textAlign: 'left', padding: 10, border: 'none', background: clay.bg, borderRadius: 6, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+                        >
+                          <span>
+                            {drive.is_system ? '🗂️' : '📚'} {drive.name}
+                            {drive.is_system && <span style={{ marginLeft: 6, fontSize: 11, color: clay.textMuted }}>(system library)</span>}
+                          </span>
+                          {hasCount && (
+                            <span style={{ fontSize: 12, color: isEmpty ? clay.textMuted : clay.accentDark, whiteSpace: 'nowrap' }}>
+                              {isEmpty ? 'empty' : `${drive.item_count} item${drive.item_count === 1 ? '' : 's'}`}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                    {systemCount > 0 && (
+                      <button
+                        onClick={() => setShowSystemLibraries(previous => ({ ...previous, [site.id]: !showSystem }))}
+                        style={{ textAlign: 'left', border: 'none', background: 'transparent', color: clay.accentDark, cursor: 'pointer', fontSize: 12, padding: '4px 2px' }}
+                      >
+                        {showSystem ? `Hide ${systemCount} system librar${systemCount === 1 ? 'y' : 'ies'}` : `Show ${systemCount} more (SharePoint system librar${systemCount === 1 ? 'y' : 'ies'})`}
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           ))}
         </div>
@@ -2041,12 +2162,12 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         <div>
           <button
             onClick={() => { setContext(null); setScanResults([]); setMessage(''); }}
-            style={{ border: 0, background: 'transparent', color: '#0369a1', cursor: 'pointer', padding: 0, marginBottom: 16 }}
+            style={{ border: 0, background: 'transparent', color: clay.accentDark, cursor: 'pointer', padding: 0, marginBottom: 16 }}
           >
             ← All sites
           </button>
 
-          <h2 style={{ color: '#123044', margin: '0 0 10px' }}>
+          <h2 style={{ color: clay.text, margin: '0 0 10px' }}>
             {context.site.display_name} / {context.drive.name}
           </h2>
 
@@ -2056,11 +2177,11 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
               <React.Fragment key={crumb.id}>
                 <button
                   onClick={() => void loadFolder(context, crumb.id, crumb.name, crumbs.slice(0, index + 1))}
-                  style={{ border: 0, background: 'transparent', color: '#0369a1', cursor: 'pointer', fontWeight: index === crumbs.length - 1 ? 700 : 400 }}
+                  style={{ border: 0, background: 'transparent', color: clay.accentDark, cursor: 'pointer', fontWeight: index === crumbs.length - 1 ? 700 : 400 }}
                 >
                   {crumb.name}
                 </button>
-                {index < crumbs.length - 1 && <span style={{ color: '#94a3b8' }}>/</span>}
+                {index < crumbs.length - 1 && <span style={{ color: clay.textMuted }}>/</span>}
               </React.Fragment>
             ))}
 
@@ -2075,7 +2196,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 title="Open current folder in SharePoint Online"
                 aria-label="Open current folder in SharePoint Online"
                 style={{
-                  padding: '9px 13px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', borderRadius: 7,
+                  padding: '9px 13px', background: clay.accentSoft, color: clay.accentDark, border: 'none', borderRadius: 7,
                   cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6,
                 }}
               >
@@ -2085,7 +2206,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 <input type="checkbox" checked={recursive} onChange={event => setRecursive(event.target.checked)} />
                 Recursive
               </label>
-              <label style={{ fontSize: 13, display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer', color: rescanAll ? '#b45309' : '#475569' }} title="By default only files missing a tag (Department, Vessel, Group, or Category) are processed">
+              <label style={{ fontSize: 13, display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer', color: rescanAll ? '#b45309' : 'var(--vdms-text-secondary)' }} title="By default only files missing a tag (Department, Vessel, Group, or Category) are processed">
                 <input type="checkbox" checked={rescanAll} onChange={event => setRescanAll(event.target.checked)} />
                 Re-scan all files
               </label>
@@ -2139,8 +2260,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 {tagFailures.map(failure => (
                   <div key={failure.file_id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: '#7c2d12' }}>
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={failure.error_reason}>{failure.filename} <span style={{ color: '#a16207' }}>({failure.attempt_count} attempts)</span></span>
-                    <button type="button" onClick={() => void retryFailures([failure.file_id])} disabled={loading} style={{ padding: '4px 8px', border: '1px solid #fdba74', borderRadius: 5, background: '#fff', color: '#9a3412', cursor: 'pointer' }}>Retry</button>
-                    <button type="button" onClick={() => void dismissFailures([failure.file_id])} style={{ padding: '4px 8px', border: '1px solid #fdba74', borderRadius: 5, background: '#fff', color: '#7c2d12', cursor: 'pointer' }}>Dismiss</button>
+                    <button type="button" onClick={() => void retryFailures([failure.file_id])} disabled={loading} style={{ padding: '4px 8px', border: '1px solid #fdba74', borderRadius: 5, background: 'var(--vdms-surface)', color: '#9a3412', cursor: 'pointer' }}>Retry</button>
+                    <button type="button" onClick={() => void dismissFailures([failure.file_id])} style={{ padding: '4px 8px', border: '1px solid #fdba74', borderRadius: 5, background: 'var(--vdms-surface)', color: '#7c2d12', cursor: 'pointer' }}>Dismiss</button>
                   </div>
                 ))}
               </div>
@@ -2148,18 +2269,18 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           )}
 
           {/* Folder and file count summary (matching Documents module with recursive accuracy) */}
-          <div style={{ fontSize: 13, color: '#475569', marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 700, color: '#0f172a' }}>
+          <div style={{ fontSize: 13, color: 'var(--vdms-text-secondary)', marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 700, color: 'var(--vdms-text)' }}>
               📁 {summaryCounts ? summaryCounts.direct_folders : items.filter(i => i.folder).length} {(summaryCounts ? summaryCounts.direct_folders : items.filter(i => i.folder).length) === 1 ? 'folder' : 'folders'}
             </span>
             <span>•</span>
-            <span style={{ fontWeight: 700, color: '#0f172a', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontWeight: 700, color: 'var(--vdms-text)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               📄 {summaryCounts ? `${summaryCounts.total_files} total files` : `${items.filter(i => !i.folder).length} files`}
               {summaryCounts && summaryCounts.direct_files === 0 && summaryCounts.direct_folders > 0 && (
-                <span style={{ fontWeight: 400, color: '#64748b' }}>(0 at this level)</span>
+                <span style={{ fontWeight: 400, color: 'var(--vdms-text-muted)' }}>(0 at this level)</span>
               )}
               {summaryCounts && summaryCounts.direct_files > 0 && summaryCounts.direct_folders > 0 && (
-                <span style={{ fontWeight: 400, color: '#64748b' }}>({summaryCounts.direct_files} at this level)</span>
+                <span style={{ fontWeight: 400, color: 'var(--vdms-text-muted)' }}>({summaryCounts.direct_files} at this level)</span>
               )}
               {countsLoading && (
                 <span style={{ fontSize: 11, color: '#0284c7', fontWeight: 500 }}>
@@ -2173,10 +2294,10 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           {items.length > 0 && (
             <div style={{
               display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center',
-              padding: '10px 14px', background: '#f8fafc', border: '1px solid #cbd5e1',
+              padding: '10px 14px', background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-border)',
               borderRadius: 8, marginBottom: 14,
             }}>
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--vdms-text)', display: 'flex', alignItems: 'center', gap: 6 }}>
                 ⚓ Vessel:
               </span>
 
@@ -2185,7 +2306,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 onChange={e => setBulkVessel(e.target.value)}
                 style={{
                   padding: '6px 10px', fontSize: 13, borderRadius: 6,
-                  border: '1px solid #94a3b8', background: '#fff', minWidth: 180, fontWeight: 500,
+                  border: '1px solid var(--vdms-text-faint)', background: 'var(--vdms-surface)', minWidth: 180, fontWeight: 500,
                 }}
               >
                 <option value="">-- Choose vessel --</option>
@@ -2204,7 +2325,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 onChange={e => setBulkVessel(e.target.value)}
                 style={{
                   padding: '6px 10px', fontSize: 13, borderRadius: 6,
-                  border: '1px solid #94a3b8', width: 170,
+                  border: '1px solid var(--vdms-text-faint)', width: 170,
                 }}
               />
 
@@ -2268,8 +2389,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                         disabled={!bulkVessel.trim() || loading}
                         onClick={() => void applyBulkVessel(undefined, undefined, { overwriteExisting: true })}
                         style={{
-                          padding: '7px 12px', background: '#f8fafc', color: '#475569',
-                          border: '1px solid #cbd5e1', borderRadius: 6, fontWeight: 500, fontSize: 12,
+                          padding: '7px 12px', background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)',
+                          border: '1px solid var(--vdms-border)', borderRadius: 6, fontWeight: 500, fontSize: 12,
                           cursor: (!bulkVessel.trim() || loading) ? 'not-allowed' : 'pointer',
                           display: 'inline-flex', alignItems: 'center', gap: 5,
                           opacity: (!bulkVessel.trim() || loading) ? 0.5 : 1,
@@ -2348,13 +2469,13 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           )}
 
           {/* Item list table */}
-          <div style={{ background: '#fff', border: '1px solid #dbe5ec', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--vdms-surface)', border: '1px solid #dbe5ec', borderRadius: 10, overflow: 'hidden' }}>
             {/* Column header */}
             <div style={{
               display: 'grid', gridTemplateColumns: '30px 30px minmax(180px,1fr) minmax(200px,2fr) 140px',
               gap: 12, alignItems: 'center', padding: '10px 16px',
-              background: '#f1f5f9', borderBottom: '1px solid #e2e8f0',
-              fontSize: 12, fontWeight: 700, color: '#475569',
+              background: 'var(--vdms-surface-alt)', borderBottom: '1px solid var(--vdms-border)',
+              fontSize: 12, fontWeight: 700, color: 'var(--vdms-text-secondary)',
             }}>
               <input
                 type="checkbox"
@@ -2456,7 +2577,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                               display: 'inline-flex',
                               alignItems: 'center',
                               justifyContent: 'center',
-                              background: totalFiles > 0 ? '#0284c7' : '#94a3b8',
+                              background: totalFiles > 0 ? '#0284c7' : 'var(--vdms-text-faint)',
                               color: '#fff',
                               borderRadius: 20,
                               padding: '2px 10px',
@@ -2477,7 +2598,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                               display: 'inline-flex',
                               alignItems: 'center',
                               justifyContent: 'center',
-                              background: totalFiles > 0 ? '#0284c7' : '#94a3b8',
+                              background: totalFiles > 0 ? '#0284c7' : 'var(--vdms-text-faint)',
                               color: '#fff',
                               borderRadius: 20,
                               padding: '1px 8px',
@@ -2502,7 +2623,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                           display: 'inline-flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          background: fallbackCount > 0 ? '#0284c7' : '#94a3b8',
+                          background: fallbackCount > 0 ? '#0284c7' : 'var(--vdms-text-faint)',
                           color: '#fff',
                           borderRadius: 20,
                           padding: '1px 8px',
@@ -2531,7 +2652,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                             onChange={event => setTagDraft(previous => ({ ...previous, vessel: event.target.value }))}
                             placeholder={label}
                             list="vessel-options-list"
-                            style={{ width: 115, padding: 5, border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 12 }}
+                            style={{ width: 115, padding: 5, border: '1px solid var(--vdms-border)', borderRadius: 4, fontSize: 12 }}
                           />
                           <datalist id="vessel-options-list">
                             {detectedVessel && <option value={detectedVessel} />}
@@ -2545,7 +2666,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                           value={tagDraft[key]}
                           onChange={event => setTagDraft(previous => ({ ...previous, [key]: event.target.value }))}
                           placeholder={label}
-                          style={{ width: 105, padding: 5, border: '1px solid #cbd5e1', borderRadius: 4, fontSize: 12 }}
+                          style={{ width: 105, padding: 5, border: '1px solid var(--vdms-border)', borderRadius: 4, fontSize: 12 }}
                         />
                       )
                     ))}
@@ -2568,7 +2689,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                       <button
                         type="button"
                         onClick={() => setEditing(null)}
-                        style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', fontSize: 12 }}
+                        style={{ border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface)', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', fontSize: 12 }}
                       >
                         Cancel
                       </button>
@@ -2606,7 +2727,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                               vessel: existing.vessel || detectedVessel || bulkVessel || '',
                             });
                           }}
-                          style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' }}
+                          style={{ border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface)', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' }}
                         >
                           ✏ Tags
                         </button>
@@ -2632,10 +2753,10 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
             ))}
 
             {!items.length && !loading && (
-              <div style={{ padding: 24, color: '#64748b', textAlign: 'center' }}>This folder is empty.</div>
+              <div style={{ padding: 24, color: 'var(--vdms-text-muted)', textAlign: 'center' }}>This folder is empty.</div>
             )}
             {loading && (
-              <div style={{ padding: 24, color: '#64748b', textAlign: 'center' }}>Loading items...</div>
+              <div style={{ padding: 24, color: 'var(--vdms-text-muted)', textAlign: 'center' }}>Loading items...</div>
             )}
           </div>
         </div>

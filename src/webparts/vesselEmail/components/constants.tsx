@@ -251,10 +251,10 @@ export const INITIAL_MOCK_NOTIFICATIONS: NotificationItem[] = [
 ];
 
 export const INITIAL_MOCK_USERS: UserItem[] = [
-  { id: 'u1', name: 'Priya Sharma', email: 'priya.sharma@company.com', role: 'Administrator', status: 'Active', lastLogin: 'May 12, 2024' },
-  { id: 'u2', name: 'John Doe', email: 'john.doe@company.com', role: 'Manager', status: 'Active', lastLogin: 'May 12, 2024' },
+  { id: 'u1', name: 'Priya Sharma', email: 'priya.sharma@company.com', role: 'Admin', status: 'Active', lastLogin: 'May 12, 2024' },
+  { id: 'u2', name: 'John Doe', email: 'john.doe@company.com', role: 'User', status: 'Active', lastLogin: 'May 12, 2024' },
   { id: 'u3', name: 'Rohit Kumar', email: 'rohit.kumar@company.com', role: 'User', status: 'Active', lastLogin: 'May 11, 2024' },
   { id: 'u4', name: 'Ankita Verma', email: 'ankita.verma@company.com', role: 'User', status: 'Active', lastLogin: 'May 10, 2024' },
-  { id: 'u5', name: 'Vikram Singh', email: 'vikram.singh@company.com', role: 'Reviewer', status: 'Inactive', lastLogin: 'May 08, 2024' },
+  { id: 'u5', name: 'Vikram Singh', email: 'vikram.singh@company.com', role: 'User', status: 'Inactive', lastLogin: 'May 08, 2024' },
 ];
 

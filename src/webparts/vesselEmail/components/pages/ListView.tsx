@@ -4,6 +4,7 @@ import type { FlatRow, GroupedRow } from '../types/rows';
 import type { ApprovalItem } from '../types/ui';
 import { isMobileWidth, isTabletWidth } from '../responsive';
 import { resolveDetectedVesselForFile } from '../constants';
+import { clay } from '../clayTheme';
 
 const PAGE_ROWS = 10;
 
@@ -12,12 +13,20 @@ export function renderListView(
   filtered: FlatRow[],
   groupedList: GroupedRow[],
 ): React.ReactElement {
-  const { docListPage, docListSort, docUploadRowKey, docUploadBusy, textFilter, vesselFilter, docGroupFilter, catFilter, listViewSelectedFiles, documentFilesLoading, vesselLoadingName, documentVesselsLoadingMore } = host.state;
+  const { docListPage, docListSort, docUploadRowKey, docUploadBusy, textFilter, vesselFilter, docGroupFilter, catFilter, listViewSelectedFiles, documentFilesLoading, vesselLoadingName, documentVesselsLoadingMore, archivedFileIds } = host.state;
   const viewportWidth = host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200);
   const isMobile = isMobileWidth(viewportWidth);
   const isTablet = isTabletWidth(viewportWidth);
 
-   let sorted = [...groupedList];
+  // Archived files (Archive module, point #6) are moved out of the working
+  // Documents view — they're only browsable/restorable from the Archive
+  // page — without being deleted, so they still exist in the group's file
+  // list; just hide the archived ones here rather than in every caller.
+  const groupedListVisible: GroupedRow[] = archivedFileIds && archivedFileIds.size > 0
+    ? groupedList.map(row => ({ ...row, files: row.files.filter(f => !archivedFileIds.has(f.id)) }))
+    : groupedList;
+
+   let sorted = [...groupedListVisible];
   if (docListSort === 'name_az') {
     sorted.sort((a, b) => a.category.localeCompare(b.category));
   } else {
@@ -36,7 +45,7 @@ export function renderListView(
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ background: '#fff', borderRadius: 10, border: '1px solid #e2e8f0', overflowX: 'auto', width: '100%' }}>
+      <div style={{ background: clay.surface, borderRadius: clay.radiusCard, border: 'none', boxShadow: clay.shadowRaised, overflowX: 'auto', width: '100%' }}>
         {isMobile ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
             {pageRows.map((r, idx) => {
@@ -45,7 +54,7 @@ export function renderListView(
               const hasFiles = r.files.length > 0;
               const rowSelectedCount = r.files.filter(f => listViewSelectedFiles.has(f.id)).length;
               return (
-                <div key={`${r.groupKey}-${idx}`} style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12 }}>
+                <div key={`${r.groupKey}-${idx}`} style={{ border: 'none', borderRadius: clay.radiusTile, padding: 12, background: clay.bg }}>
                   <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>#{globalIdx}</div>
                   <div style={{ marginTop: 4, fontSize: 12, color: '#334155' }}><strong>{r.group}</strong> • {r.category} • {r.subCategory || r.category}</div>
                   <div style={{ marginTop: 8, fontSize: 11, color: '#64748b', wordBreak: 'break-word' }}>{r.subFolderPath}</div>
@@ -81,7 +90,7 @@ export function renderListView(
                       </label>
                     )) : <span style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: 11 }}>No files</span>}
                   </div>
-                  <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
                     <label style={{ minHeight: 44, background: isUploading ? '#f1f5f9' : '#fff', border: '1px solid #cbd5e1', borderRadius: 8, padding: '10px', fontSize: 12, fontWeight: 700, textAlign: 'center', cursor: isUploading ? 'not-allowed' : 'pointer' }}>
                       <input type="file" multiple style={{ display: 'none' }} disabled={isUploading} onChange={e => {
                         const filesList = Array.from(e.target.files || []);
@@ -92,6 +101,22 @@ export function renderListView(
                       }} />
                       Upload
                     </label>
+                    <button
+                      type="button"
+                      disabled={rowSelectedCount === 0}
+                      onClick={() => {
+                        if (rowSelectedCount === 0) return;
+                        const filesToArchive = r.files
+                          .filter(f => listViewSelectedFiles.has(f.id))
+                          .map(f => ({ id: f.id, name: f.name, folderPath: r.subFolderPath, department: r.group, vesselName: r.vesselName }));
+                        host.setState({ listViewSelectedFiles: new Set() });
+                        void host._archiveSelectedDocuments(filesToArchive);
+                      }}
+                      title={rowSelectedCount > 0 ? `Archive ${rowSelectedCount} selected file(s)` : 'Select files to archive'}
+                      style={{ minHeight: 44, border: '1px solid #d8b4fe', background: rowSelectedCount > 0 ? '#faf5ff' : '#f8fafc', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: rowSelectedCount > 0 ? 'pointer' : 'not-allowed', color: rowSelectedCount > 0 ? '#7e22ce' : '#cbd5e1' }}
+                    >
+                      📦 Archive {rowSelectedCount > 0 ? `(${rowSelectedCount})` : ''}
+                    </button>
                     <button
                       type="button"
                       disabled={rowSelectedCount === 0}
@@ -127,7 +152,7 @@ export function renderListView(
         ) : (
         <table style={{ width: '100%', minWidth: isTablet ? 980 : 850, borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
-            <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0', color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
+            <tr style={{ background: clay.bg, borderBottom: `2px solid ${clay.accentSoft}`, color: clay.textMuted, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
               <th style={{ padding: '10px 10px', width: 44, textAlign: 'center' }}>SR.</th>
               <th style={{ padding: '10px 12px' }}>MAIN FOLDER</th>
               <th style={{ padding: '10px 12px' }}>DOCUMENT SECTION</th>
@@ -177,13 +202,13 @@ export function renderListView(
 
               return (
                 <tr key={`${r.groupKey}-${idx}`}
-                  style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.1s' }}
-                  onMouseEnter={e => (e.currentTarget.style.background = '#f8fafc')}
+                  style={{ borderBottom: `1px solid ${clay.accentSoft}`, transition: 'background 0.1s' }}
+                  onMouseEnter={e => (e.currentTarget.style.background = clay.bg)}
                   onMouseLeave={e => (e.currentTarget.style.background = '')}
                 >
-                  <td style={{ padding: '10px 10px', color: '#94a3b8', fontSize: 11, fontFamily: 'monospace', textAlign: 'center' }}>{globalIdx}</td>
+                  <td style={{ padding: '10px 10px', color: clay.textMuted, fontSize: 11, fontFamily: 'monospace', textAlign: 'center' }}>{globalIdx}</td>
                   <td style={{ padding: '10px 12px' }}>
-                    <span style={{ display: 'inline-block', borderRadius: 8, padding: '3px 8px', fontSize: 11, fontWeight: 600, background: '#eff6ff', color: '#2563eb' }}>
+                    <span style={{ display: 'inline-block', borderRadius: 8, padding: '3px 8px', fontSize: 11, fontWeight: 600, background: clay.accentSoft, color: clay.accentDark }}>
                       {r.group}
                     </span>
                   </td>
@@ -346,29 +371,54 @@ export function renderListView(
                       {(() => {
                         const rowSelectedCount = r.files.filter(f => listViewSelectedFiles.has(f.id)).length;
                         return (
-                          <button
-                            type="button"
-                            disabled={rowSelectedCount === 0}
-                            onClick={() => {
-                              if (rowSelectedCount === 0) return;
-                              const filesToDelete = r.files
-                                .filter(f => listViewSelectedFiles.has(f.id))
-                                .map(f => ({ id: f.id, name: f.name, folderId: r.uploadFolderId, folderPath: r.subFolderPath }));
-                              host.setState({ listViewSelectedFiles: new Set() });
-                              host._openFileDeleteDialog(filesToDelete);
-                            }}
-                            style={{
-                              border: `1px solid ${rowSelectedCount > 0 ? '#fca5a5' : '#e2e8f0'}`,
-                              background: rowSelectedCount > 0 ? '#fff5f5' : '#f8fafc',
-                              borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 600,
-                              cursor: rowSelectedCount > 0 ? 'pointer' : 'not-allowed',
-                              color: rowSelectedCount > 0 ? '#ef4444' : '#cbd5e1',
-                              display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
-                            }}
-                            title={rowSelectedCount > 0 ? `Delete ${rowSelectedCount} selected file(s)` : 'Select files to delete'}
-                          >
-                            🗑{rowSelectedCount > 0 ? ` Delete (${rowSelectedCount})` : ' Delete'}
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              disabled={rowSelectedCount === 0}
+                              onClick={() => {
+                                if (rowSelectedCount === 0) return;
+                                const filesToArchive = r.files
+                                  .filter(f => listViewSelectedFiles.has(f.id))
+                                  .map(f => ({ id: f.id, name: f.name, folderPath: r.subFolderPath, department: r.group, vesselName: r.vesselName }));
+                                host.setState({ listViewSelectedFiles: new Set() });
+                                void host._archiveSelectedDocuments(filesToArchive);
+                              }}
+                              style={{
+                                border: `1px solid ${rowSelectedCount > 0 ? '#d8b4fe' : '#e2e8f0'}`,
+                                background: rowSelectedCount > 0 ? '#faf5ff' : '#f8fafc',
+                                borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 600,
+                                cursor: rowSelectedCount > 0 ? 'pointer' : 'not-allowed',
+                                color: rowSelectedCount > 0 ? '#7e22ce' : '#cbd5e1',
+                                display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
+                              }}
+                              title={rowSelectedCount > 0 ? `Archive ${rowSelectedCount} selected file(s)` : 'Select files to archive'}
+                            >
+                              📦{rowSelectedCount > 0 ? ` Archive (${rowSelectedCount})` : ' Archive'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={rowSelectedCount === 0}
+                              onClick={() => {
+                                if (rowSelectedCount === 0) return;
+                                const filesToDelete = r.files
+                                  .filter(f => listViewSelectedFiles.has(f.id))
+                                  .map(f => ({ id: f.id, name: f.name, folderId: r.uploadFolderId, folderPath: r.subFolderPath }));
+                                host.setState({ listViewSelectedFiles: new Set() });
+                                host._openFileDeleteDialog(filesToDelete);
+                              }}
+                              style={{
+                                border: `1px solid ${rowSelectedCount > 0 ? '#fca5a5' : '#e2e8f0'}`,
+                                background: rowSelectedCount > 0 ? '#fff5f5' : '#f8fafc',
+                                borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: 600,
+                                cursor: rowSelectedCount > 0 ? 'pointer' : 'not-allowed',
+                                color: rowSelectedCount > 0 ? '#ef4444' : '#cbd5e1',
+                                display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
+                              }}
+                              title={rowSelectedCount > 0 ? `Delete ${rowSelectedCount} selected file(s)` : 'Select files to delete'}
+                            >
+                              🗑{rowSelectedCount > 0 ? ` Delete (${rowSelectedCount})` : ' Delete'}
+                            </button>
+                          </>
                         );
                       })()}
                       </div>
@@ -390,7 +440,7 @@ export function renderListView(
         )}
 
         {/* Pagination footer */}
-        <div style={{ padding: '10px 14px', color: '#64748b', fontSize: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f8fafc', borderTop: '1px solid #e2e8f0' }}>
+        <div style={{ padding: '10px 14px', color: clay.textMuted, fontSize: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: clay.bg, borderTop: `1px solid ${clay.accentSoft}` }}>
           <span>
             Showing {filtered.length === 0 ? 0 : safePage * PAGE_ROWS + 1}–{Math.min((safePage + 1) * PAGE_ROWS, filtered.length)} of {filtered.length} rows
           </span>
@@ -398,17 +448,17 @@ export function renderListView(
             <button
               onClick={() => host.setState({ docListPage: Math.max(0, safePage - 1) })}
               disabled={safePage === 0}
-              style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 4, padding: '3px 8px', fontSize: 11, cursor: safePage === 0 ? 'not-allowed' : 'pointer', opacity: safePage === 0 ? 0.4 : 1 }}
+              style={{ border: 'none', background: clay.surface, borderRadius: 6, padding: '3px 8px', fontSize: 11, cursor: safePage === 0 ? 'not-allowed' : 'pointer', opacity: safePage === 0 ? 0.4 : 1, boxShadow: clay.shadowRaised }}
             >‹</button>
             {Array.from({ length: totalPages }, (_, i) => (
               <button key={i} onClick={() => host.setState({ docListPage: i })}
-                style={{ border: i === safePage ? 'none' : '1px solid #cbd5e1', background: i === safePage ? '#0078d4' : '#fff', color: i === safePage ? '#fff' : '#334155', borderRadius: 4, padding: '3px 8px', fontSize: 11, fontWeight: i === safePage ? 700 : 400, cursor: 'pointer', minWidth: 26 }}
+                style={{ border: 'none', background: i === safePage ? clay.accentGradient : clay.surface, color: i === safePage ? '#fff' : clay.text, borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: i === safePage ? 700 : 400, cursor: 'pointer', minWidth: 26, boxShadow: i === safePage ? clay.shadowIcon : clay.shadowRaised }}
               >{i + 1}</button>
             ))}
             <button
               onClick={() => host.setState({ docListPage: Math.min(totalPages - 1, safePage + 1) })}
               disabled={safePage >= totalPages - 1}
-              style={{ border: '1px solid #cbd5e1', background: '#fff', borderRadius: 4, padding: '3px 8px', fontSize: 11, cursor: safePage >= totalPages - 1 ? 'not-allowed' : 'pointer', opacity: safePage >= totalPages - 1 ? 0.4 : 1 }}
+              style={{ border: 'none', background: clay.surface, borderRadius: 6, padding: '3px 8px', fontSize: 11, cursor: safePage >= totalPages - 1 ? 'not-allowed' : 'pointer', opacity: safePage >= totalPages - 1 ? 0.4 : 1, boxShadow: clay.shadowRaised }}
             >›</button>
           </div>
         </div>

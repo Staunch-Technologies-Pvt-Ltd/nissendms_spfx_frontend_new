@@ -14,64 +14,41 @@ import type { BentoEmailLog } from '../types/bento';
 import type { AppView, ModalMode } from '../types/view';
 import type {
   FormState, DocPreviewItem, DeletedNode, DocumentItem, TemplateItem,
-  ApprovalItem, UserItem,
+  UserItem,
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
 import { isMobileWidth, isTabletOrBelow } from '../responsive';
+import { clay } from '../clayTheme';
 
-// Rich vivid accent per nav item
+// Phase 6 — Ocean Clay: previously each module had its own vivid accent +
+// matching dark sidebar background (rainbow wayfinding). Per explicit
+// decision (2026-09-22), the sidebar was fully converted to the single
+// Ocean Clay teal palette — these maps are kept (rather than removed) so
+// every `NAV_ACCENTS[view] || fallback` call site below needs no change,
+// but every module now resolves to the same teal tokens.
 const NAV_ACCENTS: Record<string, string> = {
-  dashboard:    '#FF2D55',  // vivid crimson-red
-  list:         '#FF6B00',  // deep orange
-  sites:        '#00A4EF',  // SharePoint blue
-  vessels:      '#F5C400',  // rich gold
-  templates:    '#00C853',  // vivid green
-  approvals:    '#00B0FF',  // electric blue-cyan
-  reports:      '#3D5AFE',  // indigo-blue
-  users:        '#AA00FF',  // vivid violet
-  settings:     '#F50057',  // hot pink
-  bento_email:  '#FF3D00',  // deep red-orange
-  bento_compose:'#FF6D00',  // amber-orange
-  recycle:      '#00BCD4',  // rich teal
-  archive:      '#6200EA',  // deep purple
+  dashboard: clay.accent, list: clay.accent, sites: clay.accent, vessels: clay.accent,
+  templates: clay.accent, users: clay.accent, settings: clay.accent,
+  bento_email: clay.accent, bento_compose: clay.accent, recycle: clay.accent, archive: clay.accent,
 };
 
-// Rich dark sidebar background per module
+// Deep Harbor uses a dark rail at night and a warm ivory rail in light mode.
 const NAV_SIDEBAR_BG: Record<string, string> = {
-  dashboard:    '#1A0010',
-  list:         '#1A0D00',
-  sites:        '#00131A',
-  vessels:      '#1A1500',
-  templates:    '#001A08',
-  approvals:    '#00101A',
-  reports:      '#05082B',
-  users:        '#0D0020',
-  settings:     '#1A0015',
-  bento_email:  '#1A0800',
-  bento_compose:'#1A0E00',
-  recycle:      '#001418',
-  archive:      '#0A0020',
+  dashboard: clay.surface, list: clay.surface, sites: clay.surface, vessels: clay.surface,
+  templates: clay.surface, users: clay.surface, settings: clay.surface,
+  bento_email: clay.surface, bento_compose: clay.surface, recycle: clay.surface, archive: clay.surface,
 };
 
-// Bright icon tint for inactive items
+// Inactive icon tint — was a bright per-module hue, now a single muted clay tone.
 const NAV_ICON_COLORS: Record<string, string> = {
-  dashboard:    '#FF6680',
-  list:         '#FF9A4D',
-  sites:        '#4FC3F7',
-  vessels:      '#FFD740',
-  templates:    '#69F0AE',
-  approvals:    '#40C4FF',
-  reports:      '#7986CB',
-  users:        '#CE93D8',
-  settings:     '#FF80AB',
-  bento_email:  '#FF6E40',
-  bento_compose:'#FFAB40',
-  recycle:      '#4DD0E1',
-  archive:      '#B388FF',
+  dashboard: clay.textMuted, list: clay.textMuted, sites: clay.textMuted, vessels: clay.textMuted,
+  templates: clay.textMuted, users: clay.textMuted, settings: clay.textMuted,
+  bento_email: clay.textMuted, bento_compose: clay.textMuted, recycle: clay.textMuted, archive: clay.textMuted,
 };
 
 export function renderSidebar(host: VesselEmail): React.ReactElement {
   const { view, sidebarCollapsed, windowWidth } = host.state;
+  const isNight = host.state.themeMode === 'night';
   const viewportWidth = windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200);
   const tabletOrBelow = isTabletOrBelow(viewportWidth);
   const phone = isMobileWidth(viewportWidth);
@@ -96,38 +73,56 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         width: 38, height: 38, borderRadius: 10,
-        border: `1.5px solid ${NAV_ACCENTS[view] || '#FF2D55'}60`,
-        background: `${NAV_ACCENTS[view] || '#FF2D55'}22`,
-        color: NAV_ACCENTS[view] || '#FF2D55',
+        border: `1.5px solid ${NAV_ACCENTS[view] || clay.accent}60`,
+        background: `${NAV_ACCENTS[view] || clay.accent}22`,
+        color: NAV_ACCENTS[view] || clay.accent,
         cursor: 'pointer', flexShrink: 0, transition: 'all 0.2s',
       }}
-      onMouseEnter={e => { e.currentTarget.style.background = `${NAV_ACCENTS[view] || '#FF2D55'}44`; }}
-      onMouseLeave={e => { e.currentTarget.style.background = `${NAV_ACCENTS[view] || '#FF2D55'}22`; }}
+      onMouseEnter={e => { e.currentTarget.style.background = `${NAV_ACCENTS[view] || clay.accent}44`; }}
+      onMouseLeave={e => { e.currentTarget.style.background = `${NAV_ACCENTS[view] || clay.accent}22`; }}
     >
       <Icon iconName={collapsed ? 'GlobalNavButton' : 'DoubleChevronLeft'} style={{ fontSize: 16 }} />
     </button>
   );
 
-  const navItems: Array<{ id: AppView; label: string; iconName: string; badge?: number }> = [
+  // Settings → Module Management (module_settings_api.py) can hide any of
+  // these app-wide except 'settings' itself (the module catalog it serves
+  // excludes both 'settings' and 'profile' on purpose, so those two entries
+  // below are never filtered out — there's always a way to reopen Settings
+  // and re-enable a module).
+  const { hiddenModules } = host.state;
+  const isHidden = (id: string): boolean => hiddenModules.indexOf(id) !== -1;
+
+  // Typed on the literal itself (not on the .filter() result) — a type
+  // annotation on the variable alone doesn't reach an array literal that's
+  // immediately chained into .filter(): TS widens each `id: 'dashboard'`
+  // to plain `string` before .filter() ever runs, and .filter() just
+  // carries that widened `string[]` through, which no longer matches
+  // `AppView`. Annotating ALL_NAV_ITEMS directly keeps every `id` as its
+  // literal AppView member.
+  const ALL_NAV_ITEMS: Array<{ id: AppView; label: string; iconName: string; badge?: number }> = [
     { id: 'dashboard',  label: 'Home',            iconName: 'Home' },
     { id: 'list',       label: 'Documents',        iconName: 'Documentation' },
     { id: 'sites',      label: 'Sites',             iconName: 'SharepointLogo' },
     { id: 'vessels',    label: 'Vessels',          iconName: 'Ferry' },
-    { id: 'templates',  label: 'Templates & OCR',  iconName: 'FileTemplate', badge: host.state.ocrStagingCount > 0 ? host.state.ocrStagingCount : undefined },
-    { id: 'approvals',  label: 'Approvals',        iconName: 'WorkFlow' },
-    { id: 'reports',    label: 'Reports',          iconName: 'BarChart4' },
+    // 'templates' (Templates & OCR) removed — that functionality already
+    // lives directly on the SharePoint site, so this module was redundant.
+    { id: 'migration',  label: 'Migration Assistant', iconName: 'MoveToFolder' },
     { id: 'users',      label: 'User Management',  iconName: 'People' },
     { id: 'settings',   label: 'Settings',         iconName: 'Settings' },
   ];
+  const navItems = ALL_NAV_ITEMS.filter(item => item.id === 'settings' || !isHidden(item.id));
 
   // Colorful icon bg for inactive items
   const getIconBg = (id: string, active: boolean): string => {
-    if (active) return NAV_ACCENTS[id] || '#0078D4';
-    const accent = NAV_ACCENTS[id] || '#0078D4';
+    if (active) return NAV_ACCENTS[id] || clay.accent;
+    const accent = NAV_ACCENTS[id] || clay.accent;
     return `${accent}28`; // 16% opacity tint
   };
 
-  const auxLinks: Array<{ id: AppView | 'bento_compose'; label: string; iconName: string; onClick: () => void }> = [
+  // Same reason as ALL_NAV_ITEMS above: annotate the literal directly, then
+  // .filter() it into auxLinks, rather than annotating the .filter() result.
+  const ALL_AUX_LINKS: Array<{ id: AppView | 'bento_compose'; label: string; iconName: string; onClick: () => void }> = [
     { id: 'bento_email',    label: 'AI Bento Email', iconName: 'Mail',       onClick: () => host._goToView('bento_email') },
     {
       id: 'bento_compose',
@@ -154,6 +149,12 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
     { id: 'recycle', label: 'Recycle Bin', iconName: 'RecycleBin', onClick: () => host._goToView('recycle') },
     { id: 'archive', label: 'Archive',     iconName: 'Archive',    onClick: () => host._goToView('archive') },
   ];
+  const auxLinks = ALL_AUX_LINKS.filter(link =>
+    // 'bento_compose' isn't its own module in module_settings_api's catalog
+    // (it's just "AI Bento Email" with the compose panel pre-opened), so it
+    // rides on 'bento_email''s visibility instead of having its own toggle.
+    link.id === 'bento_compose' ? !isHidden('bento_email') : !isHidden(link.id)
+  );
 
   const renderNavBtn = (
     id: AppView | 'bento_compose',
@@ -164,7 +165,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
     isAux = false,
   ): React.ReactElement => {
     const active = view === id;
-    const accent = NAV_ACCENTS[id] || '#0078D4';
+    const accent = NAV_ACCENTS[id] || clay.accent;
     const iconColor = active ? '#fff' : (NAV_ICON_COLORS[id] || 'rgba(255,255,255,0.7)');
 
     return (
@@ -184,7 +185,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
           boxSizing: 'border-box',
           border: active ? `1.5px solid ${accent}60` : '1.5px solid transparent',
           background: active ? `${accent}28` : 'transparent',
-          color: '#fff',
+          color: active ? (isNight ? '#fff9f5' : clay.accentDark) : (isNight ? '#f4dfd0' : clay.text),
           fontWeight: active ? 800 : 500,
           fontSize: isAux ? 15 : 16,
           cursor: 'pointer',
@@ -194,14 +195,18 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
         }}
         onMouseEnter={e => {
           if (!active) {
-            e.currentTarget.style.background = `${accent}18`;
+            e.currentTarget.style.background = isNight ? `${accent}32` : `${accent}20`;
             e.currentTarget.style.borderColor = `${accent}40`;
+            e.currentTarget.style.boxShadow = isNight ? `0 4px 14px ${accent}22` : `0 4px 14px ${accent}18`;
+            e.currentTarget.style.transform = 'translateX(2px)';
           }
         }}
         onMouseLeave={e => {
           if (!active) {
             e.currentTarget.style.background = 'transparent';
             e.currentTarget.style.borderColor = 'transparent';
+            e.currentTarget.style.boxShadow = 'none';
+            e.currentTarget.style.transform = 'translateX(0)';
           }
         }}
       >
@@ -281,7 +286,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
             display: collapsed ? 'none' : 'inline-block',
             transition: 'max-width 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s ease',
             letterSpacing: '0.1px',
-            textShadow: active ? `0 0 20px ${accent}88` : 'none',
+            textShadow: 'none',
           }}>
             {label}
           </span>
@@ -324,7 +329,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
         minWidth: sidebarWidth,
         maxWidth: sidebarWidth,
         height: '100vh',
-        background: NAV_SIDEBAR_BG[view] || '#1A0A2E',
+        background: isNight ? '#2b211b' : (NAV_SIDEBAR_BG[view] || clay.surface),
         display: 'flex',
         flexDirection: 'column',
         padding: '0',
@@ -332,7 +337,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
         userSelect: 'none',
         overflow: 'hidden',
         flexShrink: 0,
-        boxShadow: `6px 0 32px rgba(0,0,0,0.6), inset -2px 0 0 ${NAV_ACCENTS[view] || '#AA00FF'}60`,
+        boxShadow: `6px 0 24px rgba(120,190,185,0.28), inset -2px 0 0 rgba(34,134,127,0.35)`,
         position: tabletOrBelow ? 'fixed' : 'relative',
         top: 0,
         left: tabletOrBelow ? 0 : undefined,
@@ -347,9 +352,9 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
         <div style={{
           position: 'relative', zIndex: 1,
           padding: collapsed ? '16px 0' : '18px 16px',
-          borderBottom: `2px solid ${NAV_ACCENTS[view] || '#AA00FF'}50`,
-          background: 'rgba(0,0,0,0.35)',
-          boxShadow: `0 4px 24px ${NAV_ACCENTS[view] || '#AA00FF'}40`,
+          borderBottom: `2px solid ${clay.accentSoft}`,
+          background: isNight ? '#2b211b' : clay.surfaceRaised,
+          boxShadow: 'none',
           display: 'flex', alignItems: 'center',
           gap: collapsed ? 0 : 12,
           justifyContent: collapsed ? 'center' : 'space-between',
@@ -361,19 +366,19 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
               <div style={{
                 width: 48, height: 48, borderRadius: 14,
-                background: NAV_ACCENTS[view] || '#AA00FF',
+                background: NAV_ACCENTS[view] || clay.accent,
                 color: '#fff', fontWeight: 900, fontSize: 18,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                boxShadow: `0 6px 20px ${NAV_ACCENTS[view] || '#AA00FF'}BB, 0 0 0 3px ${NAV_ACCENTS[view] || '#AA00FF'}33`,
+                boxShadow: `0 6px 20px ${NAV_ACCENTS[view] || clay.accent}BB, 0 0 0 3px ${NAV_ACCENTS[view] || clay.accent}33`,
                 flexShrink: 0, letterSpacing: '-0.5px',
               }}>
                 VD
               </div>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 900, fontSize: 16, color: '#fff', lineHeight: 1.2, whiteSpace: 'nowrap', letterSpacing: '-0.3px' }}>
+                <div style={{ fontWeight: 900, fontSize: 16, color: clay.text, lineHeight: 1.2, whiteSpace: 'nowrap', letterSpacing: '-0.3px' }}>
                   Vessel Documents
                 </div>
-                <div style={{ fontSize: 12, color: NAV_ACCENTS[view] || '#AA00FF', fontWeight: 600, whiteSpace: 'nowrap', marginTop: 2 }}>
+                <div style={{ fontSize: 12, color: NAV_ACCENTS[view] || clay.accent, fontWeight: 600, whiteSpace: 'nowrap', marginTop: 2 }}>
                   Management System
                 </div>
               </div>
@@ -396,7 +401,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
         >
           {/* Nav section label */}
           {!collapsed && (
-            <div style={{ fontSize: 11, fontWeight: 800, color: NAV_ACCENTS[view] || '#AA00FF', textTransform: 'uppercase', letterSpacing: '2px', padding: '6px 16px 10px', marginBottom: 2 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: NAV_ACCENTS[view] || clay.accent, textTransform: 'uppercase', letterSpacing: '2px', padding: '6px 16px 10px', marginBottom: 2 }}>
               Main Menu
             </div>
           )}
@@ -432,7 +437,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                       boxSizing: 'border-box',
                       border: isVesselsActive ? `1.5px solid ${vesselsAccent}60` : '1.5px solid transparent',
                       background: isVesselsActive ? `${vesselsAccent}28` : 'transparent',
-                      color: '#fff',
+                      color: isVesselsActive ? (isNight ? '#fff9f5' : clay.accentDark) : (isNight ? '#f4dfd0' : clay.text),
                       fontWeight: isVesselsActive ? 800 : 500,
                       fontSize: 16,
                       cursor: 'pointer',
@@ -442,14 +447,18 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                     }}
                     onMouseEnter={e => {
                       if (!isVesselsActive) {
-                        e.currentTarget.style.background = `${vesselsAccent}18`;
+                        e.currentTarget.style.background = isNight ? `${vesselsAccent}32` : `${vesselsAccent}20`;
                         e.currentTarget.style.borderColor = `${vesselsAccent}40`;
+                        e.currentTarget.style.boxShadow = isNight ? `0 4px 14px ${vesselsAccent}22` : `0 4px 14px ${vesselsAccent}18`;
+                        e.currentTarget.style.transform = 'translateX(2px)';
                       }
                     }}
                     onMouseLeave={e => {
                       if (!isVesselsActive) {
                         e.currentTarget.style.background = 'transparent';
                         e.currentTarget.style.borderColor = 'transparent';
+                        e.currentTarget.style.boxShadow = 'none';
+                        e.currentTarget.style.transform = 'translateX(0)';
                       }
                     }}
                   >
@@ -501,7 +510,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                         display: collapsed ? 'none' : 'inline-block',
                         transition: 'max-width 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s ease',
                         letterSpacing: '0.1px',
-                        textShadow: isVesselsActive ? `0 0 20px ${vesselsAccent}88` : 'none',
+                        textShadow: 'none',
                       }}>
                         Vessels
                       </span>
@@ -510,7 +519,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                     {!collapsed && (
                       <div style={{
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        color: isVesselsActive ? '#fff' : 'rgba(255,255,255,0.6)',
+                        color: isVesselsActive ? clay.accent : (isNight ? '#d8b9a1' : clay.textMuted),
                         transform: isVesselsExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
                         transition: 'transform 0.2s ease',
                         fontSize: 12,
@@ -521,7 +530,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                     )}
                   </button>
 
-                  {/* Submenu Drilldown: Vessels Management + Suggested Vessels */}
+                  {/* Submenu Drilldown: Vessels Management */}
                   {!collapsed && isVesselsExpanded && (
                     <div style={{
                       display: 'flex', flexDirection: 'column', gap: 4,
@@ -541,7 +550,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                           padding: '9px 12px', borderRadius: 10,
                           background: (view === 'vessels' && !host.state.vesselSuggestionDialog?.open) ? `${vesselsAccent}28` : 'transparent',
                           border: (view === 'vessels' && !host.state.vesselSuggestionDialog?.open) ? `1px solid ${vesselsAccent}50` : '1px solid transparent',
-                          color: (view === 'vessels' && !host.state.vesselSuggestionDialog?.open) ? '#fff' : 'rgba(255,255,255,0.8)',
+                          color: (view === 'vessels' && !host.state.vesselSuggestionDialog?.open) ? clay.accentDark : clay.textMuted,
                           fontWeight: (view === 'vessels' && !host.state.vesselSuggestionDialog?.open) ? 700 : 500,
                           fontSize: 13, cursor: 'pointer', textAlign: 'left',
                           transition: 'all 0.15s ease',
@@ -562,41 +571,6 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                         <span>Vessels Management</span>
                       </button>
 
-                      {/* 2. Suggested Vessels */}
-                      <button
-                        onClick={() => host._openSuggestedVesselsFromSidebar()}
-                        style={{
-                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                          padding: '9px 12px', borderRadius: 10,
-                          background: host.state.vesselSuggestionDialog?.open ? 'linear-gradient(135deg, rgba(59,130,246,0.3), rgba(139,92,246,0.3))' : 'transparent',
-                          border: host.state.vesselSuggestionDialog?.open ? '1px solid rgba(99,179,237,0.5)' : '1px solid transparent',
-                          color: host.state.vesselSuggestionDialog?.open ? '#93c5fd' : 'rgba(255,255,255,0.85)',
-                          fontWeight: host.state.vesselSuggestionDialog?.open ? 700 : 500,
-                          fontSize: 13, cursor: 'pointer', textAlign: 'left',
-                          transition: 'all 0.15s ease',
-                          fontFamily: "'Segoe UI Variable', 'Segoe UI', sans-serif",
-                        }}
-                        onMouseEnter={e => {
-                          if (!host.state.vesselSuggestionDialog?.open) {
-                            e.currentTarget.style.background = 'rgba(99,179,237,0.15)';
-                          }
-                        }}
-                        onMouseLeave={e => {
-                          if (!host.state.vesselSuggestionDialog?.open) {
-                            e.currentTarget.style.background = 'transparent';
-                          }
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <span style={{ fontSize: 15 }}>✨</span>
-                          <span>Suggested Vessels</span>
-                        </div>
-                        <span style={{
-                          background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
-                          color: '#fff', fontSize: 10, fontWeight: 700,
-                          padding: '1px 6px', borderRadius: 6,
-                        }}>{host.state.pendingVesselSuggestions.length > 0 ? `${host.state.pendingVesselSuggestions.length}` : 'AI'}</span>
-                      </button>
                     </div>
                   )}
                 </div>
@@ -609,10 +583,10 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
           {/* Aux section */}
           <div style={{
             marginTop: 14, paddingTop: 12,
-            borderTop: '1px solid rgba(255,255,255,0.15)',
+            borderTop: `1px solid ${clay.accentSoft}`,
           }}>
             {!collapsed && (
-              <div style={{ fontSize: 11, fontWeight: 800, color: NAV_ACCENTS[view] || '#AA00FF', textTransform: 'uppercase', letterSpacing: '2px', padding: '6px 16px 10px' }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: NAV_ACCENTS[view] || clay.accent, textTransform: 'uppercase', letterSpacing: '2px', padding: '6px 16px 10px' }}>
                 Tools
               </div>
             )}
@@ -622,35 +596,104 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
           </div>
         </div>
 
-        {/* Bottom version tag */}
+        {/* Theme switch — knob LEFT = night (dark), knob RIGHT = light */}
+        {(() => {
+          const isLight = host.state.themeMode !== 'night';
+          const trackW = 46, trackH = 24, knob = 18, pad = 3;
+          const label = isLight ? 'Light mode' : 'Night mode';
+          const onKey = (e: React.KeyboardEvent<HTMLButtonElement>): void => {
+            // Arrow keys follow the switch direction: left = night, right = light.
+            if (e.key === 'ArrowLeft' && isLight) { e.preventDefault(); host._toggleThemeMode(); }
+            if (e.key === 'ArrowRight' && !isLight) { e.preventDefault(); host._toggleThemeMode(); }
+          };
+          return (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={isLight}
+              aria-label={`Theme: ${label}. Left for night mode, right for light mode.`}
+              title={isLight ? 'Switch to night mode' : 'Switch to light mode'}
+              onClick={host._toggleThemeMode}
+              onKeyDown={onKey}
+              style={{
+                position: 'relative', zIndex: 1,
+                margin: collapsed ? '10px 8px' : '10px 12px',
+                padding: collapsed ? '10px 0' : '8px 12px',
+                minHeight: 42,
+                borderRadius: 12,
+                border: `1px solid ${clay.accentSoft}`,
+                background: clay.surface,
+                color: clay.text,
+                display: 'flex', alignItems: 'center',
+                justifyContent: collapsed ? 'center' : 'space-between',
+                gap: 8, cursor: 'pointer', fontSize: 12, fontWeight: 700,
+                transition: 'background 0.2s ease', flexShrink: 0,
+              }}
+            >
+              {!collapsed && (
+                <Icon iconName="ClearNight" style={{ fontSize: 15, color: isLight ? clay.textMuted : clay.accent }} />
+              )}
+              <span
+                aria-hidden="true"
+                style={{
+                  position: 'relative', display: 'inline-block', flexShrink: 0,
+                  width: trackW, height: trackH, borderRadius: trackH,
+                  background: isLight ? clay.accent : '#1a120d',
+                  border: `1px solid ${isLight ? clay.accentDark : '#795238'}`,
+                  boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.25)',
+                  transition: 'background 0.25s ease, border-color 0.25s ease',
+                }}
+              >
+                <span
+                  style={{
+                    position: 'absolute', top: pad - 1,
+                    left: isLight ? trackW - knob - pad - 1 : pad - 1,
+                    width: knob, height: knob, borderRadius: '50%',
+                    background: isLight ? '#fff' : '#f8eee6',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.35)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'left 0.25s ease',
+                  }}
+                >
+                  <Icon iconName={isLight ? 'Sunny' : 'ClearNight'} style={{ fontSize: 10, color: isLight ? clay.accentDark : '#211812' }} />
+                </span>
+              </span>
+              {!collapsed && (
+                <Icon iconName="Sunny" style={{ fontSize: 15, color: isLight ? clay.accent : clay.textMuted }} />
+              )}
+              {!collapsed && <span style={{ flex: 1, textAlign: 'right' }}>{label}</span>}
+            </button>
+          );
+        })()}
+
         {collapsed && !tabletOrBelow && (
           <div
             title="Vessel DMS v2.0"
             style={{
               position: 'relative', zIndex: 1,
-              padding: '16px 0', borderTop: `2px solid ${NAV_ACCENTS[view] || '#AA00FF'}40`,
-              background: 'rgba(0,0,0,0.30)',
+              padding: '16px 0', borderTop: `2px solid ${clay.accentSoft}`,
+              background: isNight ? '#2b211b' : clay.surfaceRaised,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               flexShrink: 0,
             }}
           >
             <span style={{
               width: 10, height: 10, borderRadius: '50%',
-              background: NAV_ACCENTS[view] || '#AA00FF',
+              background: NAV_ACCENTS[view] || clay.accent,
               display: 'inline-block',
-              boxShadow: `0 0 10px ${NAV_ACCENTS[view] || '#AA00FF'}, 0 0 20px ${NAV_ACCENTS[view] || '#AA00FF'}88`,
+              boxShadow: `0 0 10px ${NAV_ACCENTS[view] || clay.accent}, 0 0 20px ${NAV_ACCENTS[view] || clay.accent}88`,
             }} />
           </div>
         )}
         {!collapsed && !tabletOrBelow && (
           <div style={{
             position: 'relative', zIndex: 1,
-            padding: '14px 18px', borderTop: `2px solid ${NAV_ACCENTS[view] || '#AA00FF'}40`,
-            background: 'rgba(0,0,0,0.30)',
-            fontSize: 12, color: 'rgba(255,255,255,0.85)', flexShrink: 0, fontWeight: 600,
+            padding: '14px 18px', borderTop: `2px solid ${clay.accentSoft}`,
+            background: isNight ? '#2b211b' : clay.surfaceRaised,
+            fontSize: 12, color: isNight ? '#d8b9a1' : clay.textMuted, flexShrink: 0, fontWeight: 600,
             display: 'flex', alignItems: 'center', gap: 6,
           }}>
-            <span style={{ width: 10, height: 10, borderRadius: '50%', background: NAV_ACCENTS[view] || '#AA00FF', display: 'inline-block', boxShadow: `0 0 10px ${NAV_ACCENTS[view] || '#AA00FF'}, 0 0 20px ${NAV_ACCENTS[view] || '#AA00FF'}88` }} />
+            <span style={{ width: 10, height: 10, borderRadius: '50%', background: NAV_ACCENTS[view] || clay.accent, display: 'inline-block', boxShadow: `0 0 10px ${NAV_ACCENTS[view] || clay.accent}, 0 0 20px ${NAV_ACCENTS[view] || clay.accent}88` }} />
             Vessel DMS v2.0
           </div>
         )}

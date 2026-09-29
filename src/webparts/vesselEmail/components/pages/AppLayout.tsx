@@ -3,7 +3,7 @@ import { Icon } from '@fluentui/react/lib/Icon';
 import type VesselEmail from '../VesselEmail';
 import {
   badge, GROUP_COLORS, DATASOURCE_TAGS_MAP, VESSEL_TYPES, cleanName, suggestTagFromFilename,
-  INITIAL_MOCK_DOCUMENTS, INITIAL_MOCK_TEMPLATES, INITIAL_MOCK_APPROVALS,
+  INITIAL_MOCK_DOCUMENTS, INITIAL_MOCK_TEMPLATES,
   INITIAL_MOCK_NOTIFICATIONS, INITIAL_MOCK_USERS,
 } from '../constants';
 import type {
@@ -13,26 +13,21 @@ import type { BentoEmailLog } from '../types/bento';
 import type { AppView, ModalMode } from '../types/view';
 import type {
   FormState, DocPreviewItem, DeletedNode, DocumentItem, TemplateItem,
-  ApprovalItem, NotificationItem, UserItem, AlertItem,
+  NotificationItem, UserItem, AlertItem,
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
 import { isMobileWidth, isTabletOrBelow } from '../responsive';
+import { ThemeProvider } from '@fluentui/react';
+import { clay, buildDeepHarborTheme } from '../clayTheme';
 
-// Must match NAV_ACCENTS in Sidebar.tsx
+// Phase 6 — Ocean Clay: previously each module had its own vivid top-bar
+// accent (matching Sidebar.tsx's rainbow NAV_ACCENTS). Per explicit decision
+// (2026-09-22), fully converted to the single Ocean Clay teal — map kept so
+// every VIEW_ACCENTS[view] call site below needs no change.
 const VIEW_ACCENTS: Record<string, string> = {
-  dashboard:    '#FF2D55',
-  list:         '#FF6B00',
-  vessels:      '#F5C400',
-  templates:    '#00C853',
-  approvals:    '#00B0FF',
-  reports:      '#3D5AFE',
-  users:        '#AA00FF',
-  settings:     '#F50057',
-  bento_email:  '#FF3D00',
-  email_notify: '#FF3D00',
-  bento_compose:'#FF6D00',
-  recycle:      '#00BCD4',
-  archive:      '#6200EA',
+  dashboard: clay.accent, list: clay.accent, vessels: clay.accent, templates: clay.accent,
+  users: clay.accent, settings: clay.accent, bento_email: clay.accent, email_notify: clay.accent,
+  bento_compose: clay.accent, recycle: clay.accent, archive: clay.accent, migration: clay.accent,
 };
 
 // View → display label
@@ -41,10 +36,10 @@ const VIEW_LABELS: Record<string, string> = {
   list: 'Documents',
   vessels: 'Vessels',
   templates: 'Templates',
-  approvals: 'Approvals',
-  reports: 'Reports',
+  migration: 'Migration Assistant',
   users: 'User Management',
   settings: 'Settings',
+  profile: 'Profile',
   bento_email: 'AI Bento Email',
   email_notify: 'AI Bento Email',
   recycle: 'Recycle Bin',
@@ -61,6 +56,87 @@ function injectFullScreenStyles(): void {
     document.head.appendChild(style);
   }
   style.textContent = `
+    /* ── Whole-app dark mode tokens ──────────────────────────────────────
+       Every page still sets its own inline colors (no shared component
+       library to retheme centrally — see clayTheme.ts header comment), so
+       the bulk of those inline hex literals were swapped for var(--vdms-*)
+       references instead of being duplicated with isNight ternaries. These
+       custom properties are the single place that actually flips between
+       light and night, scoped to the [data-vessel-theme] attribute set on
+       the app root below. Night values reuse the existing warm-brown
+       "Ocean Clay" night palette (see deepHarborNightTheme / the night
+       input styles further down) so nothing clashes. */
+    [data-vessel-theme="light"] {
+      --vdms-surface: #ffffff;
+      --vdms-surface-alt: #f8fafc;
+      --vdms-border: #e2e8f0;
+      --vdms-border-soft: #f1f5f9;
+      --vdms-text: #0f172a;
+      --vdms-text-secondary: #475569;
+      --vdms-text-muted: #64748b;
+      --vdms-text-faint: #94a3b8;
+      --vdms-toggle-active-bg: #0f172a;
+      --vdms-toggle-active-text: #ffffff;
+      /* clay.* tokens (clayTheme.ts) */
+      --clay-bg: #f8f1ea;
+      --clay-surface: #fff9f5;
+      --clay-surface-raised: #f7e6d8;
+      --clay-surface-hover: #f2e2d5;
+      --clay-text: #342417;
+      --clay-text-muted: #8a6552;
+      --clay-accent-soft: #f7d8bf;
+      --clay-accent-soft-hover: #f0cab1;
+      --clay-icon-bg: linear-gradient(150deg, #f9dcc0, #efb57a);
+      --clay-shadow-raised: 8px 8px 18px rgba(221,145,89,0.22), -8px -8px 16px rgba(255,255,255,0.88);
+      --clay-shadow-raised-hover: 10px 10px 22px rgba(221,145,89,0.28), -10px -10px 20px rgba(255,255,255,0.92);
+      --clay-shadow-button: 0 10px 22px rgba(221,145,89,0.35), inset 0 2px 3px rgba(255,255,255,0.45), inset 0 -3px 6px rgba(150,89,42,0.28);
+      --clay-shadow-icon: inset 0 2px 3px rgba(255,255,255,0.7), inset 0 -3px 5px rgba(185,110,53,0.22);
+      --clay-pill-active-bg: #cdeedb;
+      --clay-pill-active-text: #245a3d;
+      --clay-pill-active-shadow: inset 0 1px 2px rgba(255,255,255,0.6), inset 0 -2px 3px rgba(36,90,61,0.18);
+      --clay-pill-warn-bg: #e3d9c2;
+      --clay-pill-warn-text: #7a6420;
+      --clay-pill-warn-shadow: inset 0 1px 2px rgba(255,255,255,0.6), inset 0 -2px 3px rgba(122,100,32,0.18);
+      --clay-pill-danger-bg: #ecccc8;
+      --clay-pill-danger-text: #8a3226;
+      --clay-pill-danger-shadow: inset 0 1px 2px rgba(255,255,255,0.6), inset 0 -2px 3px rgba(138,50,38,0.18);
+    }
+    [data-vessel-theme="night"] {
+      --vdms-surface: #2b211b;
+      --vdms-surface-alt: #3a291f;
+      --vdms-border: #493225;
+      --vdms-border-soft: #3a291f;
+      --vdms-text: #f8eee6;
+      --vdms-text-secondary: #d8c4b3;
+      --vdms-text-muted: #c7a58d;
+      --vdms-text-faint: #a8886f;
+      --vdms-toggle-active-bg: #DD9159;
+      --vdms-toggle-active-text: #211812;
+      /* clay.* tokens (clayTheme.ts) — night values */
+      --clay-bg: #211812;
+      --clay-surface: #2b211b;
+      --clay-surface-raised: #3a291f;
+      --clay-surface-hover: #45311f;
+      --clay-text: #f8eee6;
+      --clay-text-muted: #c7a58d;
+      --clay-accent-soft: #5a3a24;
+      --clay-accent-soft-hover: #6a4429;
+      --clay-icon-bg: linear-gradient(150deg, #5a3a24, #7a4a2a);
+      --clay-shadow-raised: 6px 6px 14px rgba(0,0,0,0.45), -4px -4px 10px rgba(255,255,255,0.03);
+      --clay-shadow-raised-hover: 8px 8px 18px rgba(0,0,0,0.55), -5px -5px 12px rgba(255,255,255,0.04);
+      --clay-shadow-button: 0 8px 18px rgba(0,0,0,0.45), inset 0 1px 2px rgba(255,255,255,0.18), inset 0 -3px 6px rgba(0,0,0,0.3);
+      --clay-shadow-icon: inset 0 1px 2px rgba(255,255,255,0.12), inset 0 -3px 5px rgba(0,0,0,0.35);
+      --clay-pill-active-bg: #1f3b2c;
+      --clay-pill-active-text: #9fe0bb;
+      --clay-pill-active-shadow: inset 0 1px 2px rgba(255,255,255,0.06), inset 0 -2px 3px rgba(0,0,0,0.3);
+      --clay-pill-warn-bg: #3d3420;
+      --clay-pill-warn-text: #e5c97a;
+      --clay-pill-warn-shadow: inset 0 1px 2px rgba(255,255,255,0.06), inset 0 -2px 3px rgba(0,0,0,0.3);
+      --clay-pill-danger-bg: #45231f;
+      --clay-pill-danger-text: #f2a79c;
+      --clay-pill-danger-shadow: inset 0 1px 2px rgba(255,255,255,0.06), inset 0 -2px 3px rgba(0,0,0,0.3);
+    }
+
     /* Force web part zone to not clip our fixed overlay */
     .CanvasZone, .CanvasSection, .CanvasComponent,
     [data-automation-id="CanvasControl"],
@@ -72,8 +148,6 @@ function injectFullScreenStyles(): void {
     html, body {
       overflow: hidden !important;
     }
-    /* Placeholder input text color fix */
-    .vessel-dms-search::placeholder { color: rgba(255,255,255,0.55); }
     /* Sidebar nav scrollbar hiding */
     .vessel-dms-sidebar-nav::-webkit-scrollbar {
       display: none;
@@ -85,115 +159,140 @@ function injectFullScreenStyles(): void {
       scrollbar-width: none;
     }
 
-    /* ── Animated Vessel Banner ── */
-    @keyframes vesselShipMotion {
-      0% {
-        transform: translate(0px, 0px) rotate(0deg);
-      }
-      25% {
-        transform: translate(2px, -3.5px) rotate(-1.2deg);
-      }
-      50% {
-        transform: translate(3.5px, 0.5px) rotate(0.4deg);
-      }
-      75% {
-        transform: translate(1.5px, 3px) rotate(1.2deg);
-      }
-      100% {
-        transform: translate(0px, 0px) rotate(0deg);
-      }
+    /* Night mode keeps the warm clay accent while lowering the surrounding surfaces. */
+    [data-vessel-theme="night"] input,
+    [data-vessel-theme="night"] select,
+    [data-vessel-theme="night"] textarea {
+      background: #2b211b !important;
+      color: #f8eee6 !important;
+      border-color: #795238 !important;
+      color-scheme: dark;
+    }
+    [data-vessel-theme="night"] input::placeholder,
+    [data-vessel-theme="night"] textarea::placeholder {
+      color: #b99a84 !important;
     }
 
-    @keyframes vesselWaveScroll {
-      0% {
-        transform: translateX(0);
-      }
-      100% {
-        transform: translateX(-400px);
-      }
+    /* Shared interaction feedback for buttons and custom clickable surfaces. */
+    .vessel-dms-app button,
+    .vessel-dms-app a,
+    .vessel-dms-app [role="button"] {
+      transition: filter 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
     }
-
-    @keyframes vesselCloudDrift {
-      0% {
-        transform: translateX(0);
-      }
-      50% {
-        transform: translateX(20px);
-      }
-      100% {
-        transform: translateX(0);
-      }
+    .vessel-dms-app button:hover:not(:disabled),
+    .vessel-dms-app a:hover,
+    .vessel-dms-app [role="button"]:hover {
+      filter: brightness(0.94) saturate(1.08) !important;
+      transform: translateY(-1px) !important;
+      outline: 2px solid rgba(221,145,89,0.72) !important;
+      outline-offset: 2px;
+      box-shadow: 0 0 0 4px rgba(221,145,89,0.18) !important;
     }
-
-    @keyframes vesselBowSprayPulse {
-      0%, 100% {
-        opacity: 0.4;
-        transform: scale(0.95);
-      }
-      25% {
-        opacity: 0.85;
-        transform: scale(1.1);
-      }
-      75% {
-        opacity: 0.35;
-        transform: scale(0.9);
-      }
+    .vessel-dms-app button:active:not(:disabled),
+    .vessel-dms-app a:active,
+    .vessel-dms-app [role="button"]:active {
+      filter: brightness(0.88) saturate(1.12);
+      transform: translateY(0);
     }
-
-    .vessel-ship-animated {
-      animation: vesselShipMotion 3.8s ease-in-out infinite;
-      transform-origin: 200px 115px;
-      will-change: transform;
-    }
-
-    .vessel-wave-back {
-      animation: vesselWaveScroll 6.5s linear infinite;
-      will-change: transform;
-    }
-
-    .vessel-wave-mid {
-      animation: vesselWaveScroll 4s linear infinite;
-      will-change: transform;
-    }
-
-    .vessel-wave-front {
-      animation: vesselWaveScroll 3s linear infinite;
-      will-change: transform;
-    }
-
-    .vessel-cloud-slow {
-      animation: vesselCloudDrift 18s ease-in-out infinite;
-      will-change: transform;
-    }
-
-    .vessel-cloud-fast {
-      animation: vesselCloudDrift 12s ease-in-out infinite reverse;
-      will-change: transform;
-    }
-
-    .vessel-bow-spray {
-      animation: vesselBowSprayPulse 3.8s ease-in-out infinite;
-      transform-origin: 390px 125px;
-    }
-
-    /* Accessibility: Respect prefers-reduced-motion */
-    @media (prefers-reduced-motion: reduce) {
-      .vessel-ship-animated,
-      .vessel-wave-back,
-      .vessel-wave-mid,
-      .vessel-wave-front,
-      .vessel-cloud-slow,
-      .vessel-cloud-fast,
-      .vessel-bow-spray {
-        animation: none !important;
-        transform: none !important;
-      }
+    .vessel-dms-app button:focus-visible,
+    .vessel-dms-app a:focus-visible,
+    .vessel-dms-app [role="button"]:focus-visible {
+      outline: 3px solid rgba(221,145,89,0.55);
+      outline-offset: 2px;
     }
   `;
 }
 
+/** Live deletion popup (Part 3): a transient toast for any newly-seen
+ * vessel_deleted / document_deleted alert — the same deletion_log-backed
+ * rows the alert bell already lists (GET /api/alerts/all, polled every
+ * 30s by host._fetchAlerts). Shows who deleted it, what, and which site,
+ * auto-dismisses after 10s, can be dismissed early, and clicking it
+ * deep-links into the Recycle Bin — reusing the exact same handling the
+ * bell dropdown's own "View in Recycle Bin" buttons already use. */
+function DeletionToastLayer({ host }: { host: VesselEmail }): React.ReactElement | null {
+  const alertsList = host.state.alertsList || [];
+  const alertsLoaded = host.state.alertsLoaded;
+  const seenIds = React.useRef<Set<string>>(new Set());
+  const initialized = React.useRef(false);
+  const [toasts, setToasts] = React.useState<AlertItem[]>([]);
+
+  React.useEffect(() => {
+    const deletions = alertsList.filter(
+      a => a.alert_type === 'vessel_deleted' || a.alert_type === 'document_deleted'
+    );
+    // GET /api/alerts/all resolves after this component's first render, so
+    // alertsList is still [] on mount. Gating "first load" on alertsLoaded
+    // (not just "have we run once") means we keep re-baselining seenIds —
+    // without toasting anything — through every render before the real
+    // data arrives, instead of seeding an empty baseline too early and then
+    // treating every pre-existing deletion as brand new the moment the
+    // actual list shows up (this is what fired a toast for every old
+    // deletion in the log on page open).
+    if (!alertsLoaded || !initialized.current) {
+      deletions.forEach(a => seenIds.current.add(a.id));
+      if (alertsLoaded) initialized.current = true;
+      return;
+    }
+    const fresh = deletions.filter(a => !seenIds.current.has(a.id));
+    if (!fresh.length) return;
+    fresh.forEach(a => seenIds.current.add(a.id));
+    setToasts(prev => [...fresh, ...prev].slice(0, 3));
+    fresh.forEach(a => {
+      window.setTimeout(() => {
+        setToasts(prev => prev.filter(t => t.id !== a.id));
+      }, 10000);
+    });
+  }, [alertsList, alertsLoaded]);
+
+  if (!toasts.length) return null;
+
+  return (
+    <div style={{ position: 'fixed', top: 90, right: 20, zIndex: 200000, display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 340 }}>
+      {toasts.map(t => (
+        <div key={t.id} style={{ background: '#fff', border: '1px solid #fecdd3', borderRadius: 12, boxShadow: '0 12px 32px rgba(15,23,42,0.25)', padding: '14px 16px', display: 'flex', gap: 10 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 9, background: '#fee2e2', color: '#991b1b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, flexShrink: 0 }}>
+            <Icon iconName="Delete" />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>
+              {t.alert_type === 'vessel_deleted' ? 'Vessel deleted' : 'Item deleted'}
+            </div>
+            <div style={{ fontSize: 12, color: '#475569', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.folder_name}>
+              {t.folder_name}
+            </div>
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {t.created_by_name || t.created_by_email || 'Unknown user'}
+              {t.site_name ? ` • ${t.site_name}` : ''}
+            </div>
+            <button
+              onClick={() => {
+                if (!t.read) host._markAlertRead(t.id);
+                setToasts(prev => prev.filter(x => x.id !== t.id));
+                void host._goToView('recycle').catch(() => undefined);
+              }}
+              style={{ marginTop: 8, padding: '4px 10px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff5f5', color: '#dc2626', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+            >
+              View in Recycle Bin
+            </button>
+          </div>
+          <button
+            onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}
+            aria-label="Dismiss"
+            style={{ border: 'none', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: 14, padding: 0, alignSelf: 'flex-start' }}
+          >
+            ✕
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function renderLayout(host: VesselEmail, content: React.ReactElement): React.ReactElement {
   const userDisplayName = host.props.userDisplayName || 'Admin';
+  const isNight = host.state.themeMode === 'night';
+  const isWorkspaceFullScreen = host.state.fullScreenWorkspace && host.state.view === 'list';
   const viewLabel = VIEW_LABELS[host.state.view] || host.state.view.replace(/_/g, ' ');
   const viewportWidth = host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200);
   const tabletOrBelow = isTabletOrBelow(viewportWidth);
@@ -201,24 +300,33 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
 
   injectFullScreenStyles();
 
+  // Settings → Color Management (color_settings_api.py) recolors the app at
+  // runtime; the clay.* tokens above already pick that up via CSS custom
+  // properties (applyColorTheme), and Fluent's own theme is rebuilt here
+  // from the same saved colors so its handful of stock controls match.
+  const colorSet = isNight ? host.state.colorTheme.night : host.state.colorTheme.light;
+  const fluentTheme = buildDeepHarborTheme(colorSet, isNight);
+
   return (
-    <div style={{
+    <ThemeProvider theme={fluentTheme}>
+    <div className="vessel-dms-app" style={{
       display: 'flex', alignItems: 'stretch',
       height: '100vh', minHeight: '100vh',
       width: '100vw', overflow: 'hidden',
-      background: '#F0F4F8',
+      background: clay.bg,
       fontFamily: "'Segoe UI Variable', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
       position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 99999,
-    }}>
-      {host._renderSidebar()}
+    }} data-vessel-theme={host.state.themeMode}>
+      <DeletionToastLayer host={host} />
+      {!isWorkspaceFullScreen && host._renderSidebar()}
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
 
         {/* ── Top Bar ── */}
         <div style={{
           height: 76, flexShrink: 0,
-          background: VIEW_ACCENTS[host.state.view] || '#3D5AFE',
-          boxShadow: `0 4px 24px ${VIEW_ACCENTS[host.state.view] || '#3D5AFE'}88`,
+          background: isNight ? clay.accentDeep : (VIEW_ACCENTS[host.state.view] || clay.accent),
+          boxShadow: `0 4px 24px ${clay.accentGlow}`,
           transition: 'background 0.4s ease, box-shadow 0.4s ease',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: phone ? '0 12px' : tabletOrBelow ? '0 18px' : '0 36px',
@@ -242,7 +350,10 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                   justifyContent: 'center',
                   cursor: 'pointer',
                   flexShrink: 0,
+                  transition: 'all 0.15s ease',
                 }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.26)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}
                 aria-label="Open navigation"
               >
                 <Icon iconName="GlobalNavButton" style={{ fontSize: 18 }} />
@@ -253,29 +364,46 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
             <span style={{ color: '#ffffff', fontSize: phone ? 18 : 24, fontWeight: 900, letterSpacing: '-0.5px', textShadow: '0 2px 12px rgba(0,0,0,0.25)' }}>
               {viewLabel}
             </span>
+            <button
+              type="button"
+              onClick={() => { void host._refreshCurrentModule(); }}
+              title={`Refresh ${viewLabel}`}
+              aria-label={`Refresh ${viewLabel}`}
+              style={{
+                width: 34, height: 34, marginLeft: 4, borderRadius: '50%',
+                border: '1px solid rgba(255,255,255,0.62)',
+                background: 'rgba(255,255,255,0.2)', color: '#fff',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                cursor: 'pointer', flexShrink: 0,
+              }}
+            >
+              <Icon iconName="Refresh" style={{ fontSize: 15 }} />
+            </button>
           </div>
 
           {/* Right controls */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {/* Search */}
-            {!phone && <div style={{ position: 'relative', width: tabletOrBelow ? 180 : 260 }}>
-              <input
-                type="text"
-                placeholder="Search..."
-                className="vessel-dms-search"
+            {host.state.view === 'list' && (
+              <button
+                type="button"
+                onClick={host._toggleFullScreenWorkspace}
+                title={isWorkspaceFullScreen ? 'Exit full-screen workspace' : 'Open full-screen workspace'}
+                aria-label={isWorkspaceFullScreen ? 'Exit full-screen workspace' : 'Open full-screen workspace'}
                 style={{
-                  width: '100%', padding: '10px 18px 10px 44px', borderRadius: 28,
-                  border: '2px solid rgba(255,255,255,0.4)',
-                  fontSize: 15, background: 'rgba(255,255,255,0.18)',
-                  outline: 'none', boxSizing: 'border-box',
-                  color: '#fff', backdropFilter: 'blur(8px)',
-                  fontWeight: 500,
+                  width: 42, height: 42, borderRadius: 12,
+                  border: '1px solid rgba(255,255,255,0.4)',
+                  background: isWorkspaceFullScreen ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)',
+                  color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: 'pointer', boxShadow: '0 3px 10px rgba(0,0,0,0.15)',
                 }}
-                onFocus={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.28)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.7)'; }}
-                onBlur={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.18)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.35)'; }}
-              />
-              <Icon iconName="Search" style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'rgba(255,255,255,0.85)', fontSize: 17 }} />
-            </div>}
+              >
+                <Icon iconName={isWorkspaceFullScreen ? 'BackToWindow' : 'FullScreen'} style={{ fontSize: 17 }} />
+              </button>
+            )}
+            {/* Top-bar Search box removed per request — it was dead UI on
+                every module (no value/onChange ever wired to it; see git
+                history), and each module already has its own real search
+                (the "Search vessel, file name..." box in Documents, etc.). */}
 
             {/* ── Alert Bell ── */}
             <div style={{ position: 'relative' }}>
@@ -303,7 +431,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                     minWidth: 18, height: 18, borderRadius: 9,
                     background: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    padding: '0 4px', border: '2px solid #0078D4',
+                    padding: '0 4px', border: `2px solid ${clay.accentDark}`,
                   }}>
                     {host._unreadAlertCount() > 99 ? '99+' : host._unreadAlertCount()}
                   </span>
@@ -316,31 +444,29 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                   data-alert-bell="true"
                   style={{
                     position: 'absolute', top: 'calc(100% + 10px)', right: 0,
-                    width: phone ? Math.min(360, Math.max(290, viewportWidth - 24)) : 400, background: '#fff', border: '1px solid #e2e8f0',
-                    borderRadius: 14, boxShadow: '0 12px 40px rgba(16,24,40,.22)',
+                    width: phone ? Math.min(360, Math.max(290, viewportWidth - 24)) : 400, background: clay.surface, border: 'none',
+                    borderRadius: clay.radiusCard, boxShadow: clay.shadowRaisedHover,
                     overflow: 'hidden', zIndex: 9999,
                   }}
                 >
                   {/* Dropdown header */}
                   <div style={{
-                    padding: '14px 18px', borderBottom: '1px solid #f1f5f9',
-                    background: 'linear-gradient(135deg, #f8faff, #eff6ff)',
+                    padding: '14px 18px', borderBottom: `1px solid ${clay.accentSoft}`,
+                    background: clay.bg,
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <Icon iconName="Ringer" style={{ fontSize: 16, color: '#0078d4' }} />
-                      <span style={{ fontSize: 15, fontWeight: 700, color: '#0f172a' }}>Alerts</span>
+                      <Icon iconName="Ringer" style={{ fontSize: 16, color: clay.accentDark }} />
+                      <span style={{ fontSize: 15, fontWeight: 700, color: clay.text }}>Alerts</span>
                       {host._unreadAlertCount() > 0 && (
-                        <span style={{ background: '#ef4444', color: '#fff', borderRadius: 10, padding: '1px 8px', fontSize: 11, fontWeight: 700 }}>
+                        <span style={{ background: clay.pillDangerBg, color: clay.pillDangerText, borderRadius: 10, padding: '1px 8px', fontSize: 11, fontWeight: 700, boxShadow: clay.pillDangerShadow }}>
                           {host._unreadAlertCount()}
                         </span>
                       )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       {([
-                        ['dms', 'DMS folders'],
-                        ['unclassified', 'SharePoint site Unclassified Items'],
-                        ['classified', 'SharePoint Classified Items'],
+                        ['dms', 'Vessels'],
                         ['crud', 'SPFx activity'],
                         ['email', 'Email alerts'],
                       ] as const).map(([category, label]) => (
@@ -349,9 +475,10 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                           onClick={() => host._setAlertCategory(category)}
                           style={{
                             padding: '4px 9px', borderRadius: 16, border: 'none',
-                            background: host.state.alertCategory === category ? '#0f766e' : '#f1f5f9',
-                            color: host.state.alertCategory === category ? '#fff' : '#475569',
+                            background: host.state.alertCategory === category ? clay.accentGradient : clay.surfaceRaised,
+                            color: host.state.alertCategory === category ? '#fff' : clay.textMuted,
                             fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+                            boxShadow: host.state.alertCategory === category ? clay.shadowIcon : 'none',
                           }}
                         >{label}</button>
                       ))}
@@ -361,10 +488,11 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                           onClick={() => host._setAlertFilter(f)}
                           style={{
                             padding: '4px 12px', borderRadius: 16, border: 'none',
-                            background: host.state.alertFilter === f ? '#0078d4' : '#f1f5f9',
-                            color: host.state.alertFilter === f ? '#fff' : '#475569',
+                            background: host.state.alertFilter === f ? clay.accentGradient : clay.surfaceRaised,
+                            color: host.state.alertFilter === f ? '#fff' : clay.textMuted,
                             fontSize: 12, fontWeight: 600, cursor: 'pointer',
                             textTransform: 'capitalize',
+                            boxShadow: host.state.alertFilter === f ? clay.shadowIcon : 'none',
                           }}
                         >{f}</button>
                       ))}
@@ -373,8 +501,8 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                           onClick={host._markAllAlertsRead}
                           style={{
                             padding: '4px 10px', borderRadius: 16, border: 'none',
-                            background: '#fef3c7', color: '#92400e',
-                            fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                            background: clay.pillWarnBg, color: clay.pillWarnText,
+                            fontSize: 11, fontWeight: 600, cursor: 'pointer', boxShadow: clay.pillWarnShadow,
                           }}
                         >Mark all read</button>
                       )}
@@ -382,7 +510,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                         type="button"
                         onClick={() => host._openAlertsPage()}
                         title="Open full alerts page"
-                        style={{ padding: '4px 9px', borderRadius: 16, border: 'none', background: '#e0f2fe', color: '#0369a1', fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                        style={{ padding: '4px 9px', borderRadius: 16, border: 'none', background: clay.accentSoft, color: clay.accentDark, fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
                       >⛶ Maximize</button>
                     </div>
                   </div>
@@ -390,18 +518,19 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                   <div style={{ maxHeight: 420, overflowY: 'auto' }}>
                     {(() => {
                       const filtered = host.state.alertsList.filter(
-                          a => (a.alert_type === 'vessel_unrecognised' ? 'unclassified' : a.alert_category || (
-                          a.alert_type === 'crud_operation' ? 'crud' : a.alert_type === 'email_alert' ? 'email' : 'dms'
-                        )) === host.state.alertCategory && (host.state.alertFilter === 'all' || !a.read)
+                          a => (a.alert_category === 'crud' || a.alert_type === 'crud_operation' ? 'crud'
+                          : a.alert_category === 'email' || a.alert_type === 'email_alert' ? 'email'
+                          : 'dms'
+                        ) === host.state.alertCategory && (host.state.alertFilter === 'all' || !a.read)
                       );
                       if (filtered.length === 0) {
                         return (
                           <div style={{ padding: '32px 20px', textAlign: 'center' }}>
                             <Icon iconName="CheckMark" style={{ fontSize: 32, color: '#10b981', display: 'block', margin: '0 auto 10px' }} />
-                            <div style={{ fontSize: 14, fontWeight: 600, color: '#0f172a', marginBottom: 4 }}>
+                            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--vdms-text)', marginBottom: 4 }}>
                               {host.state.alertsList.length === 0 ? 'No alerts yet' : 'All caught up!'}
                             </div>
-                            <div style={{ fontSize: 12, color: '#64748b' }}>
+                            <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>
                               {host.state.alertsList.length === 0
                                 ? 'New SharePoint folder/vessel creations will appear here.'
                                 : 'No unread alerts.'}
@@ -453,7 +582,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                                 key={alert.id}
                                 onClick={() => host._openAlertsPage(alert.id)}
                                 style={{
-                                  padding: '12px 18px', borderBottom: '1px solid #f1f5f9',
+                                  padding: '12px 18px', borderBottom: '1px solid var(--vdms-border-soft)',
                                   background: alert.read ? 'transparent' : '#f8faff',
                                   cursor: 'pointer', transition: 'background 0.1s ease',
                                 }}
@@ -470,7 +599,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                                   <div style={{ flex: 1, minWidth: 0 }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                       <span style={{
-                                        fontSize: 13, fontWeight: 600, color: '#0f172a',
+                                        fontSize: 13, fontWeight: 600, color: 'var(--vdms-text)',
                                         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                                         maxWidth: 180,
                                       }}>
@@ -487,11 +616,11 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#ef4444', flexShrink: 0 }} />
                                       )}
                                     </div>
-                                    <div style={{ marginTop: 2, fontSize: 11, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    <div style={{ marginTop: 2, fontSize: 11, color: 'var(--vdms-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                       {alert.folder_path}
                                     </div>
                                     {(alert.vessel_name || alert.department) && (
-                                      <div style={{ marginTop: 4, fontSize: 11, color: '#94a3b8', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                                      <div style={{ marginTop: 4, fontSize: 11, color: 'var(--vdms-text-faint)', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                                         {alert.vessel_name && (
                                           <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                                             <Icon iconName="Ferry" style={{ fontSize: 10 }} /> {alert.vessel_name}
@@ -504,7 +633,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                                         )}
                                       </div>
                                     )}
-                                    <div style={{ marginTop: 4, fontSize: 10, color: '#94a3b8' }}>
+                                    <div style={{ marginTop: 4, fontSize: 10, color: 'var(--vdms-text-faint)' }}>
                                       {isAnomaly
                                         ? 'Detected in SharePoint Online — needs classification'
                                         : alert.alert_type === 'vessel_deleted'
@@ -583,8 +712,8 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                                             }}
                                             style={{
                                               padding: '4px 10px', borderRadius: 6,
-                                              border: '1px solid #e2e8f0', background: '#f8fafc',
-                                              color: '#475569', fontSize: 11, fontWeight: 600,
+                                              border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface-alt)',
+                                              color: 'var(--vdms-text-secondary)', fontSize: 11, fontWeight: 600,
                                               cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4,
                                             }}
                                           >
@@ -630,7 +759,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                                         style={{
                                           marginTop: 7, padding: '4px 12px', borderRadius: 6,
                                           border: '1px solid #bfdbfe', background: '#eff6ff',
-                                          color: '#0078d4', fontSize: 11, fontWeight: 600,
+                                          color: clay.accentDark, fontSize: 11, fontWeight: 600,
                                           cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4,
                                         }}
                                       >
@@ -654,16 +783,17 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
 
             {/* Avatar */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{
+              <button type="button" onClick={() => host._goToView('profile')} title="Open profile" aria-label="Open profile" style={{
                 width: 44, height: 44, borderRadius: '50%',
                 background: 'rgba(255,255,255,0.25)',
                 border: '2.5px solid rgba(255,255,255,0.7)',
                 color: '#fff', fontSize: 18, fontWeight: 900,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 flexShrink: 0, boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
+                cursor: 'pointer',
               }}>
                 {userDisplayName.charAt(0).toUpperCase()}
-              </div>
+              </button>
               <span style={{ fontSize: 16, fontWeight: 800, color: '#fff', letterSpacing: '0.2px', textShadow: '0 1px 6px rgba(0,0,0,0.2)' }}>{userDisplayName}</span>
             </div>
           </div>
@@ -686,7 +816,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
         )}
 
         {/* ── Main Content ── */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: phone ? 12 : tabletOrBelow ? 18 : 32, background: '#EEF2F7' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 32), background: isNight ? '#211812' : clay.bg }}>
           {content}
         </div>
 
@@ -694,5 +824,6 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
         {host._renderDocPreviewDrawer()}
       </div>
     </div>
+    </ThemeProvider>
   );
 }

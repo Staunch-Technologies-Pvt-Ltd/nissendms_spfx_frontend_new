@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 /* eslint-disable react/no-unescaped-entities */
 import * as React from 'react';
+import { Icon } from '@fluentui/react/lib/Icon';
 import type VesselEmail from '../VesselEmail';
 import {
   badge, GROUP_COLORS, DATASOURCE_TAGS_MAP, VESSEL_TYPES, cleanName, suggestTagFromFilename,
@@ -18,8 +19,8 @@ import type {
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
 import { KAIZEN_KNOWLEDGE_BANK_TREE, MAIN_FOLDERS } from '../vesselFolderTemplate';
-import { retryUntilComplete } from '../graphFolderService';
 import { isMobileWidth } from '../responsive';
+import { clay } from '../clayTheme';
 
 
 function getSpoVesselFolderUrl(
@@ -40,20 +41,21 @@ function getSpoVesselFolderUrl(
     } else if (typeof vesselOrName === 'string') {
       vesselName = vesselOrName;
     }
-    siteUrl = siteUrlProp || (vesselObj ? getVesselSharePointSiteUrl(host, vesselObj) : (host.state.documentSites.find(s => s.site_key === host?.state.activeDocumentSite)?.web_url || host.props.siteUrl || ''));
+    const documentSites = host?.state?.documentSites || [];
+    siteUrl = siteUrlProp || (vesselObj ? getVesselSharePointSiteUrl(host, vesselObj) : (documentSites.find(s => s.site_key === host?.state?.activeDocumentSite)?.web_url || host?.props?.siteUrl || ''));
   } else {
     siteUrl = typeof hostOrSiteUrl === 'string' ? hostOrSiteUrl : '';
     if (vesselOrName && typeof vesselOrName === 'object' && 'name' in vesselOrName) {
       vesselName = (vesselOrName as VesselRecord).name || '';
+      vesselObj = vesselOrName as VesselRecord;
     } else if (typeof vesselOrName === 'string') {
       vesselName = vesselOrName;
     }
   }
 
-  // 1. If host and live folder data are available, check for an exact match in documentLiveFolders
   if (host && vesselName) {
     const cleanVessel = vesselName.trim().toLowerCase();
-    const liveMatch = (host.state.documentLiveFolders || []).find(f =>
+    const liveMatch = (host.state?.documentLiveFolders || []).find(f =>
       f.is_folder !== false && f.name.trim().toLowerCase() === cleanVessel
     );
     if (liveMatch?.web_url) {
@@ -68,23 +70,46 @@ function getSpoVesselFolderUrl(
     const urlObj = new URL(effectiveSite);
     const basePath = urlObj.pathname.replace(/\/$/, '');
 
-    // Determine library name (default 'Shared Documents')
     let libName = 'Shared Documents';
     if (host) {
-      const activeKey = host.state.activeDocumentSite;
-      const matchedSite = host.state.documentSites.find(s => s.site_key === activeKey || s.web_url === effectiveSite);
-      if (matchedSite?.default_library_name) {
+      const documentSites = host.state?.documentSites || [];
+      const safeVesselObj = vesselObj;
+      const safeHost = host;
+      const matchedSite = safeVesselObj
+        ? documentSites.find(s => {
+            const vesselSiteIds = safeVesselObj.provisioned_site_ids || [];
+            return vesselSiteIds.some(id => String(id).toLowerCase() === String(s.site_key || '').toLowerCase()) ||
+              ((safeVesselObj.provisioned_site_key || '').toLowerCase() === String(s.site_key || '').toLowerCase()) ||
+              s.web_url === effectiveSite;
+          })
+        : documentSites.find(s => s.site_key === safeHost.state?.activeDocumentSite || s.web_url === effectiveSite);
+      const siteKey = String(matchedSite?.site_key || '').toLowerCase();
+      const siteName = String(matchedSite?.sp_site_name || '').toLowerCase();
+      const isCommunicationSite = siteKey === 'dev' || siteKey === 'communication' || siteKey === 'root' ||
+        siteName === 'communication site' || siteName.includes('communication');
+      if (isCommunicationSite) {
+        // The tenant root Communication site uses the SharePoint library
+        // named "Shared Documents", even when its configuration record says
+        // "Documents" (the latter is the default for other site types).
+        libName = 'Shared Documents';
+      } else if (matchedSite?.default_library_name) {
         libName = matchedSite.default_library_name;
       }
     }
 
     const encodedLib = encodeURIComponent(libName);
+    const customPath = vesselObj?.vessel_folder_path?.trim().replace(/^\/+|\/+$/g, '');
+    if (customPath) {
+      const pathParts = customPath.split('/').map(p => p.trim()).filter(Boolean);
+      const normalizedParts = pathParts[0] && pathParts[0].toLowerCase() === libName.toLowerCase() ? pathParts.slice(1) : pathParts;
+      const relativePath = normalizedParts.map(part => encodeURIComponent(part)).join('/');
+      return `${urlObj.origin}${basePath}/${encodedLib}/${relativePath}`;
+    }
 
     if (!vesselName) {
       return `${urlObj.origin}${basePath}/${encodedLib}`;
     }
 
-    // Determine department folder (check live folders or default to 'Technical & Crewing')
     let deptName = 'Technical & Crewing';
     if (host) {
       const liveDept = (host.state.documentLiveFolders || []).find(f =>
@@ -97,9 +122,6 @@ function getSpoVesselFolderUrl(
 
     const encodedDept = encodeURIComponent(deptName);
     const encodedVessel = encodeURIComponent(vesselName.trim());
-
-    // Clean direct SharePoint Online folder URL:
-    // e.g. https://nissenkaiunsingapore.sharepoint.com/sites/NKSDocMan/Shared%20Documents/Technical%20%26%20Crewing/mv%20test%204
     return `${urlObj.origin}${basePath}/${encodedLib}/${encodedDept}/${encodedVessel}`;
   } catch {
     return '#';
@@ -107,11 +129,11 @@ function getSpoVesselFolderUrl(
 }
 
 function getVesselSharePointSiteUrl(host: VesselEmail, vessel: VesselRecord): string {
-  const provisionedSiteIds = vessel.provisioned_site_ids || [];
+  const candidateSiteIds = Array.from(new Set([...(vessel.provisioned_site_ids || []), vessel.provisioned_site_key].filter(Boolean) as string[]));
 
   // 1. Try matching with known document sites
   const targetSite = host.state.documentSites.find(site =>
-    provisionedSiteIds.some(id => {
+    candidateSiteIds.some(id => {
       const idStr = String(id).toLowerCase();
       return (
         idStr === site.site_key.toLowerCase() ||
@@ -131,7 +153,7 @@ function getVesselSharePointSiteUrl(host: VesselEmail, vessel: VesselRecord): st
   }
 
   // 2. Fallback heuristic from provisionedSiteIds or activeDocumentSite
-  const hasNks = provisionedSiteIds.some(id => {
+  const hasNks = candidateSiteIds.some(id => {
     const s = String(id).toLowerCase();
     return s.includes('nks') || s.includes('docman') || s === 'local';
   });
@@ -139,12 +161,107 @@ function getVesselSharePointSiteUrl(host: VesselEmail, vessel: VesselRecord): st
     return 'https://nissenkaiunsingapore.sharepoint.com/sites/NKSDocMan';
   }
 
-  const hasExternal = provisionedSiteIds.some(id => String(id).toLowerCase().includes('external'));
+  const hasExternal = candidateSiteIds.some(id => String(id).toLowerCase().includes('external'));
   if (hasExternal || (host.state.activeDocumentSite && host.state.activeDocumentSite.toLowerCase().includes('external'))) {
     return 'https://nissenkaiunsingapore.sharepoint.com/sites/NissenKaiunExternal';
   }
 
   return host.props.siteUrl || 'https://nissenkaiunsingapore.sharepoint.com';
+}
+
+function resolveVesselDocumentNavigation(host: VesselEmail, vessel: VesselRecord): {
+  docMainFolder: VesselEmail['state']['docMainFolder'];
+  folderPathStack: { id: string; name: string }[];
+  vesselFilter: string;
+} {
+  const vesselName = cleanName(vessel.name || '').trim();
+  const customPath = (vessel.vessel_folder_path || '').trim();
+  const fallbackMain = host.state.docMainFolder || 'Technical & Crewing';
+  // Resolve the vessel's OWN site first (same candidate matching
+  // getVesselSharePointSiteUrl already uses), before ever falling back to
+  // whatever site happens to be active in the app right now. Falling back
+  // to activeDocumentSite/documentSites[0] first (the previous order here)
+  // meant "View Documents" ignored provisioned_site_key/provisioned_site_ids
+  // entirely whenever the active site's own site_key satisfied that check
+  // trivially — landing on the wrong site's (usually empty) folder for any
+  // vessel whose real site differs from the currently active one, most
+  // visibly the "Found in SharePoint" rows merged from a non-active site.
+  const vesselSiteIds = Array.from(new Set(
+    [...(vessel.provisioned_site_ids || []), vessel.provisioned_site_key].filter(Boolean) as string[]
+  ));
+  const selectedSite =
+    host.state.documentSites.find(site => vesselSiteIds.some(id => {
+      const idStr = String(id).toLowerCase();
+      return idStr === (site.site_key || '').toLowerCase() ||
+        (!!site.site_id && idStr === site.site_id.toLowerCase()) ||
+        (!!site.sp_site_name && idStr === site.sp_site_name.toLowerCase());
+    })) ||
+    host.state.documentSites.find(site =>
+      !!site.web_url && getVesselSharePointSiteUrl(host, vessel).startsWith(site.web_url) ||
+      site.site_key === host.state.activeDocumentSite ||
+      site.sp_site_name.toLowerCase() === (host.state.activeDocumentSite || '').toLowerCase()
+    ) || host.state.documentSites[0];
+
+  const rootStack: { id: string; name: string }[] = [];
+  if (selectedSite) {
+    // These three nodes (sites_root sentinel, then the site, then the
+    // drive) are the exact shape DocumentsPage.tsx's live-folder browsing
+    // expects at indices [0]/[1]/[2] (atSitesRoot, isSitesScopeNav, the
+    // click handler below's own folderPathStack[1]/[0]==='sites_root'
+    // checks). Without the 'sites_root' sentinel this stack was
+    // off-by-one — folderPathStack[0] held the site node, so every one of
+    // those checks failed, docScopeType always fell back to 'vessels'
+    // instead of 'sites', and the live Graph children fetch that actually
+    // populates Folder view never ran. That's what made "View Documents"
+    // (and any breadcrumb click rebuilding a slice of this same stack)
+    // land on a permanently empty listing for a flat, Part-C-provisioned
+    // vessel folder.
+    rootStack.push({ id: 'sites_root', name: 'SharePoint Sites' });
+    rootStack.push({ id: `site:${selectedSite.site_id || selectedSite.site_key}`, name: selectedSite.sp_site_name || selectedSite.site_key || 'Communication Site' });
+    rootStack.push({ id: `drive:${selectedSite.drive_id || 'root'}`, name: selectedSite.default_library_name || 'Documents' });
+  }
+
+  const fallbackDocMainFolder = (fallbackMain || 'Technical & Crewing') as VesselEmail['state']['docMainFolder'];
+
+  if (!customPath) {
+    const docMainFolder = fallbackDocMainFolder;
+    return {
+      docMainFolder,
+      folderPathStack: [...rootStack, { id: String(vessel.id || vesselName), name: vesselName }],
+      vesselFilter: vesselName,
+    };
+  }
+
+  const rawSegments = customPath.replace(/\\/g, '/').split('/').map(part => part.trim()).filter(Boolean);
+  const filteredSegments = rawSegments.filter(segment => !['SharePoint Sites', 'Documents', 'Communication Site', 'Shared Documents', 'Site Documents'].some(token => token.toLowerCase() === segment.toLowerCase()));
+  const relativeSegments = filteredSegments;
+
+  const mainMatch = relativeSegments.find(segment =>
+    MAIN_FOLDERS.some((mf) => mf.name.toLowerCase() === segment.toLowerCase())
+  );
+  const resolvedMain = (mainMatch || fallbackDocMainFolder || 'Technical & Crewing') as string;
+  const docMainFolder = resolvedMain as VesselEmail['state']['docMainFolder'];
+
+  const stack: { id: string; name: string }[] = [...rootStack];
+  for (const segment of relativeSegments) {
+    const cleanSegment = cleanName(segment);
+    if (!cleanSegment) continue;
+    const normalized = cleanSegment.toLowerCase();
+    if (stack.some(existing => existing.name.trim().toLowerCase() === normalized)) {
+      continue;
+    }
+    stack.push({ id: `${segment}-${stack.length}`, name: cleanSegment });
+  }
+
+  if (stack.length === rootStack.length) {
+    stack.push({ id: String(vessel.id || vesselName), name: vesselName });
+  }
+
+  return {
+    docMainFolder,
+    folderPathStack: stack,
+    vesselFilter: vesselName,
+  };
 }
 
 // ── Dismiss Confirm Dialog ────────────────────────────────────────────────────
@@ -243,6 +360,89 @@ export function renderDismissConfirmDialog(host: VesselEmail): React.ReactElemen
   );
 }
 
+// ── Vessel Field Save Confirm Dialog ────────────────────────────────────────
+// Shown by a vessel card's inline IMO/Hull No./Shipyard/Type field
+// (renderVesselsPage/renderEditableField) on blur/select, before the value
+// is written. The field can only ever be set once from the card — once
+// saved it renders as locked, read-only text — so this is the one chance to
+// catch a typo before it's committed.
+export function renderVesselFieldConfirmDialog(host: VesselEmail): React.ReactElement | null {
+  const pending = host.state.vesselFieldConfirm;
+  if (!pending) return null;
+  const isMobile = isMobileWidth(host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Confirm Save"
+      style={{
+        position: 'fixed', inset: 0, zIndex: 100010,
+        background: 'rgba(15,23,42,0.6)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: isMobile ? 10 : 16,
+      }}
+      onClick={e => { if (e.target === e.currentTarget) host._cancelSaveVesselField(); }}
+    >
+      <div style={{
+        background: '#fff', borderRadius: 16, boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
+        padding: isMobile ? 16 : 32, width: '100%', maxWidth: 420, maxHeight: '90vh', overflowY: 'auto', position: 'relative',
+      }}>
+        {/* Close */}
+        <button
+          onClick={() => host._cancelSaveVesselField()}
+          style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
+          title="Cancel"
+        >✕</button>
+
+        {/* Icon + title */}
+        <div style={{ textAlign: 'center', marginBottom: 20 }}>
+          <div style={{ fontSize: 44, marginBottom: 10 }}>💾</div>
+          <h3 style={{ margin: '0 0 8px', fontSize: 17, fontWeight: 700, color: '#0f172a' }}>
+            Save {pending.fieldLabel}?
+          </h3>
+          <p style={{ margin: 0, fontSize: 13, color: '#64748b', lineHeight: 1.5 }}>
+            This sets <strong>{pending.fieldLabel}</strong> for <strong>{pending.vesselName}</strong> to the value below.
+            Once saved, this field can't be edited again from this card.
+          </p>
+        </div>
+
+        {/* Value */}
+        <div style={{
+          background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8,
+          padding: '8px 12px', marginBottom: 22, fontSize: 14, fontWeight: 700, color: '#0f172a',
+          textAlign: 'center', wordBreak: 'break-word',
+        }}>
+          {pending.value}
+        </div>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            onClick={() => host._cancelSaveVesselField()}
+            style={{
+              flex: 1, background: '#f8fafc', color: '#334155',
+              border: '2px solid #e2e8f0', borderRadius: 10, padding: '12px 18px', minHeight: 44,
+              cursor: 'pointer', fontWeight: 700, fontSize: 13,
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => host._confirmSaveVesselField()}
+            style={{
+              flex: 1, background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+              color: '#fff', border: 'none', borderRadius: 10, padding: '12px 18px', minHeight: 44,
+              cursor: 'pointer', fontWeight: 700, fontSize: 13,
+            }}
+          >
+            Confirm & Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Classify Dialog ──────────────────────────────────────────────────────────
 export function renderClassifyDialog(host: VesselEmail): React.ReactElement | null {
   const dlg = host.state.spoClassifyDialog;
@@ -334,9 +534,16 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: anomaly.name, imo: null, shipyard: 'Auto-Discovered', vessel_type: 'Bulk Carrier' }),
       });
+      if (!newVessel?.id) {
+        // Without a real database ID we can't provision folders (the
+        // backend's flat-root /provision-sites endpoint is keyed on it) —
+        // surface this now instead of silently continuing with a synthetic
+        // client-side id that provisioning would later reject.
+        throw new Error('Vessel was not created correctly — the server did not return an ID.');
+      }
 
       const newRecord: VesselRecord = {
-        id: newVessel?.id || `v_${Date.now()}`,
+        id: newVessel.id,
         name: cleanName(anomaly.name),
         imo: newVessel?.imo || '—',
         status: 'Active',
@@ -437,7 +644,7 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
       return (
         <div style={{ textAlign: 'center', padding: '8px 0' }}>
           <div style={{ fontSize: 44, marginBottom: 12 }}>⏳</div>
-          <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#0284c7' }}>
+          <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: clay.accentDark }}>
             Provisioning DMS Folder Structure…
           </h3>
           <p style={{ margin: '0 0 16px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
@@ -447,7 +654,7 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
           {/* Live Timer badge */}
           <div style={{
             display: 'inline-flex', alignItems: 'center', gap: 8,
-            background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd',
+            background: clay.accentSoft, color: clay.accentDark, border: `1px solid ${clay.accentSoft}`,
             borderRadius: 20, padding: '8px 18px', fontSize: 14, fontWeight: 700, marginBottom: 20,
           }}>
             <span style={{ fontSize: 16 }}>⏱️</span>
@@ -457,7 +664,7 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
           {/* Animated Progress Bar */}
           <div style={{ background: '#e2e8f0', borderRadius: 10, height: 8, overflow: 'hidden', marginBottom: 20 }}>
             <div style={{
-              background: 'linear-gradient(90deg, #0ea5e9, #0284c7, #38bdf8)',
+              background: clay.accentGradient,
               height: '100%', width: `${Math.min(96, 15 + elapsed * 12)}%`,
               transition: 'width 0.8s ease-out', borderRadius: 10,
             }} />
@@ -468,7 +675,7 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
             <div style={{ color: '#16a34a', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 14 }}>✓</span><span>Vessel record confirmed in database</span>
             </div>
-            <div style={{ color: '#0284c7', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ color: clay.accentDark, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 14 }}>⏳</span><span>Creating SharePoint DMS folder tree (Technical &amp; Crewing, Month End, Certificates)…</span>
             </div>
             <div style={{ color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -572,10 +779,10 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
               <button
                 onClick={() => handleVessel()}
                 style={{
-                  background: 'linear-gradient(135deg, #0ea5e9, #0284c7)',
+                  background: clay.accentGradient,
                   color: '#fff', border: 'none', borderRadius: 12, padding: '16px 20px',
                   cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, textAlign: 'left',
-                  transition: 'opacity 0.2s',
+                  transition: 'opacity 0.2s', boxShadow: clay.shadowButton,
                 }}
               >
                 <span style={{ fontSize: 28 }}>🚢</span>
@@ -987,8 +1194,6 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
   const [elapsed, setElapsed] = React.useState(0);
   const [autoClose, setAutoClose] = React.useState(10);
   const [retrying, setRetrying] = React.useState(false);
-  const [retryAttempt, setRetryAttempt] = React.useState(0);
-  const RETRY_MAX = 3;
   const isMobile = isMobileWidth(host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200));
 
   const isProvisioned = (
@@ -1021,40 +1226,26 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
     return `${m < 10 ? '0' + m : m}:${s < 10 ? '0' + s : s}`;
   };
 
-  /** Retry only the failed folders, inline, without closing the dialog. */
+  /** Re-run provisioning for this vessel. Folder creation is now a single,
+   * all-or-nothing call to the backend's flat-root /provision-sites endpoint
+   * (see VesselEmail.tsx's _provisionVesselFolders) rather than the old
+   * client-side multi-folder Graph builder — there's no such thing as
+   * "retry just the failed folders" anymore, so retry and full re-provision
+   * are the same action. */
   const handleRetryInPlace = async (): Promise<void> => {
-    const { graphClient, siteId, driveId } = host.props;
-    if (!graphClient || !siteId || !driveId) return;
-    const currentResults = host.state.folderCreationResults;
-    if (!currentResults) return;
     setRetrying(true);
-    setRetryAttempt(0);
     try {
-      const updated = await retryUntilComplete(
-        graphClient,
-        siteId,
-        driveId,
-        currentResults,
-        RETRY_MAX,
-        3000,
-        (attempt, _total, latest) => {
-          setRetryAttempt(attempt);
-          host.setState({ folderCreationResults: latest });
+      const { success } = await host._provisionVesselFolders(vessel.name, vessel.id);
+      host.setState({
+        spoProvisionDialog: {
+          ...dlg,
+          provisioning: false,
+          done: true,
+          error: success ? null : 'Folder provisioning failed — see error below.',
         },
-      );
-      host.setState({ folderCreationResults: updated });
-      // If all resolved, mark provisioned in backend
-      const allGood = updated.every(r => r.status !== 'failed');
-      if (allGood && vessel.id) {
-        void fetch(`${host._base()}/api/vessels/${vessel.id}/provision`, {
-          method: 'POST',
-          headers: host._headers(),
-        }).catch(() => undefined);
-        void host._syncScheduler?.triggerNow().catch(() => undefined);
-      }
+      });
     } finally {
       setRetrying(false);
-      setRetryAttempt(0);
     }
   };
 
@@ -1085,7 +1276,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
       return (
         <div style={{ textAlign: 'center', padding: '8px 0' }}>
           <div style={{ fontSize: 44, marginBottom: 12 }}>⏳</div>
-          <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#0284c7' }}>
+          <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: clay.accentDark }}>
             Provisioning DMS Folder Structure…
           </h3>
           <p style={{ margin: '0 0 16px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
@@ -1095,7 +1286,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
           {/* Live Timer badge */}
           <div style={{
             display: 'inline-flex', alignItems: 'center', gap: 8,
-            background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd',
+            background: clay.accentSoft, color: clay.accentDark, border: `1px solid ${clay.accentSoft}`,
             borderRadius: 20, padding: '8px 18px', fontSize: 14, fontWeight: 700, marginBottom: 20,
           }}>
             <span style={{ fontSize: 16 }}>⏱️</span>
@@ -1105,7 +1296,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
           {/* Animated Progress Bar */}
           <div style={{ background: '#e2e8f0', borderRadius: 10, height: 8, overflow: 'hidden', marginBottom: 20 }}>
             <div style={{
-              background: 'linear-gradient(90deg, #0ea5e9, #0284c7, #38bdf8)',
+              background: clay.accentGradient,
               height: '100%', width: `${Math.min(96, 15 + elapsed * 12)}%`,
               transition: 'width 0.8s ease-out', borderRadius: 10,
             }} />
@@ -1116,7 +1307,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
             <div style={{ color: '#16a34a', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 14 }}>✓</span><span>Vessel record confirmed in database</span>
             </div>
-            <div style={{ color: '#0284c7', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ color: clay.accentDark, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 14 }}>⏳</span><span>Creating SharePoint DMS folder tree (Technical &amp; Crewing, Month End, Certificates)…</span>
             </div>
          <div style={{ color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1164,7 +1355,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
                 }}>
                   <span style={{ fontSize: 15 }}>⏳</span>
                   <span style={{ fontWeight: 600 }}>
-                    Retrying failed folders… attempt {retryAttempt || 1} of {RETRY_MAX}
+                    Retrying provisioning…
                   </span>
                 </div>
               ) : (
@@ -1180,11 +1371,8 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
                       boxShadow: '0 3px 8px rgba(217,119,6,0.35)',
                     }}
                   >
-                    🔁 Retry Failed Folders
+                    🔁 Retry Provisioning
                   </button>
-                  <div style={{ fontSize: 11, color: '#78716c', alignSelf: 'center' }}>
-                    Or click &quot;🔄 Re-Provision Folders&quot; for a full re-run.
-                  </div>
                 </div>
               )}
             </div>
@@ -1274,7 +1462,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
-                  background: 'linear-gradient(135deg, #0ea5e9, #0284c7)', color: '#fff',
+                  background: clay.accentGradient, color: '#fff',
                   border: 'none', borderRadius: 8, padding: '10px 20px',
                   fontSize: 13, fontWeight: 700, textDecoration: 'none',
                   display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -1286,7 +1474,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
             <button
               onClick={handleProvision}
               style={{
-                background: 'transparent', color: '#0284c7', border: '1px solid #0284c7',
+                background: 'transparent', color: clay.accentDark, border: `1px solid ${clay.accentDark}`,
                 borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
               }}
             >
@@ -1309,7 +1497,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
           </p>
         </div>
 
-        <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 12, color: '#0369a1', textAlign: 'left' }}>
+        <div style={{ background: clay.accentSoft, border: `1px solid ${clay.accentSoft}`, borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 12, color: clay.accentDark, textAlign: 'left' }}>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>📋 What will be created:</div>
           <div>• Technical &amp; Crewing — monthly sub-folders + categories</div>
           <div>• Commercial — contract and invoice folders</div>
@@ -1332,10 +1520,10 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
           <button
             onClick={handleProvision}
             style={{
-              background: 'linear-gradient(135deg, #0ea5e9, #0284c7)',
+              background: clay.accentGradient,
               color: '#fff', border: 'none', borderRadius: 8,
               padding: '10px 26px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-              boxShadow: '0 4px 12px rgba(2,132,199,0.3)',
+              boxShadow: clay.shadowButton,
             }}
           >
             📁 Start Provisioning
@@ -1575,25 +1763,25 @@ function FileAlertDialogContent({ host, dlg }: { host: VesselEmail; dlg: import(
               <div style={{ background: 'linear-gradient(135deg,#eff6ff,#dbeafe)', border: '2px solid #bfdbfe', borderRadius: 10, padding: '14px 16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
                   <span style={{ fontSize: 24 }}>📁</span>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: '#1d4ed8' }}>Move to DMS Subfolder</div>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: clay.accentDark }}>Move to DMS Subfolder</div>
                 </div>
 
                 {/* Step 1: Vessel */}
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#1d4ed8', marginBottom: 4, textTransform: 'uppercase' }}>1. Vessel</label>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: clay.accentDark, marginBottom: 4, textTransform: 'uppercase' }}>1. Vessel</label>
                 <select value={selVessel} onChange={e => onVesselChange(e.target.value)} style={selectStyle}>
                   <option value="">— Select vessel —</option>
                   {vessels.map(v => <option key={v.id} value={v.name}>{v.name}</option>)}
                 </select>
 
                 {/* Step 2: Main Folder / Category */}
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#1d4ed8', marginBottom: 4, textTransform: 'uppercase' }}>2. Main Folder</label>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: clay.accentDark, marginBottom: 4, textTransform: 'uppercase' }}>2. Main Folder</label>
                 <select value={selMainFolder} onChange={e => onMainFolderChange(e.target.value)} disabled={!selVessel || mainFolders.length === 0} style={{ ...selectStyle, opacity: !selVessel ? 0.5 : 1 }}>
                   <option value="">— Select main folder —</option>
                   {mainFolders.map(mf => <option key={mf} value={mf}>{mf}</option>)}
                 </select>
 
                 {/* Step 3: Sub-folder */}
-                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#1d4ed8', marginBottom: 4, textTransform: 'uppercase' }}>3. Sub-folder</label>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: clay.accentDark, marginBottom: 4, textTransform: 'uppercase' }}>3. Sub-folder</label>
                 <select value={selGroupKey} onChange={e => setSelGroupKey(e.target.value)} disabled={!selMainFolder || subFolderOptions.length === 0} style={{ ...selectStyle, opacity: !selMainFolder ? 0.5 : 1 }}>
                   <option value="">— Select sub-folder —</option>
                   {subFolderOptions.map(o => <option key={o.groupKey} value={o.groupKey}>{o.label}</option>)}
@@ -1604,7 +1792,7 @@ function FileAlertDialogContent({ host, dlg }: { host: VesselEmail; dlg: import(
                   disabled={!canMove}
                   style={{
                     width: '100%',
-                    background: canMove ? 'linear-gradient(135deg,#3b82f6,#1d4ed8)' : '#93c5fd',
+                    background: canMove ? clay.accentGradient : clay.accentSoft,
                     color: '#fff', border: 'none', borderRadius: 8, padding: '10px',
                     fontSize: 13, fontWeight: 700,
                     cursor: canMove ? 'pointer' : 'not-allowed',
@@ -1708,7 +1896,7 @@ function renderVesselActionPicker(host: VesselEmail): React.ReactElement {
                   <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
                   <span style={{ display: 'block', marginTop: 3, fontSize: 11, color: '#64748b' }}>{vessel.vessel_type || 'Vessel'}{vessel.imo ? ` | IMO ${vessel.imo}` : ''}</span>
                 </span>
-                <span style={{ color: '#0284c7', fontSize: 12, fontWeight: 700 }}>Edit →</span>
+                <span style={{ color: clay.accentDark, fontSize: 12, fontWeight: 700 }}>Edit →</span>
               </button>
             ))}
           </div>
@@ -1849,9 +2037,89 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
       folderCreationResults, panelLoading, loading,
     } = host.state;
 
+    const normalizeSiteId = (value: string | null | undefined): string => {
+      return String(value || '').trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    };
+
+    // Resolve a raw site value to the real, CONFIGURED site_key it identifies
+    // — using only host.state.documentSites (populated from GET /api/sites,
+    // i.e. the backend's own env/config-driven site registry), never a
+    // hardcoded list of site-name synonyms. Mirrors the backend's
+    // _resolve_configured_site_key in config.py so both sides agree on what
+    // counts as "the same site". Returns null if it doesn't match any
+    // currently configured site.
+    const resolveConfiguredSiteKey = (normalized: string): string | null => {
+      if (!normalized) return null;
+      const sites = host.state.documentSites || [];
+      // 1. Exact match on a configured site_key.
+      for (const site of sites) {
+        const key = normalizeSiteId(site.site_key);
+        if (key && key === normalized) return key;
+      }
+      // 2. The site_key appears as a whole word (handles values like
+      // "Vessel DMS (dev)" -> normalized "vessel dms dev", which contains
+      // the configured site_key "dev" as a token).
+      const tokens = normalized.split(' ');
+      for (const site of sites) {
+        const key = normalizeSiteId(site.site_key);
+        if (key && tokens.indexOf(key) >= 0) return key;
+      }
+      // 3. Match against that site's own configured display name / URL
+      // (handles a value recorded under its human label rather than its
+      // site_key, e.g. sp_site_name "Communication Site" or "NKSDocMan").
+      for (const site of sites) {
+        const key = normalizeSiteId(site.site_key);
+        const candidates = [normalizeSiteId(site.sp_site_name), normalizeSiteId(site.web_url)];
+        for (const candidate of candidates) {
+          if (candidate && (candidate === normalized || candidate.indexOf(normalized) >= 0 || normalized.indexOf(candidate) >= 0)) {
+            return key;
+          }
+        }
+      }
+      return null;
+    };
+
+    // Treat two site references as the same site only when they resolve to
+    // the same CONFIGURED site (see resolveConfiguredSiteKey) — driven
+    // entirely by the live /api/sites registry, never by a hardcoded list of
+    // site-name synonyms. A value that happens to be "local" is only the
+    // same site as "nksdocman" if the site registry itself says so;
+    // otherwise they are two distinct configured sites and must not be
+    // merged, however similar their names look (this is what previously
+    // made every legacy "local"-tagged DMS vessel show up under NKSDocMan).
+    const siteAliasMatches = (left: string | null | undefined, right: string | null | undefined): boolean => {
+      const a = normalizeSiteId(left);
+      const b = normalizeSiteId(right);
+      if (!a || !b) return false;
+      if (a === b) return true;
+      const aKey = resolveConfiguredSiteKey(a);
+      const bKey = resolveConfiguredSiteKey(b);
+      return !!(aKey && bKey && aKey === bKey);
+    };
+
     const filtered = vessels.filter(v => {
       if (vesselStatusFilter !== 'all' && (v.status || 'Active') !== vesselStatusFilter) return false;
       if (vesselTypeFilter && vesselTypeFilter !== 'all' && (v.vessel_type || '') !== vesselTypeFilter) return false;
+      if (host.state.vesselSiteFilter && host.state.vesselSiteFilter !== 'all') {
+        const selectedSiteKey = host.state.vesselSiteFilter;
+        // Rows fetched with /api/vessels?site_key=<site> were already scoped
+        // by the backend against the full configured site registry (e.g. a
+        // vessel recorded under another site key that shares the same
+        // document library) — trust that instead of re-matching them against
+        // the client's partial site list. See _filterDeletedVessels.
+        const fetchedForSite = (v as any)._fetched_for_site as string | undefined;
+        if (fetchedForSite && fetchedForSite !== 'all') {
+          if (normalizeSiteId(fetchedForSite) !== normalizeSiteId(selectedSiteKey)) return false;
+        } else {
+          // Optimistic / not-yet-refetched rows: match by site metadata.
+          const siteMatches = (v.provisioned_site_ids || []).some(id => siteAliasMatches(String(id), selectedSiteKey)) ||
+            !!(v.provisioned_site_key && siteAliasMatches(String(v.provisioned_site_key), selectedSiteKey));
+          if (!siteMatches) {
+            const hasNoSiteMetadata = !(v.provisioned_site_ids || []).length && !(v.provisioned_site_key || '').trim();
+            if (!hasNoSiteMetadata) return false;
+          }
+        }
+      }
       if (vesselsSearch) {
         const q = vesselsSearch.toLowerCase();
         return v.name.toLowerCase().includes(q) ||
@@ -1861,6 +2129,35 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
       }
       return true;
     });
+
+    const filteredDocumentSites = (host.state.documentSites || []).filter(site => {
+      const siteKey = String(site.site_key || site.site_id || site.sp_site_name || '').toLowerCase();
+      const siteName = String(site.sp_site_name || site.site_key || site.site_id || '').toLowerCase();
+      const activeKey = String(host.state.activeDocumentSite || '').toLowerCase();
+      const isDefaultSite = siteKey === activeKey || site.is_primary === true;
+      const isManagedSite =
+        isDefaultSite ||
+        siteKey.includes('dev') ||
+        siteKey.includes('communication') ||
+        siteKey.includes('local') ||
+        siteKey.includes('docman') ||
+        siteKey.includes('nks') ||
+        siteKey.includes('external') ||
+        siteName.includes('dev') ||
+        siteName.includes('communication') ||
+        siteName.includes('local') ||
+        siteName.includes('docman') ||
+        siteName.includes('nks') ||
+        siteName.includes('external');
+      return isManagedSite;
+    });
+
+    const siteOptions = Array.from(new Map(
+      filteredDocumentSites.map(site => [String(site.site_key || site.site_id || site.sp_site_name || '').toLowerCase(), site])
+    ).values()).map(site => ({
+      key: String(site.site_key || site.site_id || site.sp_site_name || ''),
+      label: site.sp_site_name || site.site_key || site.site_id || 'SharePoint Site',
+    }));
 
     // All unique vessel types for filter dropdown
     const allTypes = Array.from(new Set(vessels.map(v => v.vessel_type).filter(Boolean))) as string[];
@@ -1878,10 +2175,10 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
         {/* ── Header ── */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 28, fontWeight: 700, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <h2 style={{ margin: 0, fontSize: 28, fontWeight: 700, color: clay.text, display: 'flex', alignItems: 'center', gap: 12 }}>
               Vessels
               {vessels.length > 0 && (
-                <span style={{ background: 'linear-gradient(135deg,#0078d4,#005a9e)', color: '#fff', borderRadius: 20, padding: '3px 14px', fontSize: 14, fontWeight: 700 }}>
+                <span style={{ background: clay.accentGradient, color: '#fff', borderRadius: 20, padding: '3px 14px', fontSize: 14, fontWeight: 700, boxShadow: clay.shadowIcon }}>
                   {vessels.length}
                 </span>
               )}
@@ -1895,7 +2192,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                 </span>
               )}
             </h2>
-            <p style={{ margin: '6px 0 0', fontSize: 14, color: '#64748b' }}>
+            <p style={{ margin: '6px 0 0', fontSize: 14, color: clay.textMuted }}>
               Manage fleet vessels, provision SharePoint folders, and view documents.
             </p>
           </div>
@@ -1903,27 +2200,46 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
             <button
               onClick={() => host._goToView('vessels').catch(() => undefined)}
               title="Reload vessel list from database"
-              style={{ background: '#fff', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 18px', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 1px 3px rgba(16,24,40,.08)' }}
+              aria-label="Refresh vessel list"
+              onMouseEnter={e => { e.currentTarget.style.background = clay.surfaceHover; e.currentTarget.style.boxShadow = clay.shadowRaisedHover; }}
+              onMouseLeave={e => { e.currentTarget.style.background = clay.surface; e.currentTarget.style.boxShadow = clay.shadowRaised; }}
+              style={{ width: 42, height: 42, padding: 0, background: clay.surface, color: clay.textMuted, border: 'none', borderRadius: '50%', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxShadow: clay.shadowRaised, transition: 'all 0.18s ease' }}
             >
-              🔄 Refresh
+              <Icon iconName="Refresh" />
             </button>
             <button
               onClick={() => host._openVesselActionPicker('edit')}
-              style={{ background: 'linear-gradient(135deg, #38bdf8, #0284c7)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(2,132,199,.3)' }}
+              title="Edit vessel"
+              aria-label="Edit vessel"
+              onMouseEnter={e => { e.currentTarget.style.background = clay.surfaceHover; e.currentTarget.style.boxShadow = clay.shadowRaisedHover; }}
+              onMouseLeave={e => { e.currentTarget.style.background = clay.surface; e.currentTarget.style.boxShadow = clay.shadowRaised; }}
+              style={{ width: 42, height: 42, padding: 0, background: clay.surface, color: clay.accentDark, border: 'none', borderRadius: '50%', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxShadow: clay.shadowRaised, transition: 'all 0.18s ease' }}
             >
-              ✏️ Edit
+              <Icon iconName="Edit" />
             </button>
             <button
               onClick={() => host._openVesselActionPicker('delete')}
-              style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 20px', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(220,38,38,.3)' }}
+              title="Delete vessel"
+              aria-label="Delete vessel"
+              onMouseEnter={e => { e.currentTarget.style.background = '#f6dbd5'; e.currentTarget.style.boxShadow = '10px 10px 22px rgba(168,90,66,0.22), -10px -10px 20px rgba(255,255,255,0.92)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = clay.surface; e.currentTarget.style.boxShadow = clay.shadowRaised; }}
+              style={{ width: 42, height: 42, padding: 0, background: clay.surface, color: '#a4262c', border: 'none', borderRadius: '50%', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxShadow: clay.shadowRaised, transition: 'all 0.18s ease' }}
             >
-              🗑 Delete
+              <Icon iconName="Delete" />
             </button>
+            {/* Manual "Sync Vessels from SharePoint" button removed — the
+                backend already runs this reconciliation automatically in
+                the background on every vessel-list fetch, throttled per
+                site (see _maybeAutoSyncVesselsFromSharePoint). */}
             <button
-              onClick={host._openCreate}
-              style={{ background: 'linear-gradient(135deg, #10b981, #059669)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 20px', fontSize: 14, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 8px rgba(16,185,129,.3)' }}
+              onClick={() => host._openCreate()}
+              title="Create new vessel"
+              aria-label="Create new vessel"
+              onMouseEnter={e => { e.currentTarget.style.background = clay.accentGradientHover; e.currentTarget.style.boxShadow = '0 14px 26px rgba(199,122,62,0.42), inset 0 2px 3px rgba(255,255,255,0.45), inset 0 -3px 6px rgba(150,89,42,0.28)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = clay.accentGradient; e.currentTarget.style.boxShadow = clay.shadowButton; }}
+              style={{ width: 42, height: 42, padding: 0, background: clay.accentGradient, color: '#fff', border: 'none', borderRadius: '50%', fontSize: 18, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxShadow: clay.shadowButton, transition: 'all 0.18s ease' }}
             >
-              + New Vessel
+              <Icon iconName="Add" />
             </button>
           </div>
         </div>
@@ -1937,13 +2253,13 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
               placeholder="Search by name, IMO, type, shipyard…"
               value={vesselsSearch}
               onChange={e => host.setState({ vesselsSearch: e.target.value })}
-              style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, outline: 'none', boxSizing: 'border-box', background: '#fff' }}
+              style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: clay.radiusButton, border: 'none', fontSize: 13, outline: 'none', boxSizing: 'border-box', background: clay.surface, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.22), inset -2px -2px 4px rgba(255,255,255,0.9)', color: clay.text }}
             />
           </div>
           <select
             value={vesselStatusFilter}
             onChange={e => host.setState({ vesselStatusFilter: e.target.value })}
-            style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, background: '#fff', outline: 'none', minWidth: 130 }}
+            style={{ padding: '10px 14px', borderRadius: clay.radiusButton, border: 'none', fontSize: 13, background: clay.surface, outline: 'none', minWidth: 130, color: clay.text, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.22), inset -2px -2px 4px rgba(255,255,255,0.9)' }}
           >
             <option value="all">All Status</option>
             <option value="Active">Active</option>
@@ -1953,20 +2269,43 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
           <select
             value={vesselTypeFilter || 'all'}
             onChange={e => host.setState({ vesselTypeFilter: e.target.value })}
-            style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, background: '#fff', outline: 'none', minWidth: 140 }}
+            style={{ padding: '10px 14px', borderRadius: clay.radiusButton, border: 'none', fontSize: 13, background: clay.surface, outline: 'none', minWidth: 140, color: clay.text, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.22), inset -2px -2px 4px rgba(255,255,255,0.9)' }}
           >
             <option value="all">All Types</option>
             {allTypes.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
-          {(vesselsSearch || vesselStatusFilter !== 'all' || (vesselTypeFilter && vesselTypeFilter !== 'all')) && (
+          <select
+            value={host.state.vesselSiteFilter || 'all'}
+            onChange={e => {
+              // The vessel list fetched by _loadData is already scoped to a
+              // single site_key (see _loadData Step 1) — switching sites here
+              // must re-fetch /api/vessels?site_key=<new site>, not just
+              // re-filter the previous site's already-loaded vessels
+              // client-side (which is what this used to do, and why picking
+              // NissenKaiunExternal / NKSDocMan without hitting "Sync" showed
+              // nothing and sent no request).
+              host.setState({ vesselSiteFilter: e.target.value }, () => { void host._loadData(true); });
+            }}
+            style={{ padding: '10px 14px', borderRadius: clay.radiusButton, border: 'none', fontSize: 13, background: clay.surface, outline: 'none', minWidth: 160, color: clay.text, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.22), inset -2px -2px 4px rgba(255,255,255,0.9)' }}
+          >
+            <option value="all">All SharePoint Sites</option>
+            {siteOptions.map(site => <option key={site.key} value={site.key}>{site.label}</option>)}
+          </select>
+          {(vesselsSearch || vesselStatusFilter !== 'all' || (vesselTypeFilter && vesselTypeFilter !== 'all') || (host.state.vesselSiteFilter && host.state.vesselSiteFilter !== 'all')) && (
             <button
-              onClick={() => host.setState({ vesselsSearch: '', vesselStatusFilter: 'all', vesselTypeFilter: 'all' })}
-              style={{ background: 'transparent', color: '#64748b', border: '1px solid #cbd5e1', borderRadius: 8, padding: '9px 14px', fontSize: 13, cursor: 'pointer' }}
+              onClick={() => {
+                const siteFilterWasScoped = !!host.state.vesselSiteFilter && host.state.vesselSiteFilter !== 'all';
+                host.setState(
+                  { vesselsSearch: '', vesselStatusFilter: 'all', vesselTypeFilter: 'all', vesselSiteFilter: 'all' },
+                  () => { if (siteFilterWasScoped) void host._loadData(true); },
+                );
+              }}
+              style={{ background: 'transparent', color: clay.textMuted, border: `1px solid ${clay.accentSoft}`, borderRadius: clay.radiusButton, padding: '9px 14px', fontSize: 13, cursor: 'pointer' }}
             >
               ✕ Clear
             </button>
           )}
-          <span style={{ marginLeft: 'auto', fontSize: 12, color: '#94a3b8', fontWeight: 500 }}>
+          <span style={{ marginLeft: 'auto', fontSize: 12, color: clay.textMuted, fontWeight: 500 }}>
             {filtered.length} vessel{filtered.length !== 1 ? 's' : ''}
           </span>
         </div>
@@ -2002,7 +2341,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                     href={bannerHref}
                     target="_blank"
                     rel="noopener noreferrer"
-                    style={{ color: '#0078d4', fontWeight: 600, textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                    style={{ color: clay.accentDark, fontWeight: 600, textDecoration: 'underline', display: 'inline-flex', alignItems: 'center', gap: 3 }}
                   >
                     Open SharePoint Folder ↗
                   </a>
@@ -2013,26 +2352,38 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
           );
         })()}
 
+        {/* ── Vessel sync (SharePoint auto-discovery) status banners ── */}
+        {host.state.vesselSyncError && (
+          <div style={{ marginBottom: 12, background: '#fde7e9', border: '1px solid #fca5a5', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#a4262c', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>⚠ {host.state.vesselSyncError}</span>
+            <button onClick={() => host.setState({ vesselSyncError: null })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#a4262c', fontWeight: 700 }}>✕</button>
+          </div>
+        )}
+        {/* Success/summary banner for the manual sync removed along with the
+            button above — it only ever surfaced host.state.vesselSyncSummary,
+            which nothing else sets. The error banner above still applies to
+            _confirmDiscoveredVessel's own failures. */}
+
         {/* ── Loading State ── */}
         {isLoading ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 280, gap: 16, background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 280, gap: 16, background: clay.surface, borderRadius: clay.radiusCard, border: 'none', boxShadow: clay.shadowRaised }}>
             <div style={{
-              width: 40, height: 40, border: '3px solid #e2e8f0',
-              borderTopColor: '#0078d4', borderRadius: '50%',
+              width: 40, height: 40, border: `3px solid ${clay.accentSoft}`,
+              borderTopColor: clay.accent, borderRadius: '50%',
               animation: 'spin 0.8s linear infinite',
             }} />
-            <p style={{ margin: 0, fontSize: 14, color: '#64748b', fontWeight: 500 }}>Loading vessels from database…</p>
-            <p style={{ margin: 0, fontSize: 12, color: '#94a3b8' }}>Fetching vessel records and folder structure</p>
+            <p style={{ margin: 0, fontSize: 14, color: clay.textMuted, fontWeight: 500 }}>Loading vessels from database…</p>
+            <p style={{ margin: 0, fontSize: 12, color: clay.textMuted }}>Fetching vessel records and folder structure</p>
           </div>
         ) : filtered.length === 0 ? (
           /* ── Empty State ── */
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 280, gap: 16, background: '#fff', borderRadius: 12, border: '2px dashed #e2e8f0' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 280, gap: 16, background: clay.surface, borderRadius: clay.radiusCard, border: `2px dashed ${clay.accentSoft}` }}>
             <span style={{ fontSize: 48 }}>🚢</span>
             <div style={{ textAlign: 'center' }}>
-              <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0f172a' }}>
+              <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: clay.text }}>
                 {vessels.length === 0 ? 'No vessels yet' : 'No vessels match your filter'}
               </p>
-              <p style={{ margin: '6px 0 0', fontSize: 13, color: '#64748b' }}>
+              <p style={{ margin: '6px 0 0', fontSize: 13, color: clay.textMuted }}>
                 {vessels.length === 0
                   ? 'Create your first vessel to provision its SharePoint folder structure.'
                   : 'Try clearing the search or filters.'}
@@ -2040,8 +2391,8 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
             </div>
             {vessels.length === 0 && (
               <button
-                onClick={host._openCreate}
-                style={{ background: '#10b981', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+                onClick={() => host._openCreate()}
+                style={{ background: clay.accentGradient, color: '#fff', border: 'none', borderRadius: clay.radiusButton, padding: '10px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer', boxShadow: clay.shadowButton }}
               >
                 + Create First Vessel
               </button>
@@ -2053,8 +2404,15 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
             {filtered.map(vessel => {
               const isSelected = selectedVessel?.id === vessel.id;
               const status = vessel.status || 'Active';
-              const statusColor = status === 'Active' ? '#10b981' : status === 'In Maintenance' ? '#f59e0b' : '#ef4444';
-              const statusBg   = status === 'Active' ? '#ecfdf5' : status === 'In Maintenance' ? '#fffbeb' : '#fef2f2';
+              // "Found in SharePoint" = a real vessel folder discovered via the
+              // site's Term Store (see GET /api/vessels), not yet added as a
+              // DMS vessel record — styled like "In Maintenance" (amber, needs
+              // attention) rather than the red "danger" pill everything else
+              // falls into.
+              const isSharePointOnly = vessel.source === 'sharepoint';
+              const statusText  = status === 'Active' ? clay.pillActiveText : (status === 'In Maintenance' || isSharePointOnly) ? clay.pillWarnText : clay.pillDangerText;
+              const statusBg    = status === 'Active' ? clay.pillActiveBg : (status === 'In Maintenance' || isSharePointOnly) ? clay.pillWarnBg : clay.pillDangerBg;
+              const statusShadow = status === 'Active' ? clay.pillActiveShadow : (status === 'In Maintenance' || isSharePointOnly) ? clay.pillWarnShadow : clay.pillDangerShadow;
               const isProvisioning = folderProvisioningVesselId === vessel.id;
               const imgSrc = getVesselImageForId(vessel.id);
 
@@ -2064,77 +2422,43 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                   className="vessel-card"
                   onClick={() => host.setState({ selectedVessel: isSelected ? null : vessel })}
                   style={{
-                    background: '#fff',
-                    borderRadius: 16,
-                    border: isSelected ? '2px solid #0078d4' : '1px solid #e2e8f0',
+                    background: clay.surface,
+                    borderRadius: clay.radiusCard,
+                    border: 'none',
                     boxShadow: isSelected
-                      ? '0 0 0 4px rgba(0,120,212,0.15), 0 4px 16px rgba(0,0,0,0.10)'
-                      : '0 1px 3px rgba(16,24,40,.08)',
+                      ? `0 0 0 3px ${clay.accent}, ${clay.shadowRaisedHover}`
+                      : clay.shadowRaised,
                     overflow: 'hidden',
                     cursor: 'pointer',
                     transition: 'all 0.18s ease',
                     display: 'flex',
                     flexDirection: 'column',
                   }}
-                  onMouseEnter={e => { if (!isSelected) { e.currentTarget.style.boxShadow = '0 4px 12px rgba(16,24,40,.12)'; e.currentTarget.style.transform = 'translateY(-1px)'; } }}
-                  onMouseLeave={e => { if (!isSelected) { e.currentTarget.style.boxShadow = '0 1px 3px rgba(16,24,40,.08)'; e.currentTarget.style.transform = 'translateY(0)'; } }}
+                  onMouseEnter={e => { if (!isSelected) { e.currentTarget.style.boxShadow = clay.shadowRaisedHover; e.currentTarget.style.transform = 'translateY(-1px)'; } }}
+                  onMouseLeave={e => { if (!isSelected) { e.currentTarget.style.boxShadow = clay.shadowRaised; e.currentTarget.style.transform = 'translateY(0)'; } }}
                 >
-                  {/* Card image header */}
-                  <div style={{ position: 'relative', height: 140, overflow: 'hidden', background: '#1e3a5f' }}>
+                  {/* Card image header — professional tone-on-tone banner
+                      generated in vesselImagePool.ts (deep gradient + faint
+                      engraved texture + a minimal type glyph watermark), no
+                      cartoon illustration overlay. */}
+                  <div style={{ position: 'relative', height: 140, overflow: 'hidden', background: '#101826' }}>
                     <img
                       className="vessel-card-image"
                       src={resolveImgUrl(imgSrc)}
                       alt={vessel.name}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.9 }}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                     />
                     <div style={{
                       position: 'absolute', inset: 0,
-                      background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, rgba(15,23,42,0.8) 100%)',
+                      background: 'linear-gradient(to bottom, rgba(8,14,24,0.05) 0%, rgba(8,14,24,0.15) 55%, rgba(8,14,24,0.78) 100%)',
                     }} />
-                    {/* Lightweight SVG overlay: subtle animated ship + water + clouds. */}
-                    <div className="vessel-illustration" aria-hidden="true" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1 }}>
-                      <svg viewBox="0 0 320 140" preserveAspectRatio="none" style={{ width: '100%', height: '100%' }}>
-                        <g transform="translate(24 26)">
-                          <g className="cloud cloud-a">
-                          <ellipse cx="0" cy="0" rx="15" ry="6" fill="rgba(255,255,255,0.20)" />
-                          <ellipse cx="13" cy="-3" rx="12" ry="7" fill="rgba(255,255,255,0.20)" />
-                          <ellipse cx="25" cy="1" rx="11" ry="6" fill="rgba(255,255,255,0.20)" />
-                          </g>
-                        </g>
-                        <g transform="translate(208 18)">
-                          <g className="cloud cloud-b">
-                          <ellipse cx="0" cy="0" rx="14" ry="6" fill="rgba(255,255,255,0.16)" />
-                          <ellipse cx="12" cy="-3" rx="10" ry="6" fill="rgba(255,255,255,0.16)" />
-                          <ellipse cx="23" cy="1" rx="9" ry="5" fill="rgba(255,255,255,0.16)" />
-                          </g>
-                        </g>
-
-                        <g transform="translate(96 86)">
-                          <g className="ship-bob">
-                          <g className="ship-body">
-                            <path d="M0 18 L14 6 H128 L146 18 Z" fill="rgba(255,255,255,0.30)" />
-                            <rect x="26" y="2" width="20" height="10" rx="2" fill="rgba(255,255,255,0.24)" />
-                            <g transform="translate(52 2)"><g className="deck deck-1">
-                              <rect x="0" y="0" width="15" height="8" rx="1.5" fill="rgba(125,211,252,0.70)" />
-                            </g></g>
-                            <g transform="translate(71 3)"><g className="deck deck-2">
-                              <rect x="0" y="0" width="14" height="7" rx="1.5" fill="rgba(134,239,172,0.68)" />
-                            </g></g>
-                            <g transform="translate(89 2)"><g className="deck deck-3">
-                              <rect x="0" y="0" width="16" height="8" rx="1.5" fill="rgba(253,224,71,0.62)" />
-                            </g></g>
-                          </g>
-                          </g>
-                        </g>
-
-                      </svg>
-                    </div>
                     {/* Status badge */}
                     <span style={{
                       position: 'absolute', top: 12, right: 12,
-                      background: statusBg, color: statusColor,
+                      background: statusBg, color: statusText,
                       borderRadius: 20, padding: '3px 12px', fontSize: 12, fontWeight: 700,
-                      border: `1px solid ${statusColor}40`,
+                      letterSpacing: '0.2px',
+                      border: 'none', boxShadow: statusShadow,
                     }}>
                       {status}
                     </span>
@@ -2142,77 +2466,356 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                     {isSelected && (
                       <span style={{
                         position: 'absolute', top: 12, left: 12,
-                        background: '#0078d4', color: '#fff',
+                        background: clay.accentGradient, color: '#fff',
                         borderRadius: '50%', width: 26, height: 26,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 14, fontWeight: 700, boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+                        fontSize: 14, fontWeight: 700, boxShadow: clay.shadowIcon,
                       }}>✓</span>
                     )}
-                    {/* Vessel name */}
-                    <div style={{ position: 'absolute', bottom: 12, left: 14, right: 14 }}>
-                      <p style={{ margin: 0, fontSize: 17, fontWeight: 700, color: '#fff', textShadow: '0 1px 4px rgba(0,0,0,0.6)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {/* Vessel name + type, set on a legibility scrim */}
+                    <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '20px 16px 12px' }}>
+                      <p style={{
+                        margin: 0, fontSize: 17, fontWeight: 700, color: '#fff', letterSpacing: '0.1px',
+                        textShadow: '0 1px 6px rgba(0,0,0,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                      }}>
                         {vessel.name}
                       </p>
+                      {(vessel.vessel_type || vessel.imo) && (
+                        <p style={{
+                          margin: '3px 0 0', fontSize: 11.5, fontWeight: 600, color: 'rgba(255,255,255,0.78)',
+                          letterSpacing: '0.4px', textTransform: 'uppercase',
+                          textShadow: '0 1px 4px rgba(0,0,0,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        }}>
+                          {[vessel.vessel_type, vessel.imo ? `IMO ${vessel.imo}` : null].filter(Boolean).join(' · ')}
+                        </p>
+                      )}
                     </div>
                   </div>
 
                   {/* Card body */}
                   <div style={{ padding: '16px 18px', flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px' }}>
-                      {[['IMO', vessel.imo || '—'], ['Type', vessel.vessel_type || '—'], ['Shipyard', vessel.shipyard || '—'], ['Hull No.', vessel.hull_number || '—']].map(([label, val]) => (
-                        <div key={label}>
-                          <span style={{ fontSize: 10, color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</span>
-                          <p style={{ margin: '2px 0 0', fontSize: 13, color: '#1e293b', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{val}</p>
+                    {(() => {
+                      const draftKey = host._discoveredVesselKey(vessel);
+                      const draft = host.state.discoveredVesselDrafts[draftKey];
+                      const imoVal = isSharePointOnly ? (draft?.imo ?? vessel.imo ?? '') : (vessel.imo || '—');
+                      const hullVal = isSharePointOnly ? (draft?.hull_number ?? vessel.hull_number ?? '') : (vessel.hull_number || '—');
+                      const editableInputStyle: React.CSSProperties = {
+                        width: '100%', marginTop: 2, padding: '4px 6px', fontSize: 13, fontWeight: 600, color: clay.text,
+                        border: `1px solid ${clay.accentSoft}`, borderRadius: 6, boxSizing: 'border-box', background: '#fff',
+                      };
+
+                      // Regular ("dms"-source) vessel cards: any of these four
+                      // fields that's still empty gets a directly-editable
+                      // control here. Blurring (or, for Type, selecting) it
+                      // opens a confirmation dialog (host._requestSaveVesselField
+                      // / renderVesselFieldConfirmDialog) rather than saving
+                      // straight away, and once the PATCH /api/vessels/{id}
+                      // (host._saveVesselField) succeeds the field has a saved
+                      // value and is rendered locked/read-only below — each of
+                      // these fields can be set exactly once from the card, not
+                      // edited back and forth. This is different from the
+                      // deferred discoveredVesselDrafts/"Confirm" flow the
+                      // "Found in SharePoint" cards use above.
+                      const fieldDraft = host.state.vesselFieldDrafts[vessel.id] || {};
+                      const renderEditableField = (
+                        field: 'imo' | 'hull_number' | 'shipyard' | 'vessel_type',
+                        placeholder: string,
+                      ): React.ReactElement => {
+                        const fieldKey = `${vessel.id}:${field}`;
+                        const saving = !!host.state.vesselFieldSaving[fieldKey];
+                        const error = host.state.vesselFieldError[fieldKey];
+                        const savedVal = (vessel as any)[field] || '';
+
+                        // Already saved once — lock it. No more edits from the
+                        // card; a correction has to go through the full "Edit
+                        // Vessel" form instead of this one-shot inline field.
+                        if (savedVal) {
+                          return (
+                            <p style={{
+                              margin: '2px 0 0', fontSize: 13, fontWeight: 600, color: clay.text,
+                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                            }}>
+                              {savedVal}
+                            </p>
+                          );
+                        }
+
+                        // Fall back to '' when there's no in-progress edit yet
+                        // (the field is empty, or the field is not empty but
+                        // isn't rendered as an input at all — see above).
+                        const draftVal = fieldDraft[field] ?? '';
+                        return (
+                          <>
+                            {field === 'vessel_type' ? (
+                              <select
+                                value={draftVal}
+                                disabled={saving}
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  host._updateVesselFieldDraft(vessel, field, val);
+                                  if (val) host._requestSaveVesselField(vessel, field, val);
+                                }}
+                                style={editableInputStyle}
+                              >
+                                <option value="">{placeholder}</option>
+                                {VESSEL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                              </select>
+                            ) : (
+                              <input
+                                type="text"
+                                value={draftVal}
+                                placeholder={placeholder}
+                                disabled={saving}
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => host._updateVesselFieldDraft(vessel, field, e.target.value)}
+                                onBlur={e => host._requestSaveVesselField(vessel, field, e.target.value)}
+                                style={editableInputStyle}
+                              />
+                            )}
+                            {error && (
+                              <p style={{ margin: '2px 0 0', fontSize: 10, color: '#c0392b' }}>{error}</p>
+                            )}
+                          </>
+                        );
+                      };
+
+                      return (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px' }}>
+                          <div>
+                            <span style={{ fontSize: 10, color: clay.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>IMO</span>
+                            {isSharePointOnly ? (
+                              <input
+                                type="text"
+                                value={imoVal}
+                                placeholder="7-digit IMO"
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => host._updateDiscoveredVesselDraft(vessel, 'imo', e.target.value)}
+                                style={editableInputStyle}
+                              />
+                            ) : (
+                              // Editable only while empty, and only once — see
+                              // renderEditableField above.
+                              renderEditableField('imo', '7-digit IMO')
+                            )}
+                          </div>
+                          <div>
+                            <span style={{ fontSize: 10, color: clay.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Type</span>
+                            {!isSharePointOnly ? (
+                              renderEditableField('vessel_type', 'Select type')
+                            ) : (
+                              <p style={{ margin: '2px 0 0', fontSize: 13, color: clay.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{vessel.vessel_type || '—'}</p>
+                            )}
+                          </div>
+                          <div>
+                            <span style={{ fontSize: 10, color: clay.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Shipyard</span>
+                            {!isSharePointOnly ? (
+                              renderEditableField('shipyard', 'Shipyard')
+                            ) : (
+                              <p style={{ margin: '2px 0 0', fontSize: 13, color: clay.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{vessel.shipyard || '—'}</p>
+                            )}
+                          </div>
+                          <div>
+                            <span style={{ fontSize: 10, color: clay.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Hull No.</span>
+                            {isSharePointOnly ? (
+                              <input
+                                type="text"
+                                value={hullVal}
+                                placeholder="Hull number"
+                                onClick={e => e.stopPropagation()}
+                                onChange={e => host._updateDiscoveredVesselDraft(vessel, 'hull_number', e.target.value)}
+                                style={editableInputStyle}
+                              />
+                            ) : (
+                              renderEditableField('hull_number', 'Hull number')
+                            )}
+                          </div>
                         </div>
-                      ))}
+                      );
+                    })()}
+
+                    <div style={{ background: clay.bg, borderRadius: 12, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 4, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.2), inset -2px -2px 4px rgba(255,255,255,0.85)' }}>
+                      <span style={{ fontSize: 10, color: clay.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>SharePoint Site</span>
+                      <span style={{ fontSize: 12, color: clay.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {(() => {
+                          const sites = host.state.documentSites || [];
+                          // Prefer the site this row was actually fetched
+                          // under (_fetched_for_site — set server-side by
+                          // /api/vessels?site_key=..., already resolved
+                          // against the full configured site registry; see
+                          // _filterDeletedVessels in VesselEmail.tsx) over
+                          // provisioned_site_key. Two site_key prefixes can
+                          // legitimately share one physical SharePoint
+                          // library (e.g. "local" and "nksdocman" pointing
+                          // at the same drive_id) — a vessel recorded under
+                          // the "local" alias still lives on the site the
+                          // user knows as NKSDocMan, and provisioned_site_key
+                          // alone isn't a presentable site name.
+                          const fetchedForSite = (vessel as any)._fetched_for_site as string | undefined;
+                          const match = fetchedForSite && fetchedForSite !== 'all'
+                            ? sites.find(site => normalizeSiteId(site.site_key) === normalizeSiteId(fetchedForSite))
+                            : sites.find(site =>
+                                (vessel.provisioned_site_ids || []).some(id => siteAliasMatches(String(id), site.site_key)) ||
+                                (!!vessel.provisioned_site_key && siteAliasMatches(vessel.provisioned_site_key, site.site_key))
+                              );
+                          return match?.sp_site_name || match?.site_key || vessel.provisioned_site_key || 'Active site';
+                        })()}
+                      </span>
                     </div>
+
+                    {/* Always shown (not just when set) so a vessel whose
+                        vessel_folder_path is still missing is visibly "—"
+                        instead of silently dropping the row — most existing
+                        gaps are backfilled server-side from the Folder table
+                        at read time (see list_vessels in real_backend.py). */}
+                    <div style={{ background: clay.bg, borderRadius: 12, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 4, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.2), inset -2px -2px 4px rgba(255,255,255,0.85)' }}>
+                      <span style={{ fontSize: 10, color: clay.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Created Path</span>
+                      <span style={{ fontSize: 11, color: clay.text, fontFamily: 'monospace', wordBreak: 'break-word' }}>{vessel.vessel_folder_path || '—'}</span>
+                    </div>
+
+                    {isSharePointOnly && (() => {
+                      const confirmKey = host._discoveredVesselKey(vessel);
+                      const isConfirming = host.state.confirmingVesselKey === confirmKey;
+                      const confirmError = host.state.discoveredVesselConfirmError[confirmKey];
+                      return (
+                        <>
+                          <button
+                            onClick={e => { e.stopPropagation(); host._confirmDiscoveredVessel(vessel).catch(() => undefined); }}
+                            disabled={isConfirming}
+                            title="Save the IMO/Hull No. above and register this SharePoint folder as a DMS vessel record (no new folder is created)"
+                            style={{
+                              marginTop: 2, padding: '8px 12px', borderRadius: clay.radiusButton, border: 'none',
+                              background: clay.accentGradient, color: '#fff', fontSize: 12, fontWeight: 700,
+                              cursor: isConfirming ? 'default' : 'pointer', opacity: isConfirming ? 0.7 : 1,
+                              boxShadow: clay.shadowButton,
+                            }}
+                          >
+                            {isConfirming ? 'Confirming…' : '✓ Confirm Vessel'}
+                          </button>
+                          {confirmError && (
+                            <p style={{ margin: '2px 0 0', fontSize: 11, color: '#c0392b', fontWeight: 600 }}>
+                              ⚠ {confirmError}
+                            </p>
+                          )}
+                        </>
+                      );
+                    })()}
 
                     {/* Action buttons */}
                     <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                       <button
-                        onClick={e => {
+                        disabled={isSharePointOnly}
+                        onClick={async e => {
                           e.stopPropagation();
-                          host.setState({ vesselFilter: vessel.name, docMainFolder: null, folderPathStack: [] });
-                          void host._goToView('list');
+                          // A "Found in SharePoint" row has no DB vessel_id yet and
+                          // its vessel_folder_path is just its bare folder name, not
+                          // a real Graph drive-item id — the placeholder-id-to-real-id
+                          // resolution below is best-effort name matching and can
+                          // land on the wrong folder or none at all, which is what
+                          // produced "Couldn't load this folder" for these cards.
+                          // Confirm the vessel first (button above) so it has a real
+                          // DB record before browsing its documents.
+                          if (isSharePointOnly) return;
+                          const nav = resolveVesselDocumentNavigation(host, vessel);
+                          const navSite = nav.folderPathStack.length >= 2
+                            ? (host.state.documentSites || []).find(site =>
+                                `site:${site.site_id || site.site_key}` === nav.folderPathStack[1].id ||
+                                site.site_key === vessel.provisioned_site_key ||
+                                (vessel.provisioned_site_ids || []).some(id => String(id).toLowerCase() === String(site.site_key || '').toLowerCase())
+                              )
+                            : null;
+                          let folderPathStack = nav.folderPathStack;
+                          let resolvedDriveId: string | null = navSite?.drive_id || null;
+                          if (navSite?.site_id && nav.folderPathStack[0]?.id === 'sites_root') {
+                            try {
+                              const liveDrives = await host._loadSiteDrives(navSite.site_id);
+                              const preferredDrive = liveDrives.find(d => /^(documents|shared documents)$/i.test(d.name.trim()));
+                              const liveDrive = preferredDrive || liveDrives.find(d => d.id === navSite.drive_id) || liveDrives[0];
+                              if (liveDrive) {
+                                resolvedDriveId = liveDrive.id;
+                                folderPathStack = nav.folderPathStack.map((node, index) => index === 2
+                                  ? { id: `drive:${liveDrive.id}`, name: liveDrive.name || node.name }
+                                  : node);
+                                host.setState({
+                                  documentSites: host.state.documentSites.map(site => site.site_key === navSite.site_key
+                                    ? { ...site, drive_id: liveDrive.id, default_library_name: liveDrive.name || site.default_library_name }
+                                    : site),
+                                });
+                              }
+                            } catch {
+                              // Keep the configured drive as a fallback if live resolution is unavailable.
+                            }
+                          }
+                          // folderPathStack[3+] were built from vessel.vessel_folder_path
+                          // segments with placeholder ids (a DB vessel id or a
+                          // "<segment>-<n>" string) — neither is a real Graph
+                          // drive-item id. Folder view's live children fetch is
+                          // keyed by real id, so walk the actual site/drive tree
+                          // from root, matching each segment by name (vessel-
+                          // prefix-insensitive), and swap in the real ids we find.
+                          // Without this, "View Documents" lands on a folder id
+                          // Graph has never heard of and the listing (and every
+                          // breadcrumb slice of it) renders empty.
+                          if (navSite?.site_id && resolvedDriveId && folderPathStack[0]?.id === 'sites_root' && folderPathStack.length > 3) {
+                            const resolveSiteId = navSite.site_id;
+                            const resolveDriveId = resolvedDriveId;
+                            try {
+                              const stripPrefix = (s: string) => s.replace(/^(mv|m\/v|m\.v\.|mt|m\/t|m\.t\.)\s+/i, '');
+                              const resolvedPath = folderPathStack.slice(0, 3);
+                              let parentId = 'root';
+                              for (let i = 3; i < folderPathStack.length; i++) {
+                                const segName = folderPathStack[i].name.trim().toLowerCase();
+                                // eslint-disable-next-line no-await-in-loop
+                                const children = await host._loadAndCacheSiteFolderChildren(resolveSiteId, resolveDriveId, parentId);
+                                const match = (children || []).find((item: any) => !!item.folder && (
+                                  (item.name || '').trim().toLowerCase() === segName ||
+                                  stripPrefix((item.name || '').trim().toLowerCase()) === stripPrefix(segName)
+                                ));
+                                if (!match?.id) break;
+                                resolvedPath.push({ id: match.id, name: match.name || folderPathStack[i].name });
+                                parentId = match.id;
+                              }
+                              if (resolvedPath.length > 3) {
+                                folderPathStack = [...resolvedPath, ...folderPathStack.slice(resolvedPath.length)];
+                              }
+                            } catch {
+                              // Keep placeholder ids; Folder view will show an empty state for the unresolved tail.
+                            }
+                          }
+                          host._pushFolderNav(folderPathStack, nav.docMainFolder);
+                          host.setState({
+                            view: 'list',
+                            docViewMode: 'folder',
+                            vesselFilter: nav.vesselFilter,
+                            docScopeType: folderPathStack[0]?.id === 'sites_root' ? 'sites' : 'vessels',
+                            activeDocumentSite: navSite?.site_key || host.state.activeDocumentSite,
+                            docMainFolder: nav.docMainFolder,
+                            folderPathStack,
+                            docGroupFilter: 'all',
+                            docCategoryFilter: 'all',
+                            docGroupLevelFilter: 'all',
+                            docLeafCategoryFilter: 'all',
+                            docSubCategoryFilter: 'all',
+                            catFilter: 'all',
+                            docListPage: 0,
+                          });
+                          if (folderPathStack[0]?.id !== 'sites_root') {
+                            void host._loadFilesForVessel(vessel.name).catch(() => undefined);
+                          }
                         }}
+                        title={isSharePointOnly ? 'Confirm this vessel above to view its documents' : undefined}
                         style={{
-                          flex: 1, background: 'linear-gradient(135deg,#eff6ff,#dbeafe)', color: '#1d4ed8',
-                          border: '1px solid #bfdbfe', borderRadius: 8, padding: '8px 10px',
-                          fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                          flex: 1, background: isSharePointOnly ? clay.surface : clay.accentGradient,
+                          color: isSharePointOnly ? clay.textMuted : '#fff',
+                          border: 'none', borderRadius: clay.radiusIcon, padding: '8px 10px',
+                          fontSize: 12, fontWeight: 700, cursor: isSharePointOnly ? 'not-allowed' : 'pointer',
+                          opacity: isSharePointOnly ? 0.7 : 1,
                           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                          boxShadow: isSharePointOnly ? 'none' : clay.shadowButton,
                         }}
                       >
                         📄 View Documents
                       </button>
-                      {(() => {
-                        const provisioned = (
-                          host.state.provisionedVesselIds?.has(vessel.id) ||
-                          (host.state.rows && host.state.rows.some(r => r.vesselName && r.vesselName.toLowerCase() === vessel.name.toLowerCase())) ||
-                          vessel.is_provisioned === true
-                        );
-                        return (
-                          <button
-                            disabled={!!folderProvisioningVesselId && folderProvisioningVesselId !== vessel.id}
-                            onClick={e => {
-                              e.stopPropagation();
-                              host.setState({ spoProvisionDialog: { vessel, provisioning: isProvisioning, done: false, error: null } });
-                            }}
-                            style={{
-                              flex: 1,
-                              border: provisioned ? '1px solid #bbf7d0' : '1px solid #e2e8f0',
-                              borderRadius: 8, padding: '8px 10px',
-                              fontSize: 12, fontWeight: 700,
-                              cursor: (folderProvisioningVesselId && folderProvisioningVesselId !== vessel.id) ? 'not-allowed' : 'pointer',                              background: isProvisioning ? '#f0f9ff' : provisioned ? 'linear-gradient(135deg,#f0fdf4,#dcfce7)' : '#f8fafc',
-                              color: isProvisioning ? '#0284c7' : provisioned ? '#15803d' : '#334155',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-                            }}
-                          >
-                            {isProvisioning ? (
-                              <><span style={{ display: 'inline-block', width: 11, height: 11, border: '2px solid #0284c7', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} /> Creating…</>
-                            ) : provisioned ? '✓ Provisioned' : '📁 Provision'}
-                          </button>
-                        );
-                      })()}
                       <a
                         href={getSpoVesselFolderUrl(host, vessel)}
                         target="_blank"
@@ -2221,8 +2824,9 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                         title="Open in SharePoint"
                         style={{
                           width: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          border: '1px solid #e2e8f0', borderRadius: 8, background: '#f8fafc',
-                          color: '#0078d4', fontSize: 14, textDecoration: 'none',
+                          border: 'none', borderRadius: clay.radiusIcon, background: clay.surface,
+                          color: clay.accentDark, fontSize: 14, textDecoration: 'none',
+                          boxShadow: clay.shadowRaised,
                         }}
                       >
                         ↗
@@ -2243,133 +2847,22 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
         <style>{`
           @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-          @keyframes vesselBob {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-3.5px); }
-          }
-
-          @keyframes vesselImageBob {
-            0%, 100% { transform: scale(1.03) translateY(0); }
-            50% { transform: scale(1.03) translateY(-4px); }
-          }
-
-          @keyframes waterDriftA {
-            0% { transform: translateX(-120px); }
-            100% { transform: translateX(0); }
-          }
-
-          @keyframes waterDriftB {
-            0% { transform: translateX(0); }
-            100% { transform: translateX(120px); }
-          }
-
-          @keyframes deckSwayA {
-            0%, 100% { transform: rotate(0deg); }
-            50% { transform: rotate(0.5deg); }
-          }
-
-          @keyframes deckSwayB {
-            0%, 100% { transform: rotate(0deg); }
-            50% { transform: rotate(-0.45deg); }
-          }
-
-          @keyframes deckSwayC {
-            0%, 100% { transform: rotate(0deg); }
-            50% { transform: rotate(0.4deg); }
-          }
-
-          @keyframes cloudDriftA {
-            0%, 100% { transform: translateX(0); }
-            50% { transform: translateX(8px); }
-          }
-
-          @keyframes cloudDriftB {
-            0%, 100% { transform: translateX(0); }
-            50% { transform: translateX(-6px); }
-          }
-
-          .vessel-card .ship-bob {
-            transform-box: fill-box;
-            transform-origin: center center;
-            animation: vesselBob 3s ease-in-out infinite;
-            will-change: transform;
-          }
-
+          /* Vessel card banner: a restrained, professional zoom on hover —
+             no cartoon bob/sway/drift animation, just a subtle Ken-Burns-style
+             scale so the card feels alive without looking playful. */
           .vessel-card .vessel-card-image {
-            animation: vesselImageBob 3s ease-in-out infinite;
-            transform-origin: center center;
+            transition: transform 0.4s ease;
+            transform: scale(1.0);
             will-change: transform;
           }
 
-          .vessel-card .water-track-a {
-            animation: waterDriftA 6s linear infinite;
-            will-change: transform;
-          }
-
-          .vessel-card .water-track-b {
-            animation: waterDriftB 6s linear infinite;
-            will-change: transform;
-          }
-
-          .vessel-card .deck {
-            transform-box: fill-box;
-            transform-origin: center bottom;
-            will-change: transform;
-          }
-
-          .vessel-card .deck-1 {
-            animation: deckSwayA 4.1s ease-in-out infinite;
-            animation-delay: -0.45s;
-          }
-
-          .vessel-card .deck-2 {
-            animation: deckSwayB 4.6s ease-in-out infinite;
-            animation-delay: -1.1s;
-          }
-
-          .vessel-card .deck-3 {
-            animation: deckSwayC 4.0s ease-in-out infinite;
-            animation-delay: -0.7s;
-          }
-
-          .vessel-card .cloud {
-            transform-box: fill-box;
-            transform-origin: center center;
-            will-change: transform;
-          }
-
-          .vessel-card .cloud-a {
-            animation: cloudDriftA 14s ease-in-out infinite;
-          }
-
-          .vessel-card .cloud-b {
-            animation: cloudDriftB 16s ease-in-out infinite;
-            animation-delay: -1.4s;
-          }
-
-          .vessel-card:hover .ship-bob,
-          .vessel-card:hover .vessel-card-image,
-          .vessel-card:hover .water-track-a,
-          .vessel-card:hover .water-track-b,
-          .vessel-card:hover .deck-1,
-          .vessel-card:hover .deck-2,
-          .vessel-card:hover .deck-3,
-          .vessel-card:hover .cloud-a,
-          .vessel-card:hover .cloud-b {
-            animation-play-state: paused;
+          .vessel-card:hover .vessel-card-image {
+            transform: scale(1.045);
           }
 
           @media (prefers-reduced-motion: reduce) {
-            .vessel-card .ship-bob,
-            .vessel-card .vessel-card-image,
-            .vessel-card .water-track-a,
-            .vessel-card .water-track-b,
-            .vessel-card .deck-1,
-            .vessel-card .deck-2,
-            .vessel-card .deck-3,
-            .vessel-card .cloud-a,
-            .vessel-card .cloud-b {
-              animation: none !important;
+            .vessel-card .vessel-card-image {
+              transition: none !important;
               transform: none !important;
             }
           }
@@ -2380,6 +2873,9 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
 
         {/* ── Provision Dialog ── */}
         {renderProvisionDialog(host)}
+
+        {/* ── Vessel Field Save Confirm Dialog ── */}
+        {renderVesselFieldConfirmDialog(host)}
 
         {/* Modals */}
         {modal === 'create' && host._renderVesselForm('create')}

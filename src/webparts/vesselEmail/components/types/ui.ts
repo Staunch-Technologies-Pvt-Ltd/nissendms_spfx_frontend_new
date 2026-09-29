@@ -3,6 +3,9 @@
 export interface FormState {
   name: string; imo: string; shipyard: string; hull_number: string; vessel_type: string;
   target_site_ids?: string[];
+  site_key?: string;
+  parent_folder_path?: string;
+  subfolders?: string[];
 }
 
 export interface DocPreviewItem {
@@ -38,11 +41,23 @@ export interface DeletedNode {
   shipyard?: string;
   hull_number?: string;
   vessel_type?: string;
+  /** Name of the SharePoint site where this item was deleted from. */
+  site_name?: string;
+  /** Site key identifier (e.g. nissenkaiun_external, dev). */
+  site_key?: string;
   /** True when the item was soft-deleted via Graph and now lives in the SPO site recycle bin. */
   in_spo_recycle_bin?: boolean;
   /** The SPO recycle bin item ID (different from the drive item ID) — populated after soft-delete.
    *  Used for permanent deletion via DELETE /sites/{siteId}/recycleBin/{recycleBinItemId}. */
   recycle_bin_item_id?: string;
+  /** Display name of the user who performed the deletion (from deletion_log). */
+  deleted_by_name?: string | null;
+  /** Email of the user who performed the deletion (from deletion_log). */
+  deleted_by_email?: string | null;
+  /** Optional reason the deleting user gave, captured at deletion time. */
+  reason?: string | null;
+  /** Server-decided Recycle Bin tab this item belongs in: vessel / normal_folder / file. */
+  classification?: 'vessel' | 'normal_folder' | 'file';
 }
 
 export interface DocumentItem {
@@ -159,7 +174,7 @@ export interface AlertItem {
     | 'subfolder_anomaly'      // unexpected subfolder inside a vessel's category
     | 'crud_operation'
     | 'email_alert';
-  alert_category?: 'dms' | 'unclassified' | 'classified' | 'crud' | 'email';
+  alert_category?: 'dms' | 'crud' | 'email';
   read: boolean;
   read_at?: string | null;
   created_at: string | null;
@@ -168,15 +183,33 @@ export interface AlertItem {
   anomaly_id?: number;
   item_type?: 'folder' | 'file';
   spo_path?: string;
+  // Deletion-popup fields (populated for vessel_deleted / document_deleted,
+  // sourced from the deletion_log table — see GET /api/alerts/all).
+  site_name?: string | null;
+  reason?: string | null;
+  recycle_bin_item_id?: string | null;
+  classification?: 'vessel' | 'normal_folder' | 'file';
+}
+
+export interface UserSitePermissionItem {
+  site_key: string;
+  can_view: boolean;
+  can_upload: boolean;
+  can_tag_on_upload: boolean;
 }
 
 export interface UserItem {
   id: string;
   name: string;
   email: string;
-  role: 'Administrator' | 'Manager' | 'User' | 'Reviewer';
+  // The backend's durable role model (db/models.py UserProfile.role +
+  // services/authorization.py) is a simple Admin/User pair — ADMIN_EMAILS
+  // always resolves to 'Admin' regardless of the stored value. Keep this in
+  // sync with RoleUpdateIn in backend/app/main.py if that ever changes.
+  role: 'Admin' | 'User';
   status: 'Active' | 'Inactive';
   lastLogin: string;
+  permissions?: UserSitePermissionItem[];
 }
 
 export interface FolderAnomalyItem {

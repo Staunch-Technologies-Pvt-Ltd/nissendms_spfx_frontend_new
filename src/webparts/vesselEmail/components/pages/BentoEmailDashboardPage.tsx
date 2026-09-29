@@ -21,7 +21,7 @@ export function renderBentoEmailDashboardPage(host: VesselEmail): React.ReactEle
       bentoLogs, panelLoading, bentoStatusFilter, bentoSearch,
       bentoComposeOpen, bentoComposeForm, bentoComposeBusy, bentoComposeMsg, bentoComposeErr,
       bentoDetailLog, vessels, bentoUploadFile, bentoUploadVessel, bentoUploadTag, bentoUploadBusy,
-      bentoUploadMsg, bentoUploadErr,
+      bentoUploadMsg, bentoUploadErr, bentoClearAllBusy, bentoClearAllErr,
     } = host.state;
 
     const totalCount = bentoLogs.length;
@@ -77,7 +77,27 @@ export function renderBentoEmailDashboardPage(host: VesselEmail): React.ReactEle
             >
               ✉ Compose & Dispatch Email
             </button>
+            <button
+              disabled={bentoClearAllBusy || totalCount === 0}
+              style={{
+                background: 'rgba(239, 68, 68, 0.15)', color: '#fca5a5', border: '1px solid rgba(239, 68, 68, 0.4)',
+                borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700,
+                cursor: (bentoClearAllBusy || totalCount === 0) ? 'not-allowed' : 'pointer',
+                opacity: (bentoClearAllBusy || totalCount === 0) ? 0.6 : 1,
+              }}
+              onClick={() => {
+                if (!confirm(`Clear all ${totalCount} AI Bento Email log${totalCount === 1 ? '' : 's'}? This cannot be undone.`)) return;
+                void host._clearAllBentoLogs();
+              }}
+            >
+              {bentoClearAllBusy ? 'Clearing…' : '🗑 Clear All'}
+            </button>
           </div>
+          {bentoClearAllErr && (
+            <div style={{ marginTop: 12, background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, padding: '8px 14px', fontSize: 12, color: '#fca5a5' }}>
+              {bentoClearAllErr}
+            </div>
+          )}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginTop: 22 }}>
             <div style={{ background: 'rgba(255,255,255,0.06)', borderRadius: 10, padding: '14px 18px', border: '1px solid rgba(255,255,255,0.1)' }}>
@@ -140,5 +160,5 @@ export function renderBentoEmailDashboardPage(host: VesselEmail): React.ReactEle
           </table>
         </div>
       </div>
-    );
+    );
 }
