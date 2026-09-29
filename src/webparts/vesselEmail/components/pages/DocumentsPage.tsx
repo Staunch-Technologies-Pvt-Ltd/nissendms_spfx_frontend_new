@@ -2911,8 +2911,21 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // already has a fallback path for a vessel whose live folder hasn't been
     // walked yet.
     const allSiteVesselNamesByLower = new Map<string, string>();
+    // Only offer DB vessels that belong to the viewed site. A vessel that is
+    // provisioned to a different site (e.g. a Communication-site vessel like
+    // Piessy) must not show up while browsing NKSDocMan / NissenKaiunExternal.
+    // Vessels with no provisioning metadata at all are still offered, and
+    // folder-confirmed names (siteVesselNames, below) are always kept.
+    const vesselBelongsToViewedSite = (v: VesselRecord): boolean => {
+      if (docScopeType !== 'sites' || viewedSiteIds.length === 0) return true;
+      const provisioned = [...(v.provisioned_site_ids || []), v.provisioned_site_key]
+        .map(id => String(id || '').trim())
+        .filter(Boolean);
+      if (provisioned.length === 0) return true;
+      return isVesselProvisionedToViewedSite(v);
+    };
     (vessels || []).forEach(v => {
-      if (v.name && v.name.trim()) allSiteVesselNamesByLower.set(v.name.trim().toLowerCase(), v.name.trim());
+      if (v.name && v.name.trim() && vesselBelongsToViewedSite(v)) allSiteVesselNamesByLower.set(v.name.trim().toLowerCase(), v.name.trim());
     });
     siteVesselNames.forEach(name => allSiteVesselNamesByLower.set(name.trim().toLowerCase(), name));
     const siteVesselOptions = Array.from(allSiteVesselNamesByLower.values())
@@ -5585,7 +5598,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             )}
             <select
               aria-label="Main folder filter"
-              value={docCategoryFilter !== 'all' ? docCategoryFilter : (breadcrumbMainFolderName && mainFolderOptions.indexOf(breadcrumbMainFolderName) !== -1 ? breadcrumbMainFolderName : 'all')}
+              value={docCategoryFilter !== 'all' ? docCategoryFilter : ((breadcrumbMainFolderName && mainFolderOptions.find(o => o.trim().toLowerCase() === breadcrumbMainFolderName.trim().toLowerCase())) || 'all')}
               onChange={e => {
                 const val = e.target.value;
                 // "All main folders" while inside a live main folder: go back to
