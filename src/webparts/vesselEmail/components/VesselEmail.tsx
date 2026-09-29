@@ -3122,6 +3122,31 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   // is what was re-triggering the throttle instead of letting it clear.
   public _graphThrottledUntil: number = 0;
 
+  // Global cap on simultaneous /children requests. Render-time walks (e.g. the
+  // Documents Sub-folder dropdown) and site switches used to fire dozens at
+  // once, tripping Graph 429 throttling. Extra requests wait their turn here.
+  private _childrenInFlight: number = 0;
+  private _childrenWaiters: Array<() => void> = [];
+  private async _withChildrenSlot<T>(signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> {
+    while (this._childrenInFlight >= 4) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise<void>(resolve => { this._childrenWaiters.push(resolve); });
+      if (signal?.aborted) {
+        const abortErr: any = new Error('REQUEST_ABORTED');
+        abortErr.name = 'AbortError';
+        throw abortErr;
+      }
+    }
+    this._childrenInFlight++;
+    try {
+      return await fn();
+    } finally {
+      this._childrenInFlight--;
+      const next = this._childrenWaiters.shift();
+      if (next) next();
+    }
+  }
+
   public async _loadSiteFolderChildren(
     siteId: string,
     driveId: string,
@@ -3136,10 +3161,14 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         .split('/')
         .map(part => encodeURIComponent(part))
         .join('/');
-      const data = await this._fetchJson(
-        `${this._base()}/api/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/folders/${encodedFolderRef}/children`,
-        signal
-      );
+      const data = await this._withChildrenSlot(signal, async () => {
+        // Throttling may have started while this request was queued.
+        if (Date.now() < this._graphThrottledUntil) throw new Error(`THROTTLED_429:${Math.max(1, Math.ceil((this._graphThrottledUntil - Date.now()) / 1000))}`);
+        return this._fetchJson(
+          `${this._base()}/api/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/folders/${encodedFolderRef}/children`,
+          signal
+        );
+      });
       return {
         items: Array.isArray(data?.items) ? data.items : [],
         summaryCounts: data?.summary_counts || null,
@@ -3171,7 +3200,49 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   // "Show N more" control in that grid; a plain Set + forceUpdate() rather
   // than state, matching how _siteDrivesCache itself is handled.
   public _systemLibrariesRevealed: Set<string> = new Set();
-  public _siteFolderItemsCache: Map<string, { items: any[]; loading?: boolean; parentPath?: string; error?: boolean }> = new Map();
+  public _siteFolderItemsCache: Map<string, { items: any[]; loading?: boolean; parentPath?: string; error?: boolean; retryAt?: number }> = new Map();
+
+  /**
+   * Server-computed folder counts for the Documents folder tiles — the same
+   * /subfolder-counts endpoint the Sites page uses. The live recursive tree
+   * (documentLiveFolders) is capped at 2000 items server-side, so counts
+   * derived from it are partial on large libraries.
+   */
+  public _folderCountsCache: Map<string, {
+    ts: number;
+    loading: boolean;
+    counts: Record<string, { direct_subfolders: number; direct_files: number; total_subfolders: number; total_files: number }>;
+    summary: { direct_folders: number; direct_files: number; total_folders: number; total_files: number } | null;
+  }> = new Map();
+
+  public _getOrLoadFolderCounts(siteId: string, driveId: string, folderId: string = 'root'): {
+    counts: Record<string, { direct_subfolders: number; direct_files: number; total_subfolders: number; total_files: number }>;
+    summary: { direct_folders: number; direct_files: number; total_folders: number; total_files: number } | null;
+  } | null {
+    if (!siteId || !driveId) return null;
+    const key = `${siteId}::${driveId}::${folderId}`;
+    const hit = this._folderCountsCache.get(key);
+    if (hit && (hit.loading || Date.now() - hit.ts < 60000)) {
+      return hit.ts > 0 ? hit : null;
+    }
+    // Counts are cosmetic — never add load while Graph is throttling.
+    if (Date.now() < this._graphThrottledUntil) return hit && hit.ts > 0 ? hit : null;
+    const entry = { ts: hit?.ts || 0, loading: true, counts: hit?.counts || {}, summary: hit?.summary || null };
+    this._folderCountsCache.set(key, entry);
+    const url = `${this._base()}/api/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/folders/${encodeURIComponent(folderId)}/subfolder-counts`;
+    this._withChildrenSlot(undefined, () => this._fetchJson(url)).then(data => {
+      this._folderCountsCache.set(key, { ts: Date.now(), loading: false, counts: data?.counts || {}, summary: data?.summary_counts || null });
+      this._scheduleForceUpdate();
+    }).catch((err: any) => {
+      if (typeof err?.message === 'string' && err.message.indexOf('THROTTLED_429:') === 0) {
+        const retryAfterSec = Number(err.message.split(':')[1]) || 60;
+        this._graphThrottledUntil = Math.max(this._graphThrottledUntil, Date.now() + retryAfterSec * 1000);
+      }
+      // Keep any previous counts; retry after the TTL.
+      this._folderCountsCache.set(key, { ts: Date.now(), loading: false, counts: entry.counts, summary: entry.summary });
+    });
+    return entry.ts > 0 ? entry : null;
+  }
   private _siteFolderChildPrefetched: Set<string> = new Set();
   // Folder ids already auto-drilled-through (see _getOrLoadSiteFolderChildren
   // below): a folder whose only content is exactly one sub-folder and no
@@ -3237,7 +3308,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     if (cached && cached.loading && cached._promise) return cached._promise;
 
     const promise: Promise<any[]> = this._loadSiteFolderChildren(siteId, driveId, folderId, signal).then(res => {
-      const loadedEntry = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
+      const loadedEntry: { items: any[]; loading: boolean; parentPath: string; error: boolean; retryAt?: number } = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
+      if (res.throttled) loadedEntry.retryAt = Math.max(this._graphThrottledUntil, Date.now() + 1000);
       this._siteFolderItemsCache.set(key, loadedEntry);
       this._scheduleForceUpdate();
       return loadedEntry.items;
@@ -3387,7 +3459,12 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     if (force) {
       this._siteFolderItemsCache.delete(key);
     } else if (this._siteFolderItemsCache.has(key)) {
-      return this._siteFolderItemsCache.get(key)!;
+      const hit = this._siteFolderItemsCache.get(key)!;
+      // A listing that failed only because Graph was throttling is not a real
+      // result — once the cooldown ends, load it again instead of showing
+      // "Couldn't load this folder" until the user presses Retry.
+      if (!(hit.error && hit.retryAt && Date.now() >= hit.retryAt)) return hit;
+      this._siteFolderItemsCache.delete(key);
     }
 
     // The recursive live-tree load already contains every folder and file in
@@ -3454,7 +3531,11 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         this._siteFolderItemsCache.delete(key);
         return;
       }
-      const loadedEntry = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
+      const loadedEntry: { items: any[]; loading: boolean; parentPath: string; error: boolean; retryAt?: number } = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
+      if (res.throttled) {
+        loadedEntry.retryAt = Math.max(this._graphThrottledUntil, Date.now() + 1000);
+        window.setTimeout(() => this._scheduleForceUpdate(), Math.max(0, loadedEntry.retryAt - Date.now()) + 250);
+      }
       this._siteFolderItemsCache.set(key, loadedEntry);
       if (res.folderId && res.folderId !== folderId) {
         const resolvedKey = `${siteId}::${driveId}::${res.folderId}`;
@@ -6458,6 +6539,17 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       // instead of throwing it away and landing on the empty vessels root.
       const wasLiveLibraryScope = isLiveScope && (!isFirstEntrySinceMount || this._initialDocumentsRootReady);
       if (wasLiveLibraryScope) {
+        // First entry since a page load: the breadcrumb was seeded from
+        // sessionStorage (a vessel folder browsed before the refresh) while the
+        // filters below are reset to "All vessels" / "All main folders", so the
+        // two disagreed (breadcrumb showed an old vessel with All vessels
+        // selected). Land on the library root (site + drive) instead; later
+        // re-entries in the same session keep the live browsing position.
+        const stack = this.state.folderPathStack || [];
+        const rootLen = stack[0]?.id === 'sites_root' ? 3
+          : ((stack[0]?.id === 'lib:shared_documents' || stack[0]?.id === 'lib:documents') ? 1 : -1);
+        const resetToRoot = isFirstEntrySinceMount && rootLen >= 0 && stack.length > rootLen;
+        const rootStack = resetToRoot ? stack.slice(0, rootLen) : stack;
         this.setState({
           textFilter: '',
           vesselFilter: 'all',
@@ -6466,9 +6558,15 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           docGroupLevelFilter: 'all',
           docLeafCategoryFilter: 'all',
           docSubCategoryFilter: 'all',
+          docSubfolderOtherFilter: 'all',
           catFilter: 'all',
           attachmentFilter: 'all',
           docListPage: 0,
+          folderPathStack: rootStack,
+          folderNavHistory: resetToRoot
+            ? [{ folderPathStack: rootStack, docMainFolder: this.state.docMainFolder }]
+            : this.state.folderNavHistory,
+          folderNavIndex: resetToRoot ? 0 : this.state.folderNavIndex,
         });
       } else {
         this.setState({

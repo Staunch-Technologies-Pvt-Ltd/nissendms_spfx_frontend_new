@@ -24,6 +24,13 @@ interface FolderTreeSelectProps {
    *  where in the tree it lives when the same name could appear at more than
    *  one level). */
   onChange: (name: string, path: string[]) => void;
+  /** Optional lazy loader. When given, a folder whose children aren't in
+   *  `tree` yet still shows the expand arrow (if `canLoadChildren` allows);
+   *  opening it fetches that folder's direct sub-folders on demand, so every
+   *  nested level is reachable from the arrow without navigating into each
+   *  folder one by one — and without walking the whole tree up front. */
+  loadChildren?: (node: FolderTreeNode, path: string[]) => Promise<FolderTreeNode[]>;
+  canLoadChildren?: (node: FolderTreeNode) => boolean;
   placeholder?: string;
   allLabel?: string;
   title?: string;
@@ -65,7 +72,7 @@ function nodeOrDescendantMatches(node: FolderTreeNode, query: string): boolean {
  *  matches a path SEGMENT anywhere in a row's folder path, so picking a
  *  heading already includes everything nested under it. */
 export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactElement {
-  const { tree, value, onChange, disabled } = props;
+  const { tree, value, onChange, disabled, loadChildren, canLoadChildren } = props;
   const placeholder = props.allLabel || props.placeholder || 'All sub-folders';
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState('');
@@ -97,12 +104,17 @@ export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactEleme
       // time — matches the "default state: collapsed at top level" spec
       // rather than remembering the last session's expand state.
       setSearch('');
-      setManualExpanded(new Set());
       const t = setTimeout(() => searchRef.current?.focus(), 0);
       return () => clearTimeout(t);
     }
     return undefined;
   }, [open]);
+
+  // Lazily fetched children, keyed like `manualExpanded` (ancestor id trail).
+  // `null` = a load finished and found no sub-folders (arrow goes away).
+  const [lazyChildren, setLazyChildren] = React.useState<Record<string, FolderTreeNode[] | null>>({});
+  const [loadingKeys, setLoadingKeys] = React.useState<Set<string>>(new Set());
+  const inFlight = React.useRef<Set<string>>(new Set());
 
   const normSearch = search.trim().toLowerCase();
   const searchExpanded = React.useMemo(() => {
@@ -112,14 +124,44 @@ export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactEleme
     return out;
   }, [tree, normSearch]);
 
-  const isExpanded = (key: string): boolean => manualExpanded.has(key) || searchExpanded.has(key);
-  const toggleExpanded = (key: string): void => {
-    setManualExpanded(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      return next;
-    });
+  // Tree is always fully expanded — no arrows/dropdowns to click.
+  const isExpanded = (_key: string): boolean => true;
+  const mergeChildren = (own: FolderTreeNode[], extra: FolderTreeNode[] | null | undefined): FolderTreeNode[] => {
+    if (!extra || extra.length === 0) return own;
+    const seen = new Set(own.map(c => c.name.trim().toLowerCase()));
+    return [...own, ...extra.filter(c => !seen.has(c.name.trim().toLowerCase()))];
   };
+  const lazyEligible = (node: FolderTreeNode): boolean =>
+    !!loadChildren && (!canLoadChildren || canLoadChildren(node));
+  const ensureLoaded = (node: FolderTreeNode, key: string, path: string[]): void => {
+    if (!lazyEligible(node) || key in lazyChildren || inFlight.current.has(key)) return;
+    inFlight.current.add(key);
+    setLoadingKeys(prev => new Set(prev).add(key));
+    loadChildren!(node, path)
+      .then(kids => setLazyChildren(prev => ({ ...prev, [key]: kids && kids.length > 0 ? kids : null })))
+      .catch(() => setLazyChildren(prev => ({ ...prev, [key]: null })))
+      .then(() => {
+        inFlight.current.delete(key);
+        setLoadingKeys(prev => { const n = new Set(prev); n.delete(key); return n; });
+      });
+  };
+  // While the popup is open, eagerly load every nested level (a few requests
+  // at a time) so the whole hierarchy becomes visible without any clicking.
+  React.useEffect(() => {
+    if (!open || !loadChildren) return;
+    const MAX_IN_FLIGHT = 6;
+    const walk = (nodes: FolderTreeNode[], trail: string[], namePath: string[]): void => {
+      for (const node of nodes) {
+        if (inFlight.current.size >= MAX_IN_FLIGHT) return;
+        const key = [...trail, node.id].join('/');
+        const ownPath = [...namePath, node.name];
+        ensureLoaded(node, key, ownPath);
+        walk(mergeChildren(node.children, lazyChildren[key]), [...trail, node.id], ownPath);
+      }
+    };
+    walk(tree, [], []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, tree, lazyChildren]);
 
   const select = (name: string, path: string[]): void => {
     onChange(name, path);
@@ -136,7 +178,13 @@ export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactEleme
       const key = [...trail, node.id].join('/');
       const ownPath = [...namePath, node.name];
       const expanded = isExpanded(key);
-      const hasChildren = node.children.length > 0;
+      // Merge in anything fetched on demand for this node.
+      const lazyKids = lazyChildren[key];
+      const kids = mergeChildren(node.children, lazyKids);
+      const loading = loadingKeys.has(key);
+      // Arrow shows for known children, or (not yet loaded) any live folder
+      // that could have some — it disappears again if the load finds none.
+      const hasChildren = kids.length > 0 || loading || (lazyEligible(node) && !(key in lazyChildren));
       const isSelected = value !== 'all' && value.trim().toLowerCase() === node.name.trim().toLowerCase();
       const selfMatches = !normSearch || node.name.toLowerCase().includes(normSearch);
       return (
@@ -160,24 +208,17 @@ export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactEleme
             }}
             onMouseDown={e => e.preventDefault()}
             onClick={() => select(node.name, ownPath)}
-            title={hasChildren ? `${node.name} — click to filter, use the arrow to open ${node.children.length} nested folder${node.children.length === 1 ? '' : 's'}` : node.name}
+            title={node.name}
           >
+            {/* Branch connector instead of an expand arrow — nesting is always shown. */}
             <span
-              className={hasChildren ? 'fts-toggle' : undefined}
-              onClick={hasChildren ? (e => { e.stopPropagation(); toggleExpanded(key); }) : undefined}
-              style={{
-                width: 20, height: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 11, color: hasChildren ? 'var(--vdms-text)' : 'var(--vdms-text-muted)',
-                visibility: hasChildren ? 'visible' : 'hidden',
-                cursor: hasChildren ? 'pointer' : 'default', flexShrink: 0, borderRadius: 5,
-                transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                transition: 'transform 0.12s ease, background 0.12s ease',
-              }}
+              aria-hidden="true"
+              style={{ width: 14, flexShrink: 0, textAlign: 'center', fontSize: 11, color: 'var(--vdms-text-muted)' }}
             >
-              ▸
+              {depth > 0 ? '└' : ''}
             </span>
             <span style={{ fontSize: 13, flexShrink: 0, opacity: hasChildren ? 1 : 0.7 }}>
-              {hasChildren ? (expanded ? '📂' : '📁') : '📄'}
+              {kids.length > 0 ? '📂' : '📁'}
             </span>
             <span
               style={{
@@ -190,19 +231,22 @@ export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactEleme
             >
               {node.name}
             </span>
-            {hasChildren && (
+            {loading && (
+              <span style={{ fontSize: 11, color: 'var(--vdms-text-muted)', flexShrink: 0 }}>…</span>
+            )}
+            {kids.length > 0 && (
               <span
                 style={{
                   fontSize: 10.5, fontWeight: 600, color: 'var(--vdms-text-muted)', background: 'var(--vdms-surface-alt)',
                   borderRadius: 999, padding: '1px 6px', flexShrink: 0,
                 }}
               >
-                {countDescendants(node)}
+                {countDescendants({ ...node, children: kids })}
               </span>
             )}
           </div>
           {hasChildren && expanded && (
-            <div>{renderNodes(node.children, [...trail, node.id], ownPath, depth + 1)}</div>
+            <div>{renderNodes(kids, [...trail, node.id], ownPath, depth + 1)}</div>
           )}
         </div>
       );
@@ -236,7 +280,7 @@ export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactEleme
         <div
           style={{
             position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 1000,
-            width: 320, maxHeight: 380, display: 'flex', flexDirection: 'column',
+            width: 360, maxHeight: 480, display: 'flex', flexDirection: 'column',
             background: 'var(--vdms-surface)', border: '1px solid var(--vdms-border)', borderRadius: 10,
             boxShadow: '0 8px 28px rgba(0,0,0,0.18)', overflow: 'hidden',
           }}
