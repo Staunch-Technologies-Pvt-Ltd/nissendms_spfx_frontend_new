@@ -5992,7 +5992,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         `}</style>
         {/* Sticky header: breadcrumb + module header + filter toolbar stay pinned
             while the file table scrolls underneath. */}
-        <div style={{ position: 'sticky', top: 0, zIndex: 30, background: clay.bg, display: 'flex', flexDirection: 'column', gap: 16, paddingBottom: 8, boxShadow: '0 6px 8px -6px rgba(0,0,0,0.18)' }}>
+        {/* The AppLayout scroller has padding (--vdms-content-pad). A sticky `top: 0`
+            pins at the scroller's padding edge, leaving that strip open above the header so
+            scrolled rows show through. Pull the header up by the padding and re-add it as
+            paddingTop so the resting layout is unchanged and nothing shows above it. */}
+        <div style={{ position: 'sticky', top: 'calc(-1 * var(--vdms-content-pad, 0px))', marginTop: 'calc(-1 * var(--vdms-content-pad, 0px))', zIndex: 30, background: clay.bg, display: 'flex', flexDirection: 'column', gap: 16, paddingTop: 'var(--vdms-content-pad, 0px)', paddingBottom: 8, boxShadow: '0 6px 8px -6px rgba(0,0,0,0.18)' }}>
         {/* Breadcrumb Navigation Trail */}
         <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           {/* Back / Forward navigation buttons */}
