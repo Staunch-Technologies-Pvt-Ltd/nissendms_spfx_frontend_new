@@ -16,9 +16,8 @@ import { IVesselEmailProps } from './components/IVesselEmailProps';
 export interface IVesselEmailWebPartProps {
   apiBaseUrl: string;
   apiToken: string;
-  // Base URL of the standalone SharePoint AI Migration Assistant backend
-  // (frontend/src/webparts/vesselEmail/components/migrationAssistant/README.md)
-  // — a separate FastAPI process from apiBaseUrl above.
+  // Optional override for the Migration Assistant API. Blank = use apiBaseUrl
+  // (the migration routes are part of the main DMS backend now).
   migrationApiBaseUrl: string;
 }
 
@@ -208,20 +207,13 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
     return configured || 'https://nk-dms-dev.sg-nissenkaiun.com';
   }
 
-  // Base URL for the standalone SharePoint AI Migration Assistant backend —
-  // a separate process/database/Graph app registration from the main DMS
-  // API above. Defaults to the documented local-dev port (8020, see that
-  // module's README.md) when served from the local workbench; otherwise the
-  // property pane value must be set explicitly (there's no single "prod"
-  // default since this backend is deployed independently).
+  // Base URL for the Migration Assistant API. It is now part of the main DMS
+  // backend (routes under /api/migration-assistant/*), so by default this is
+  // just the main API base URL. The optional "Migration API Base URL"
+  // property remains only as an override for unusual deployments.
   private _migrationApiBaseUrl(): string {
     const configured = (this.properties.migrationApiBaseUrl || '').replace(/\/$/, '');
-    const hostedFromLocalDev = typeof window !== 'undefined' &&
-      /(?:debugManifestsFile|localhost:4321)/i.test(window.location.href);
-    if ((this.context.isServedFromLocalhost || hostedFromLocalDev) && !configured) {
-      return 'http://127.0.0.1:8020';
-    }
-    return configured;
+    return configured || this._apiBaseUrl();
   }
 
   private _getEnvironmentMessage(): Promise<string> {
@@ -296,7 +288,7 @@ export default class VesselEmailWebPart extends BaseClientSideWebPart<IVesselEma
                 }),
                 PropertyPaneTextField('migrationApiBaseUrl', {
                   label: 'Migration API Base URL',
-                  description: 'Standalone SharePoint AI Migration Assistant backend (separate process — see components/migrationAssistant/README.md). Local dev default: http://localhost:8020'
+                  description: 'Optional override. Leave blank — the Migration Assistant is part of the main DMS backend and uses the API Base URL above.'
                 })
               ]
             }

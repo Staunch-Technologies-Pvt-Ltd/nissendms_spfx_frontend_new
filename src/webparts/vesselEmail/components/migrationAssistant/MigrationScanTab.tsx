@@ -632,7 +632,7 @@ function FilePreviewDrawer({ api, item, jobId, isNight, actingEmail, onClose }: 
     let objUrl: string | null = null;
     setBlobUrl(null);
     setLoadError(false);
-    fetch(api.jobItemPreviewUrl(jobId, item.id), { headers: { 'X-User-Email': actingEmail } })
+    fetch(api.jobItemPreviewUrl(jobId, item.id), { headers: api.authHeaders() })
       .then((r) => (r.ok ? r.blob() : Promise.reject(new Error('fail'))))
       .then((blob) => {
         if (!active) return;

@@ -5,11 +5,10 @@
 // needs lives under this migrationAssistant/ folder, and the host app
 // (VesselEmail.tsx) only ever touches this one file.
 //
-// It talks to the migration backend's OWN FastAPI service — a separate
-// process from this SPFx app's main Vessel DMS backend, run per this
-// module's README.md. It shares no code, database, or auth session with
-// the main app; the only thing passed in is the acting user's email (for
-// the migration backend's own audit trail) and a base URL to reach it at.
+// The Migration Assistant backend is part of the main Vessel DMS backend
+// (backend/app/migration_assistant/, routes under /api/migration-assistant/*)
+// — it starts with the DMS API, no separate process. It reuses the DMS
+// session for auth; the acting user's email is also sent for the audit trail.
 import * as React from 'react';
 import { Icon } from '@fluentui/react/lib/Icon';
 import { MigrationApi } from './api';
@@ -20,11 +19,11 @@ import { VesselExcelExportTab } from './VesselExcelExportTab';
 import { tokens } from './styles';
 
 export interface IMigrationAssistantModuleProps {
-  /** Base URL of the standalone migration backend, e.g. http://localhost:8020
-   *  or https://your-migration-host. Configured via the web part's property
-   *  pane ("Migration API Base URL"); falls back to localhost:8020 when
-   *  served from the local SPFx workbench. */
+  /** Base URL of the main Vessel DMS API (the migration routes live on it).
+   *  The web part's optional "Migration API Base URL" property overrides it. */
   apiBaseUrl: string;
+  /** DMS session id (sent as Authorization / X-Session-ID). */
+  sessionId?: string;
   actingEmail: string;
   isNight: boolean;
 }
@@ -38,12 +37,12 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: 'excel-export', label: 'Vessel Excel Export', icon: 'ExcelDocument' },
 ];
 
-export function MigrationAssistantModule({ apiBaseUrl, actingEmail, isNight }: IMigrationAssistantModuleProps): React.ReactElement {
+export function MigrationAssistantModule({ apiBaseUrl, sessionId, actingEmail, isNight }: IMigrationAssistantModuleProps): React.ReactElement {
   const t = tokens(isNight);
   const [tab, setTab] = React.useState<Tab>('migration');
   const [health, setHealth] = React.useState<'checking' | 'ok' | 'unreachable'>('checking');
 
-  const api = React.useMemo(() => new MigrationApi(apiBaseUrl, actingEmail || 'unknown'), [apiBaseUrl, actingEmail]);
+  const api = React.useMemo(() => new MigrationApi(apiBaseUrl, actingEmail || 'unknown', sessionId || ''), [apiBaseUrl, actingEmail, sessionId]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -56,9 +55,8 @@ export function MigrationAssistantModule({ apiBaseUrl, actingEmail, isNight }: I
     return (
       <div style={{ padding: 40, textAlign: 'center', color: t.textMuted, fontSize: 13 }}>
         <Icon iconName="Warning" style={{ fontSize: 24, marginBottom: 10, display: 'block', margin: '0 auto 10px' }} />
-        The Migration Assistant needs its backend's URL. Set "Migration API Base URL" in this web part's property pane
-        (the pencil / edit-web-part panel), pointing at the migration backend documented in this module's README.md
-        (default local dev: <code>http://localhost:8020</code>).
+        The Migration Assistant runs on the main DMS backend. Set "API Base URL" in this web part's property pane
+        (the pencil / edit-web-part panel) to your DMS API (default local dev: <code>http://127.0.0.1:8000</code>).
       </div>
     );
   }
@@ -82,7 +80,7 @@ export function MigrationAssistantModule({ apiBaseUrl, actingEmail, isNight }: I
         ))}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: t.textSubtle, paddingRight: 4 }}>
           <span style={{ width: 7, height: 7, borderRadius: 999, background: health === 'ok' ? '#16a34a' : health === 'checking' ? '#d97706' : '#dc2626' }} />
-          {health === 'ok' ? 'Migration backend connected' : health === 'checking' ? 'Checking migration backend…' : `Migration backend unreachable at ${apiBaseUrl}`}
+          {health === 'ok' ? 'Migration Assistant connected' : health === 'checking' ? 'Checking Migration Assistant…' : `Migration Assistant unreachable at ${apiBaseUrl}`}
         </div>
       </div>
       <div style={{ flex: 1, overflow: 'hidden', paddingTop: 14, display: 'flex', flexDirection: 'column' }}>

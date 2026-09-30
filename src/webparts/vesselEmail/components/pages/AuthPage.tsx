@@ -5,6 +5,16 @@ import { clay } from '../clayTheme';
 
 export type AuthPageMode = 'login' | 'logout';
 
+// Send the user to SharePoint's own sign-in page (Entra ID). If a valid
+// Microsoft session already exists it returns immediately with a fresh token;
+// otherwise the user sees the login screen. Source brings them back to the
+// exact page (including workbench debug params) they came from.
+function goToSignIn(host: VesselEmail): void {
+  const returnUrl = window.location.href;
+  const siteUrl = (host.props.siteUrl || window.location.origin).replace(/\/$/, '');
+  window.location.assign(`${siteUrl}/_layouts/15/authenticate.aspx?Source=${encodeURIComponent(returnUrl)}`);
+}
+
 export function renderAuthPage(host: VesselEmail, mode: AuthPageMode): React.ReactElement {
   const isLogout = mode === 'logout';
   const displayName = host.props.userDisplayName || 'SharePoint user';
@@ -21,7 +31,7 @@ export function renderAuthPage(host: VesselEmail, mode: AuthPageMode): React.Rea
         </p>
         <button
           type="button"
-          onClick={() => window.location.reload()}
+          onClick={() => goToSignIn(host)}
           style={{ width: '100%', minHeight: 48, border: 'none', borderRadius: 14, background: clay.accentGradient, color: '#fff', fontSize: 15, fontWeight: 800, cursor: 'pointer', boxShadow: clay.shadowButton, transition: 'filter 0.16s ease, transform 0.16s ease' }}
           onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(0.88) saturate(1.12)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
           onMouseLeave={e => { e.currentTarget.style.filter = 'none'; e.currentTarget.style.transform = 'translateY(0)'; }}

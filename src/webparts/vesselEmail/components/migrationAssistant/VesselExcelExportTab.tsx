@@ -27,7 +27,7 @@ export function VesselExcelExportTab({ api, isNight }: { api: MigrationApi; isNi
     setErrorMsg(null);
     setDownloadingPath(vesselPath);
     try {
-      const res = await fetch(api.vesselExcelExportUrl(vesselPath));
+      const res = await fetch(api.vesselExcelExportUrl(vesselPath), { headers: api.authHeaders() });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail || `Request failed (${res.status})`);

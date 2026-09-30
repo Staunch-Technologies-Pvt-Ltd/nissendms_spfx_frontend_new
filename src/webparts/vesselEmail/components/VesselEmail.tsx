@@ -2589,9 +2589,15 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     return fetch(url, opts)
       .then(async r => {
         clearOwnTimeout();
-        if (r.status === 401 || r.status === 403) {
+        if (r.status === 401) {
           this.setState({ sessionExpired: true, authPage: 'login' });
           throw new Error('SESSION_EXPIRED');
+        }
+        // 403 = authenticated but not permitted (e.g. not an admin / no site
+        // permission). Re-authenticating cannot fix it, and treating it as an
+        // expired session caused an endless sign-in reload loop.
+        if (r.status === 403) {
+          throw new Error('PERMISSION_DENIED_403');
         }
         if (r.status >= 500) {
           // The backend now returns a JSON {detail: "..."} body describing
@@ -2626,7 +2632,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       })
       .catch(async err => {
         clearOwnTimeout();
-        if (opts.signal?.aborted || err?.message === 'SESSION_EXPIRED') throw err;
+        if (opts.signal?.aborted || err?.message === 'SESSION_EXPIRED' || err?.message === 'PERMISSION_DENIED_403') throw err;
         // A Graph quota throttle is an application-level condition (the
         // backend told Graph "too much"), not a network/connectivity
         // failure — falling back to a different backend host wouldn't fix
@@ -2643,14 +2649,15 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               headers: this._headersForLocalFallback(),
             };
             const r = await fetch(fallbackUrl, localOpts);
-            if (r.status === 401 || r.status === 403) {
+            if (r.status === 401) {
               this.setState({ sessionExpired: true, authPage: 'login' });
               throw new Error('SESSION_EXPIRED');
             }
+            if (r.status === 403) throw new Error('PERMISSION_DENIED_403');
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             return await r.json();
           } catch (localErr: any) {
-            if (localErr?.message === 'SESSION_EXPIRED') throw localErr;
+            if (localErr?.message === 'SESSION_EXPIRED' || localErr?.message === 'PERMISSION_DENIED_403') throw localErr;
             console.warn('[VesselDMS] Local fallback fetch failed:', localErr);
             return null;
           }
@@ -12000,7 +12007,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     return (
       <PageErrorBoundary pageName="Migration Assistant">
         <MigrationAssistantModule
-          apiBaseUrl={this.props.migrationApiBaseUrl || ''}
+          apiBaseUrl={this.props.migrationApiBaseUrl || this.props.apiBaseUrl || ''}
+          sessionId={this.props.sessionId}
           actingEmail={this.props.userEmail}
           isNight={this.state.themeMode === 'night'}
         />

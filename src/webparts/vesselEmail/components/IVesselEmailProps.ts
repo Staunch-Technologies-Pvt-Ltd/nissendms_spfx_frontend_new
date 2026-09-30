@@ -25,9 +25,8 @@ export interface IVesselEmailProps {
   driveId?: string;
   siteUrl?: string;  // absolute SharePoint site URL, e.g. https://tenant.sharepoint.com/sites/mysite
 
-  // Base URL of the standalone SharePoint AI Migration Assistant backend
-  // (see components/migrationAssistant/README.md) — a separate FastAPI
-  // process from apiBaseUrl above, with its own database and Graph app
-  // registration. Configured via the web part's property pane.
+  // Base URL the Migration Assistant module calls. Defaults to apiBaseUrl
+  // (the migration routes are part of the main DMS backend now); the web
+  // part property is only an optional override.
   migrationApiBaseUrl?: string;
 }
