@@ -105,14 +105,44 @@ function extractRetryAfterSeconds(err: any): number {
 /**
  * Walk all pages of a delta/list response, collecting every item.
  * Returns { items, nextDeltaLink }.
+ *
+ * Throttling (Throttle.htm / HTTP 429): these calls run with the signed-in
+ * user's token, so they count against that USER's SharePoint quota — the
+ * same quota their SharePoint pages use. To keep a full-drive baseline from
+ * exhausting it:
+ *  - pages are requested with $top=1000 (≈5x fewer calls than the default
+ *    page size; retried without $top if Graph rejects it),
+ *  - pages are paced (PAGE_PAUSE_MS) instead of fired back-to-back,
+ *  - a page that fails (e.g. 429) is remembered with the items collected so
+ *    far, and the next run RESUMES from that page instead of restarting the
+ *    whole drive scan (which used to re-trigger the throttle every time).
  */
+const PAGE_PAUSE_MS = 250;
+const _pendingDrain: { [key: string]: { url: string; items: any[] } } = {};
+
+function clearPendingDrain(key: string): void {
+  delete _pendingDrain[key];
+}
+
+function withTop(url: string): string {
+  if (/[?&]\$top=/i.test(url) || /[?&]token=/i.test(url) || /[?&]\$skiptoken=/i.test(url)) return url;
+  return `${url}${url.indexOf('?') >= 0 ? '&' : '?'}$top=1000`;
+}
+
+function isBadRequest(err: any): boolean {
+  return err?.statusCode === 400 || err?.status === 400;
+}
+
 async function drainPages(
   client: MSGraphClientV3,
   firstUrl: string,
+  resumeKey?: string,
 ): Promise<{ items: any[]; deltaLink: string }> {
-  const items: any[] = [];
-  let url: string = firstUrl;
+  const pending = resumeKey ? _pendingDrain[resumeKey] : undefined;
+  const items: any[] = pending ? pending.items : [];
+  let url: string = pending ? pending.url : withTop(firstUrl);
   let deltaLink = '';
+  let pageNo = 0;
 
   while (url) {
     // MSGraphClientV3 .api() only accepts relative paths — strip the base if present
@@ -120,7 +150,18 @@ async function drainPages(
       ? url.replace('https://graph.microsoft.com/v1.0', '')
       : url;
 
-    const page: any = await client.api(relativeUrl).get();
+    let page: any;
+    try {
+      page = await client.api(relativeUrl).get();
+    } catch (err) {
+      if (pageNo === 0 && !pending && isBadRequest(err) && url !== firstUrl) {
+        url = firstUrl; // $top not accepted here — retry with the default page size
+        continue;
+      }
+      if (resumeKey) _pendingDrain[resumeKey] = { url, items };
+      throw err;
+    }
+    pageNo++;
     if (page.value) items.push(...page.value);
 
     if (page['@odata.deltaLink']) {
@@ -128,8 +169,13 @@ async function drainPages(
       break;
     }
     url = page['@odata.nextLink'] ?? '';
+    if (url) {
+      if (resumeKey) _pendingDrain[resumeKey] = { url, items };
+      await new Promise<void>(resolve => setTimeout(resolve, PAGE_PAUSE_MS));
+    }
   }
 
+  if (resumeKey) clearPendingDrain(resumeKey);
   return { items, deltaLink };
 }
 
@@ -225,7 +271,7 @@ export async function pollDelta(
     : `/sites/${siteId}/drives/${driveId}/root/delta?$select=id,name,parentReference,folder,file,size,createdDateTime,lastModifiedDateTime,deleted`;
 
   try {
-    const { items, deltaLink } = await drainPages(client, startUrl);
+    const { items, deltaLink } = await drainPages(client, startUrl, driveId);
 
     if (deltaLink) saveDeltaLink(driveId, deltaLink);
 
@@ -256,6 +302,7 @@ export async function pollDelta(
     if ((errCode === 'resyncRequired' || errMsg.includes('resyncRequired')) && storedLink) {
       console.warn('[VesselDMS] Graph delta token expired/resyncRequired. Clearing deltaLink and rebuilding baseline.');
       clearDeltaLink(driveId);
+      clearPendingDrain(driveId);
       return pollDelta(client, siteId, driveId, true);
     }
     throw err;

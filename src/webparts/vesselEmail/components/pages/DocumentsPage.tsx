@@ -2668,6 +2668,55 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       }
       return true;
     };
+    // Sub-category picked from a classified entry ("<Group>::<Category>::<Sub>",
+    // e.g. To Be Classified › Yard Drawing › Basic): the Group › Category it
+    // was listed under. Ignored when it contradicts an explicitly chosen
+    // Group / Category or is no longer the active Sub-category.
+    const subCategoryPickCtx = (): { group: string; category: string } | null => {
+      if (docSubCategoryFilter === 'all') return null;
+      const raw = (host as any)._subCategoryPickKey as string | undefined;
+      if (!raw) return null;
+      const parts = raw.split('::');
+      if (parts.length !== 3 || !parts[0] || !parts[1]) return null;
+      const low = (v: string): string => (v || '').trim().toLowerCase();
+      if (low(parts[2]) !== low(docSubCategoryFilter)) return null;
+      if (docGroupLevelFilter !== 'all' && low(docGroupLevelFilter) !== low(parts[0])) return null;
+      if (docLeafCategoryFilter !== 'all' && low(docLeafCategoryFilter) !== low(parts[1])) return null;
+      return { group: parts[0], category: parts[1] };
+    };
+    /**
+     * Does the folder path contain the selected Sub-category folder?
+     * With a classified pick the folder must sit exactly where the dropdown
+     * found it (same rule libTaxonomy is built with): directly under the
+     * picked Category, inside the picked Group — so "To Be Classified ›
+     * Yard Drawing › Basic" no longer also matches "Drawings › Basic".
+     * Without one, any folder of that name matches (previous behaviour).
+     */
+    const pathMatchesSubCategory = (folderPath: string | string[], sub: string): boolean => {
+      const low = (v: string): string => (v || '').trim().toLowerCase();
+      const segments = Array.isArray(folderPath)
+        ? folderPath.map(x => (x || '').trim()).filter(Boolean)
+        : pathFolderSegments(folderPath);
+      const want = low(sub);
+      const ctx = subCategoryPickCtx();
+      if (!ctx || low(ctx.group) === '') return segments.some(seg => low(seg) === want);
+      const grp = low(ctx.group);
+      if (grp === TBC_GROUP_LABEL.toLowerCase()) {
+        for (let i = 0; i + 2 < segments.length; i++) {
+          if (isToBeClassifiedName(segments[i]) && low(segments[i + 1]) === low(ctx.category) && low(segments[i + 2]) === want) return true;
+        }
+        return false;
+      }
+      if (segments.some(isToBeClassifiedName)) return false;
+      const catMatches = (seg: string): boolean => low(seg) === low(ctx.category) || folderMatchesCategory(seg, ctx.category);
+      let inGroup = false;
+      for (let i = 0; i + 1 < segments.length; i++) {
+        const g = folderGroupsOf(segments[i]);
+        if ((grp === 'drawings' && g.drawings) || (grp === 'manuals' && g.manuals)) { inGroup = true; continue; }
+        if (inGroup && catMatches(segments[i]) && low(segments[i + 1]) === want) return true;
+      }
+      return false;
+    };
     const drawingsManualsCache = new WeakMap<object, { group: string | null; category: string | null }>();
     const drawingsManualsForRow = (row: Pick<FlatRow, 'subFolderPath'>): { group: string | null; category: string | null } => {
       const cached = drawingsManualsCache.get(row);
@@ -4174,7 +4223,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       if (gcGroup !== 'all' || gcCategory !== 'all') {
         if (!pathMatchesGroupCategory(r.subFolderPath || '', gcGroup, gcCategory)) return false;
       }
-      if (skipLevels < 1 && docSubCategoryFilter !== 'all') {
+      if (skipLevels < 1 && docSubCategoryFilter !== 'all' && subCategoryPickCtx()) {
+        // Classified pick: the Group › Category it was listed under counts too.
+        if (!pathMatchesSubCategory(r.subFolderPath || '', docSubCategoryFilter)) return false;
+      } else if (skipLevels < 1 && docSubCategoryFilter !== 'all') {
         const normFilter = docSubCategoryFilter.trim().toLowerCase();
         const subMatch = (labels.subCategory || '').trim().toLowerCase() === normFilter ||
           (r.subCategory || '').trim().toLowerCase() === normFilter ||
@@ -4336,6 +4388,17 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       };
       (host as any)._libTaxonomyMemo = { src, index };
       return index;
+    })();
+    // Library-wide taxonomy not known yet (tree still loading / the backend
+    // index still building / a failed request being retried): the
+    // Sub-category dropdown says so instead of looking empty.
+    const libTaxonomyState: 'ready' | 'loading' | 'retrying' = (() => {
+      if (!libraryWideScope || !liveLibraryResolved) return 'ready';
+      if (libTaxonomy.subs.size > 0 || libTaxonomy.tbcCategories.length > 0) return 'ready';
+      if (!libFolderTreeRes) return 'loading';
+      if (libFolderTreeRes.folders.length > 0) return 'ready';
+      if (libFolderTreeRes.error && !libFolderTreeRes.loading) return 'retrying';
+      return (libFolderTreeRes.loading || libFolderTreeRes.truncated) ? 'loading' : 'ready';
     })();
     const libSubsFor = (group: string, category: string): string[] => {
       const m = libTaxonomy.subs.get(`${group.toLowerCase()}::${category.trim().toLowerCase()}`);
@@ -6598,6 +6661,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   const nextGroupLevel = inToBeClassified
                     ? TBC_GROUP_LABEL
                     : (pathGroup || (docGroupLevelFilter === TBC_GROUP_LABEL ? 'all' : docGroupLevelFilter));
+                  (host as any)._subCategoryPickKey = undefined;
                   host.setState({
                     docGroupLevelFilter: nextGroupLevel,
                     docSubfolderOtherFilter: val,
@@ -6676,7 +6740,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 // to that folder node when it exists; leaving it clears a
                 // sub-folder that was only there because of it.
                 if (val === TBC_GROUP_LABEL) {
-                  const tbcNode = findSubfolderNodeForCategory(TBC_GROUP_LABEL, { group: TBC_GROUP_LABEL });
+                  const tbcNode = libraryWideScope ? null : findSubfolderNodeForCategory(TBC_GROUP_LABEL, { group: TBC_GROUP_LABEL });
                   host.setState({
                     docGroupLevelFilter: val,
                     docLeafCategoryFilter: 'all',
@@ -6694,7 +6758,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 // Drawings / Manuals: jump the Sub-folder tree to that group's
                 // own folder (never one under "To Be Classified"). "All
                 // groups": drop a sub-folder that was only there for a group.
-                const groupNode = val === 'all' ? null : findSubfolderNodeForCategory(val, { group: val });
+                // (Library-wide: opening one vessel's group folder would also
+                // change the Vessel / Main folder filters — just filter.)
+                const groupNode = (val === 'all' || libraryWideScope) ? null : findSubfolderNodeForCategory(val, { group: val });
                 (host as any)._subfolderSelectedPath = groupNode ? groupNode.path : undefined;
                 host.setState({
                   docGroupLevelFilter: val,
@@ -6749,7 +6815,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   // matches it, when one exists.
                   if (val === 'all') {
                     // Fall back to the selected group's folder, if any.
-                    const groupNode = docGroupLevelFilter !== 'all' ? findSubfolderNodeForCategory(docGroupLevelFilter, { group: docGroupLevelFilter }) : null;
+                    const groupNode = (!libraryWideScope && docGroupLevelFilter !== 'all') ? findSubfolderNodeForCategory(docGroupLevelFilter, { group: docGroupLevelFilter }) : null;
                     (host as any)._subfolderSelectedPath = groupNode ? groupNode.path : undefined;
                     host.setState({ docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', docSubfolderOtherFilter: groupNode ? groupNode.name : 'all', docListPage: 0 });
                     if (groupNode) {
@@ -6758,7 +6824,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     }
                     return;
                   }
-                  const match = findSubfolderNodeForCategory(val, { group: groupForPick });
+                  // Opening the matching folder would re-derive Group / Vessel /
+                  // Main folder from its path, so only do it when the Group is
+                  // already chosen and the view isn't library-wide.
+                  const match = (!libraryWideScope && docGroupLevelFilter !== 'all')
+                    ? findSubfolderNodeForCategory(val, { group: groupForPick })
+                    : null;
                   (host as any)._subfolderSelectedPath = match ? match.path : (host as any)._subfolderSelectedPath;
                   host.setState({
                     docLeafCategoryFilter: val,
@@ -6807,36 +6878,24 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 })()}
                 onChange={e => {
                   const raw = e.target.value;
-                  // "<Group>::<Category>::<Sub-category>" (library-wide,
-                  // classified list): only the Sub-category changes — Groups
-                  // and Categories stay exactly as the user set them. The
-                  // group/category are used just to find the matching folder
-                  // in the Sub-folder tree.
+                  // Only the Sub-category changes — Groups, Categories, Vessel and
+                  // Main folder stay exactly as the user set them.
+                  // Classified entries carry "<Group>::<Category>::<Sub-category>";
+                  // the group/category there are display-only.
                   const parts = raw.split('::');
-                  (host as any)._subCategoryPickKey = parts.length === 3 ? raw : undefined;
-                  if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
-                    const [pg, pc, ps] = parts;
-                    const subNode = findSubfolderNodeForCategory(ps, { group: pg, category: pc });
-                    if (subNode) (host as any)._subfolderSelectedPath = subNode.path;
-                    host.setState({
-                      docSubCategoryFilter: ps,
-                      docSubfolderOtherFilter: subNode ? subNode.name : docSubfolderOtherFilter,
-                      docListPage: 0,
-                    });
-                    if (subNode) {
-                      if (atSitesRoot) navigateToLiveSubfolder(subNode.name, subNode.path);
-                      else navigateToDeptSubfolder(subNode.path);
-                    }
-                    return;
-                  }
-                  const val = raw;
-                  // Keep the Sub-folder tree in step: a sub-category jumps to
-                  // that folder inside the chosen group/category; "All
-                  // sub-categories" falls back to the category's folder.
+                  const encoded = parts.length === 3 && !!parts[0] && !!parts[1] && !!parts[2];
+                  (host as any)._subCategoryPickKey = encoded ? raw : undefined;
+                  const val = encoded ? parts[2] : raw;
+                  // Opening the matching folder re-derives Group / Vessel / Main
+                  // folder from that folder's path (deriveLiveNavFilterState),
+                  // so only keep the Sub-folder tree in step when Group AND
+                  // Category are already chosen and the view isn't library-wide.
+                  const canSyncTree = !libraryWideScope && docGroupLevelFilter !== 'all' && docLeafCategoryFilter !== 'all';
                   const ctx = { group: docGroupLevelFilter, category: docLeafCategoryFilter };
-                  const node = val !== 'all'
-                    ? findSubfolderNodeForCategory(val, ctx)
-                    : (docLeafCategoryFilter !== 'all' ? findSubfolderNodeForCategory(docLeafCategoryFilter, { group: docGroupLevelFilter }) : null);
+                  const node = !canSyncTree ? null
+                    : (val !== 'all'
+                      ? findSubfolderNodeForCategory(val, ctx)
+                      : findSubfolderNodeForCategory(docLeafCategoryFilter, { group: docGroupLevelFilter }));
                   if (node) (host as any)._subfolderSelectedPath = node.path;
                   host.setState({
                     docSubCategoryFilter: val,
@@ -6851,6 +6910,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
               >
                 <option value="all">All sub-categories</option>
+                {libTaxonomyState !== 'ready' && (
+                  <option value="__vdms_loading" disabled>
+                    {libTaxonomyState === 'retrying' ? 'Couldn\'t load sub-categories — retrying…' : 'Loading sub-categories…'}
+                  </option>
+                )}
                 {subCategoryUngrouped.map(subCategory => <option key={subCategory} value={subCategory}>{subCategory}</option>)}
                 {subCategoryOptionGroups.map(x => (
                   <optgroup key={`${x.group}::${x.category}`} label={docGroupLevelFilter === 'all' ? `${x.group} › ${x.category}` : x.category}>
@@ -7516,7 +7580,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     if (id && seenIds.has(id)) return;
                     const fullNames = [...baseNames, ...relFolderNames];
                     if (!pathMatchesGroupCategory(fullNames.join(' > '), docGroupLevelFilter, docLeafCategoryFilter)) return;
-                    if (docSubCategoryFilter !== 'all' && !fullNames.some(seg => seg.trim().toLowerCase() === docSubCategoryFilter.trim().toLowerCase())) return;
+                    if (docSubCategoryFilter !== 'all' && !pathMatchesSubCategory(fullNames, docSubCategoryFilter)) return;
                     if (!insideSelectedVessel) {
                       const inVessel = fullNames.some(seg => {
                         const matched = matchFolderToVessel(seg);
@@ -7640,7 +7704,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       }
                       const relBelow = rel.slice(baseNames.length);
                       if (!pathMatchesGroupCategory(rel.join(' > '), docGroupLevelFilter, docLeafCategoryFilter)) return;
-                      if (docSubCategoryFilter !== 'all' && !rel.some((seg: string) => seg.trim().toLowerCase() === docSubCategoryFilter.trim().toLowerCase())) return;
+                      if (docSubCategoryFilter !== 'all' && !pathMatchesSubCategory(rel, docSubCategoryFilter)) return;
                       if (!insideSelectedVessel) {
                         const rowVessel = getListViewLabels(r).vessel;
                         if (!rowVessel || !vesselNamesEqual(rowVessel, vesselFilter)) return;
@@ -7743,9 +7807,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       // computed above (path-based, same rule as List view);
                       // otherwise this folder's own files.
                       const displayChildFiles = groupCatActive ? groupCatMatchedFiles : textFilteredChildFiles;
+                      const subPickCtx = subCategoryPickCtx();
                       const groupCatLabel = [
-                        docGroupLevelFilter !== 'all' ? docGroupLevelFilter : null,
-                        docLeafCategoryFilter !== 'all' ? docLeafCategoryFilter : null,
+                        docGroupLevelFilter !== 'all' ? docGroupLevelFilter : (subPickCtx ? subPickCtx.group : null),
+                        docLeafCategoryFilter !== 'all' ? docLeafCategoryFilter : (subPickCtx ? subPickCtx.category : null),
                         docSubCategoryFilter !== 'all' ? docSubCategoryFilter : null,
                       ].filter(Boolean).join(' › ');
 
@@ -7927,8 +7992,23 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             folderData.error ? (
                               <div style={{ background: 'var(--vdms-surface)', borderRadius: 14, border: '1px dashed #fca5a5', padding: 48, textAlign: 'center', color: 'var(--vdms-text-faint)' }}>
                                 <div style={{ fontSize: 32, marginBottom: 8 }}>⚠️</div>
-                                <div style={{ fontWeight: 600, color: '#b91c1c', fontSize: 15 }}>Couldn't load this folder</div>
-                                <div style={{ fontSize: 13, marginTop: 4 }}>The request to SharePoint failed — this may not actually be empty. Try again.</div>
+                                {(() => {
+                                  // Graph quota cooldown: the listing re-loads by itself when it ends.
+                                  const waitSec = folderData.throttled ? Math.max(0, Math.ceil(((folderData.retryAt || host._graphThrottledUntil) - Date.now()) / 1000)) : 0;
+                                  return folderData.throttled ? (
+                                    <>
+                                      <div style={{ fontWeight: 600, color: '#b45309', fontSize: 15 }}>SharePoint is busy</div>
+                                      <div style={{ fontSize: 13, marginTop: 4 }}>
+                                        Microsoft limited requests for a moment. This folder will load again automatically{waitSec > 0 ? ` in about ${waitSec}s` : ''}.
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <div style={{ fontWeight: 600, color: '#b91c1c', fontSize: 15 }}>Couldn't load this folder</div>
+                                      <div style={{ fontSize: 13, marginTop: 4 }}>The request to SharePoint failed — this may not actually be empty. Try again.</div>
+                                    </>
+                                  );
+                                })()}
                                 <button
                                   type="button"
                                   onClick={() => void host._refreshSiteFolder(effectiveSiteId, rawDriveId, currentFolderId)}

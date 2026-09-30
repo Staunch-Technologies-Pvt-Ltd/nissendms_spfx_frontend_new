@@ -3181,8 +3181,13 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     } catch (err: any) {
       if (typeof err?.message === 'string' && err.message.indexOf('THROTTLED_429:') === 0) {
         const retryAfterSec = Number(err.message.split(':')[1]) || 60;
-        this._graphThrottledUntil = Date.now() + retryAfterSec * 1000;
-        console.warn(`[VesselDMS] _loadSiteFolderChildren throttled by Graph quota — pausing folder requests for ${retryAfterSec}s.`);
+        const until = Date.now() + retryAfterSec * 1000;
+        // Requests queued behind the slot rethrow the same window locally —
+        // log once per window, not once per queued folder.
+        if (until > this._graphThrottledUntil + 2000) {
+          console.warn(`[VesselDMS] _loadSiteFolderChildren throttled by Graph quota — pausing folder requests for ${retryAfterSec}s.`);
+        }
+        this._graphThrottledUntil = Math.max(this._graphThrottledUntil, until);
         return { items: [], summaryCounts: null, parentPath: '', folderId, error: true, throttled: true };
       }
       // Distinguish "the request failed" from "the folder is genuinely
@@ -3203,7 +3208,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   // "Show N more" control in that grid; a plain Set + forceUpdate() rather
   // than state, matching how _siteDrivesCache itself is handled.
   public _systemLibrariesRevealed: Set<string> = new Set();
-  public _siteFolderItemsCache: Map<string, { items: any[]; loading?: boolean; parentPath?: string; error?: boolean; retryAt?: number; errorAt?: number; _promise?: Promise<any[]> }> = new Map();
+  public _siteFolderItemsCache: Map<string, { items: any[]; loading?: boolean; parentPath?: string; error?: boolean; throttled?: boolean; retryAt?: number; errorAt?: number; _promise?: Promise<any[]> }> = new Map();
   // Consecutive non-throttle failures per folder listing (key = cache key).
   // A failed listing retries by itself with a growing delay (see
   // _folderListingRetryDelayMs) instead of sitting on "Couldn't load this
@@ -3226,6 +3231,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     truncated: boolean; loading: boolean; error: boolean; ts: number;
   }> = new Map();
 
+  /** Folder-tree keys with a poll timer pending (see _fetchSiteFolderTree). */
+  private _siteFolderTreePolling: Set<string> = new Set();
+
   public _getOrLoadSiteFolderTree(siteId: string, driveId: string, folderId: string, maxDepth?: number, maxFolders?: number): {
     folders: Array<{ id: string; name: string; parent_id: string; path: string; depth: number }>;
     truncated: boolean; loading: boolean; error: boolean;
@@ -3240,7 +3248,13 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     const key = `${siteId}::${driveId}::${folderId}${maxDepth ? `::d${maxDepth}` : ''}${maxFolders ? `::f${maxFolders}` : ''}`;
     const hit = this._siteFolderTreeCache.get(key);
     const STALE_MS = 5 * 60 * 1000;
-    const retryOk = !!hit && hit.error && Date.now() - hit.ts > 30000;
+    // Also re-ask when the last answer was an empty "still building" tree and
+    // no poll is scheduled any more (the poll chain below gives up after a
+    // while) — otherwise e.g. the library-wide Sub-category list stayed empty
+    // until the 5-minute staleness window passed.
+    const retryOk = !!hit && (hit.error
+      ? Date.now() - hit.ts > 30000
+      : (hit.truncated && hit.folders.length === 0 && !this._siteFolderTreePolling.has(key) && Date.now() - hit.ts > 20000));
     if (hit && hit.loading) return hit;
     if (hit && !retryOk && Date.now() - hit.ts <= STALE_MS) return hit;
     // Never add load while Graph is throttling; serve whatever we have.
@@ -3285,10 +3299,16 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       // A shallow tree is "truncated" by design (depth cap) — only poll it
       // while the server index is still building.
       const pollPartial = !maxDepth && data?.source !== 'delta';
-      if (truncated && (data?.building || pollPartial) && attempt < 15) {
+      // "building" polls cost the server no Graph calls, so keep asking for
+      // longer (a cold index build under throttling can take minutes).
+      if (truncated && (data?.building || pollPartial) && attempt < (data?.building ? 60 : 15)) {
         const serverWaitMs = Number(data?.retry_after) > 0 ? Number(data.retry_after) * 1000 + 1000 : 0;
         const delayMs = Math.min(60000, Math.max(serverWaitMs, data?.building ? 5000 : 8000));
-        window.setTimeout(() => this._fetchSiteFolderTree(key, siteId, driveId, folderId, false, attempt + 1, maxDepth, maxFolders), delayMs);
+        this._siteFolderTreePolling.add(key);
+        window.setTimeout(() => {
+          this._siteFolderTreePolling.delete(key);
+          this._fetchSiteFolderTree(key, siteId, driveId, folderId, false, attempt + 1, maxDepth, maxFolders);
+        }, delayMs);
       }
     }).catch((err: any) => {
       window.clearTimeout(treeTimer);
@@ -3315,6 +3335,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   public _folderCountsCache: Map<string, {
     ts: number;
     loading: boolean;
+    polls?: number;
     counts: Record<string, { direct_subfolders: number; direct_files: number; total_subfolders: number; total_files: number }>;
     summary: { direct_folders: number; direct_files: number; total_folders: number; total_files: number } | null;
   }> = new Map();
@@ -3329,13 +3350,27 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     if (hit && (hit.loading || Date.now() - hit.ts < 60000)) {
       return hit.ts > 0 ? hit : null;
     }
-    // Counts are cosmetic — never add load while Graph is throttling.
-    if (Date.now() < this._graphThrottledUntil) return hit && hit.ts > 0 ? hit : null;
-    const entry = { ts: hit?.ts || 0, loading: true, counts: hit?.counts || {}, summary: hit?.summary || null };
+    // No Graph throttle guard here: the server answers from its drive index
+    // (no Graph calls), and skipping this call during a cooldown made every
+    // folder tile fall back to its own /children request afterwards.
+    const entry = { ts: hit?.ts || 0, loading: true, polls: hit?.polls || 0, counts: hit?.counts || {}, summary: hit?.summary || null };
     this._folderCountsCache.set(key, entry);
     const url = `${this._base()}/api/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/folders/${encodeURIComponent(folderId)}/subfolder-counts`;
     this._withChildrenSlot(undefined, () => this._fetchJson(url)).then(data => {
-      this._folderCountsCache.set(key, { ts: Date.now(), loading: false, counts: data?.counts || {}, summary: data?.summary_counts || null });
+      // The server answers from its drive index; on first use it is still
+      // building. Stay "loading" (so tiles don't fall back to one /children
+      // call each) and ask again shortly — the poll costs no Graph calls.
+      if (data?.building && (entry.polls || 0) < 30) {
+        const waitMs = Math.min(30000, Math.max(5000, (Number(data.retry_after) || 0) * 1000));
+        this._folderCountsCache.set(key, { ...entry, loading: true, polls: (entry.polls || 0) + 1 });
+        window.setTimeout(() => {
+          const cur = this._folderCountsCache.get(key);
+          if (cur && cur.loading) this._folderCountsCache.set(key, { ...cur, loading: false, ts: 0 });
+          this._scheduleForceUpdate();
+        }, waitMs);
+        return;
+      }
+      this._folderCountsCache.set(key, { ts: Date.now(), loading: false, polls: 0, counts: data?.counts || {}, summary: data?.summary_counts || null });
       this._scheduleForceUpdate();
     }).catch((err: any) => {
       if (typeof err?.message === 'string' && err.message.indexOf('THROTTLED_429:') === 0) {
@@ -3425,8 +3460,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     if (cached && cached.loading && cached._promise) return cached._promise;
 
     const promise: Promise<any[]> = this._loadSiteFolderChildren(siteId, driveId, folderId, signal).then(res => {
-      const loadedEntry: { items: any[]; loading: boolean; parentPath: string; error: boolean; retryAt?: number; errorAt?: number } = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
-      if (res.throttled) loadedEntry.retryAt = Math.max(this._graphThrottledUntil, Date.now() + 1000);
+      const loadedEntry: { items: any[]; loading: boolean; parentPath: string; error: boolean; throttled?: boolean; retryAt?: number; errorAt?: number } = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
+      if (res.throttled) { loadedEntry.throttled = true; loadedEntry.retryAt = Math.max(this._graphThrottledUntil, Date.now() + 1000); }
       if (loadedEntry.error) loadedEntry.errorAt = Date.now();
       this._folderListingRetryDelayMs(key, loadedEntry.error && !res.throttled);
       this._siteFolderItemsCache.set(key, loadedEntry);
@@ -3569,7 +3604,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     folderId: string = 'root',
     force: boolean = false,
     signal?: AbortSignal,
-  ): { items: any[]; loading?: boolean; error?: boolean } {
+  ): { items: any[]; loading?: boolean; error?: boolean; throttled?: boolean; retryAt?: number } {
     // Guard: cannot load without a valid site and drive
     if (!siteId || !driveId) {
       return { items: [], loading: false };
@@ -3650,8 +3685,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         this._siteFolderItemsCache.delete(key);
         return;
       }
-      const loadedEntry: { items: any[]; loading: boolean; parentPath: string; error: boolean; retryAt?: number; errorAt?: number } = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
+      const loadedEntry: { items: any[]; loading: boolean; parentPath: string; error: boolean; throttled?: boolean; retryAt?: number; errorAt?: number } = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
       if (res.throttled) {
+        loadedEntry.throttled = true;
         loadedEntry.retryAt = Math.max(this._graphThrottledUntil, Date.now() + 1000);
         window.setTimeout(() => this._scheduleForceUpdate(), Math.max(0, loadedEntry.retryAt - Date.now()) + 250);
       } else if (loadedEntry.error) {
@@ -3736,7 +3772,18 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     this._cancelSiteSubtreePrefetch();
 
     this._loadSiteFolderChildren(siteId, driveId, folderId).then(res => {
-      const loadedEntry = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
+      if (res.error) {
+        // Keep a good listing on screen; for a throttled failure re-load by
+        // itself once the cooldown ends (Retry used to leave an error entry
+        // with no retryAt, so the folder stayed on "Couldn't load" for good).
+        const retryAt = res.throttled ? Math.max(this._graphThrottledUntil, Date.now() + 1000) : undefined;
+        const base = existing && !existing.error ? existing : { items: [], parentPath: '', error: true };
+        this._siteFolderItemsCache.set(key, { ...base, loading: false, throttled: !!res.throttled, retryAt: base.error ? retryAt : undefined, errorAt: Date.now() });
+        if (retryAt) window.setTimeout(() => this._scheduleForceUpdate(), retryAt - Date.now() + 250);
+        this._scheduleForceUpdate();
+        return;
+      }
+      const loadedEntry = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: false };
       this._siteFolderItemsCache.set(key, loadedEntry);
       this._scheduleForceUpdate();
     }).catch(() => {
