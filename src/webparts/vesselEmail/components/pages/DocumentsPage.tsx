@@ -3881,6 +3881,25 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         if (carry) finishCarryInList(vesselName, carry);
         return;
       }
+      // Main folder is on "All main folders" (the user never picked one):
+      // do NOT open the vessel's first main folder (usually "Technical") for
+      // them. Stay at the library root instead — Folder view there lists
+      // only the main folders that lead to this vessel (vesselScopedChildFolders),
+      // so every main folder is shown and the user chooses where to go (or
+      // uses the "<vessel> is also under" chips / Compare).
+      const implicitAllMain = (host as any)._mainFolderImplicit as { vessel: string } | undefined;
+      if (implicitAllMain && implicitAllMain.vessel === normalizeVesselKey(vesselName)) {
+        const atLibraryRoot = folderPathStack.length <= livePrefixLength;
+        if (!atLibraryRoot) host._pushFolderNav([...siteNavPrefix], 'SharePoint Sites');
+        host.setState({
+          ...deriveDocFiltersFromStack(siteNavPrefix),
+          docCategoryFilter: 'all',
+          docSubfolderOtherFilter: 'all',
+          vesselFilter: vesselName,
+          docListPage: 0,
+        });
+        return;
+      }
       const here = folderPathStack.slice(livePrefixLength).map(n => n.name).join('/').toLowerCase();
       // Already inside the vessel's folder (or deeper)? Stay put. Being at the
       // library root or at an ancestor (e.g. the main folder) is NOT enough —
@@ -4301,6 +4320,24 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // the tree yet, so category / sub-category choices come from the cached
     // recursive library walk (folder paths relative to the library root).
     const libraryWideScope = vesselFilter === 'all' && docCategoryFilter === 'all';
+    // A vessel is picked: Sub-category options come from THAT vessel's folders
+    // only (same Group > Category > Sub-category rule as the library-wide
+    // taxonomy, applied to the part of each path below the vessel folder).
+    // Before this the list was built from already-loaded file rows alone, so a
+    // vessel opened at a folder-only level (e.g. "Drawings and Manuals") had no
+    // sub-categories and the dropdown was disabled.
+    const vesselTaxonomyKey = (!libraryWideScope && !!vesselFilter && vesselFilter !== 'all' && vesselFilter.trim().toLowerCase() !== 'not listed')
+      ? vesselFilter.trim().toLowerCase() : '';
+    const vesselTaxNames = new Set<string>();
+    if (vesselTaxonomyKey) {
+      vesselTaxNames.add(vesselTaxonomyKey);
+      (siteVesselFolderPaths.get(vesselTaxonomyKey) || []).forEach(vp => {
+        const last = (vp.split('/').pop() || '').trim().toLowerCase();
+        if (last) vesselTaxNames.add(last);
+      });
+    }
+    const vesselTaxScopeKey = Array.from(vesselTaxNames).sort().join('|');
+    const taxonomyScoped = libraryWideScope || !!vesselTaxonomyKey;
     const libWalkPaths: string[][] = (() => {
       const out: string[][] = [];
       if (!libraryWideScope) return out;
@@ -4326,24 +4363,38 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     interface LibTaxonomyIndex {
       tbcCategories: string[];
       subs: Map<string, Map<string, string>>; // `${group}::${category}` (lower) -> lower -> display
+      subMeta: Map<string, { group: string; category: string }>; // same key -> display group / category
+      groups: string[]; // groups found in scope (display labels)
+      cats: Map<string, string[]>; // group label (lower) -> categories found in scope
     }
-    const libFolderTreeRes = (libraryWideScope && liveLibraryResolved)
+    const libFolderTreeRes = (taxonomyScoped && liveLibraryResolved)
       ? host._getOrLoadSiteFolderTree(effectiveLiveSiteId, effectiveLiveDriveId, 'root', undefined, 20000)
       : null;
     const libTaxonomy: LibTaxonomyIndex = (() => {
-      const empty: LibTaxonomyIndex = { tbcCategories: [], subs: new Map() };
+      const empty: LibTaxonomyIndex = { tbcCategories: [], subs: new Map(), subMeta: new Map(), groups: [], cats: new Map() };
       const src = libFolderTreeRes?.folders;
       if (!src || src.length === 0) return empty;
-      const memo = (host as any)._libTaxonomyMemo as { src: any; index: LibTaxonomyIndex } | undefined;
-      if (memo && memo.src === src) return memo.index;
+      const memo = (host as any)._libTaxonomyMemo as { src: any; scope: string; index: LibTaxonomyIndex } | undefined;
+      if (memo && memo.src === src && memo.scope === vesselTaxScopeKey) return memo.index;
       const tbc = new Map<string, string>();
       const subs = new Map<string, Map<string, string>>();
+      const subMeta = new Map<string, { group: string; category: string }>();
+      const groupsSeen = new Set<string>();
+      const catsSeen = new Map<string, Map<string, string>>();
+      const noteCat = (group: string, category: string): void => {
+        const gk = group.toLowerCase();
+        const m = catsSeen.get(gk) || new Map<string, string>();
+        if (!m.has(category.trim().toLowerCase())) m.set(category.trim().toLowerCase(), category.trim());
+        catsSeen.set(gk, m);
+        groupsSeen.add(group);
+      };
       const addSub = (group: string, category: string, sub: string): void => {
         const nm = (sub || '').trim();
         if (!nm || /\.[a-z0-9]{2,5}$/i.test(nm)) return;
         const key = `${group.toLowerCase()}::${category.trim().toLowerCase()}`;
         let m = subs.get(key);
         if (!m) { m = new Map(); subs.set(key, m); }
+        if (!subMeta.has(key)) subMeta.set(key, { group, category: category.trim() });
         if (!m.has(nm.toLowerCase())) m.set(nm.toLowerCase(), nm);
       };
       const findKnown = (seg: string, list: string[]): string | undefined => {
@@ -4351,14 +4402,23 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         return list.find(c => c.toLowerCase() === low) || list.find(c => folderMatchesCategory(seg, c));
       };
       src.forEach(f => {
-        const p = String(f.path || f.name || '').split('/').map(x => x.trim()).filter(Boolean);
+        let p = String(f.path || f.name || '').split('/').map(x => x.trim()).filter(Boolean);
+        if (vesselTaxonomyKey) {
+          // Vessel scope: keep only folders inside this vessel's own folder and
+          // read the taxonomy from the part below it.
+          const vi = p.findIndex(seg => vesselTaxNames.has(seg.toLowerCase()));
+          if (vi < 0) return;
+          p = p.slice(vi + 1);
+        }
         let grp: '' | 'drawings' | 'manuals' | 'both' = '';
         for (let i = 0; i < p.length; i++) {
           const seg = p[i];
           if (isToBeClassifiedName(seg)) {
+            groupsSeen.add(TBC_GROUP_LABEL);
             const cat = p[i + 1];
             if (cat) {
               if (!tbc.has(cat.toLowerCase())) tbc.set(cat.toLowerCase(), cat);
+              noteCat(TBC_GROUP_LABEL, cat);
               if (p[i + 2]) addSub(TBC_GROUP_LABEL, cat, p[i + 2]);
             }
             return;
@@ -4374,26 +4434,31 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               const cat = findKnown(seg, list);
               if (!cat) return;
               hit = true;
+              noteCat(gl, cat);
               if (p[i + 1]) addSub(gl, cat, p[i + 1]);
             });
             if (hit) return;
           }
           const g = folderGroupsOf(seg);
+          if (g.drawings !== g.manuals) groupsSeen.add(g.drawings ? 'Drawings' : 'Manuals');
           if (g.drawings || g.manuals) grp = g.drawings && g.manuals ? 'both' : (g.drawings ? 'drawings' : 'manuals');
         }
       });
       const index: LibTaxonomyIndex = {
         tbcCategories: Array.from(tbc.values()).sort((a, b) => a.localeCompare(b)),
         subs,
+        subMeta,
+        groups: Array.from(groupsSeen),
+        cats: new Map(Array.from(catsSeen.entries()).map(([k, m]) => [k, Array.from(m.values())] as [string, string[]])),
       };
-      (host as any)._libTaxonomyMemo = { src, index };
+      (host as any)._libTaxonomyMemo = { src, scope: vesselTaxScopeKey, index };
       return index;
     })();
     // Library-wide taxonomy not known yet (tree still loading / the backend
     // index still building / a failed request being retried): the
     // Sub-category dropdown says so instead of looking empty.
     const libTaxonomyState: 'ready' | 'loading' | 'retrying' = (() => {
-      if (!libraryWideScope || !liveLibraryResolved) return 'ready';
+      if (!taxonomyScoped || !liveLibraryResolved) return 'ready';
       if (libTaxonomy.subs.size > 0 || libTaxonomy.tbcCategories.length > 0) return 'ready';
       if (!libFolderTreeRes) return 'loading';
       if (libFolderTreeRes.folders.length > 0) return 'ready';
@@ -4442,6 +4507,14 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       // still be selectable — picking one searches the whole library.
       const atLibraryWide = vesselFilter === 'all' && docCategoryFilter === 'all';
       if (atLibraryWide) { hasDrawings = true; hasManuals = true; hasToBeClassified = true; }
+      // Vessel selected: every group that exists inside THIS vessel's folders.
+      if (vesselTaxonomyKey) {
+        libTaxonomy.groups.forEach(gl => {
+          if (gl === 'Drawings') hasDrawings = true;
+          else if (gl === 'Manuals') hasManuals = true;
+          else if (gl === TBC_GROUP_LABEL) hasToBeClassified = true;
+        });
+      }
       return [hasDrawings ? 'Drawings' : '', hasManuals ? 'Manuals' : '', hasToBeClassified ? TBC_GROUP_LABEL : ''].filter(Boolean);
     })();
     // Categories on offer for one Group ('all' = every group, merged). The
@@ -4472,6 +4545,17 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         libTaxonomy.tbcCategories.forEach(nm => { if (!kids.has(nm.toLowerCase())) kids.set(nm.toLowerCase(), nm); });
         if (isCurrentGroup && docLeafCategoryFilter !== 'all' && !kids.has(docLeafCategoryFilter.trim().toLowerCase())) kids.set(docLeafCategoryFilter.trim().toLowerCase(), docLeafCategoryFilter);
         return Array.from(kids.values()).sort((a, b) => a.localeCompare(b));
+      }
+      // Vessel selected: every category folder of this vessel for the group
+      // ('all' = merged across groups), independent of what is loaded.
+      if (vesselTaxonomyKey) {
+        const fromTax = (normalizedGroup === 'all' ? ['drawings', 'manuals'] : [normalizedGroup])
+          .reduce((acc: string[], gk) => acc.concat(libTaxonomy.cats.get(gk) || []), [])
+          .filter((v, i, arr) => arr.findIndex(x => x.toLowerCase() === v.toLowerCase()) === i);
+        if (fromTax.length > 0) {
+          if (isCurrentGroup && docLeafCategoryFilter !== 'all' && !fromTax.some(c => c.toLowerCase() === docLeafCategoryFilter.trim().toLowerCase())) fromTax.push(docLeafCategoryFilter);
+          return fromTax.sort((a, b) => a.localeCompare(b));
+        }
       }
       const candidates = normalizedGroup === 'drawings' ? drawingCategories
         : normalizedGroup === 'manuals' ? manualCategories
@@ -4542,9 +4626,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         const v = realSubCategoryOf(r);
         if (v) set.add(v);
       });
-      // Library-wide: folders sitting directly under the chosen category
-      // (or under any category of the chosen group) in the library walk.
-      if (libraryWideScope) {
+      // Library-wide (or vessel-scoped, via libTaxonomy below): folders sitting
+      // directly under the chosen category (or under any category of the
+      // chosen group) in the library walk.
+      if (taxonomyScoped) {
         const grp = (docGroupLevelFilter || 'all').trim().toLowerCase();
         const cats = docLeafCategoryFilter !== 'all'
           ? [docLeafCategoryFilter]
@@ -4594,8 +4679,26 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // categories stays distinguishable. Picking one changes ONLY the
     // Sub-category filter (Groups / Categories keep the user's choice).
     const subCategoryOptionGroups: Array<{ group: string; category: string; subs: string[] }> = (() => {
-      if (!libraryWideScope || docLeafCategoryFilter !== 'all') return [];
+      if (!taxonomyScoped || docLeafCategoryFilter !== 'all') return [];
       const out: Array<{ group: string; category: string; subs: string[] }> = [];
+      if (vesselTaxonomyKey) {
+        // Vessel-specific: every Group > Category that has sub-category folders
+        // inside THIS vessel (not limited to categories already loaded).
+        const order = ['drawings', 'manuals', TBC_GROUP_LABEL.toLowerCase()];
+        const wantGroup = (docGroupLevelFilter || 'all').trim().toLowerCase();
+        libTaxonomy.subs.forEach((m, key) => {
+          const meta = libTaxonomy.subMeta.get(key);
+          if (!meta) return;
+          if (wantGroup !== 'all' && meta.group.toLowerCase() !== wantGroup) return;
+          const subs = Array.from(m.values()).sort((a, b) => a.localeCompare(b));
+          if (subs.length) out.push({ group: meta.group, category: meta.category, subs });
+        });
+        out.sort((a, b) => {
+          const d = order.indexOf(a.group.toLowerCase()) - order.indexOf(b.group.toLowerCase());
+          return d !== 0 ? d : a.category.localeCompare(b.category);
+        });
+        return out;
+      }
       const groupsToShow = docGroupLevelFilter === 'all' ? groupOptions : [docGroupLevelFilter];
       groupsToShow.forEach(gl => {
         categoriesForGroup(gl).forEach(c => {
@@ -6732,7 +6835,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             <select
               aria-label="Document type filter"
               value={groupOptions.length === 0 ? 'all' : docGroupLevelFilter}
-              disabled={groupOptions.length === 0}
+              disabled={groupOptions.length === 0 && !(vesselTaxonomyKey && libTaxonomyState !== 'ready')}
               title={groupOptions.length === 0 ? 'No classified groups found in these folders' : undefined}
               onChange={e => {
                 const val = e.target.value;
@@ -6778,10 +6881,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               }}
               style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 160, cursor: groupOptions.length === 0 ? 'not-allowed' : 'pointer', opacity: groupOptions.length === 0 ? 0.6 : 1 }}
             >
-              <option value="all">{groupOptions.length === 0 ? 'No groups found' : 'All groups'}</option>
+              <option value="all">{groupOptions.length === 0 ? (vesselTaxonomyKey && libTaxonomyState !== 'ready' ? 'Loading groups…' : 'No groups found') : 'All groups'}</option>
               {groupOptions.map(g => <option key={g} value={g}>{g}</option>)}
             </select>
-            {(categoryOptions.length > 0 || categoryOptionGroups.length > 0 || libraryWideScope) ? (
+            {(categoryOptions.length > 0 || categoryOptionGroups.length > 0 || libraryWideScope || (!!vesselTaxonomyKey && libTaxonomyState !== 'ready')) ? (
               <select
                 aria-label="Category filter"
                 value={(() => {
@@ -6863,7 +6966,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 <option value="all">No categories found</option>
               </select>
             )}
-            {(subCategoryOptions.length > 0 || subCategoryOptionGroups.length > 0 || libraryWideScope) ? (
+            {(subCategoryOptions.length > 0 || subCategoryOptionGroups.length > 0 || taxonomyScoped) ? (
               <select
                 aria-label="Sub-category filter"
                 value={(() => {
