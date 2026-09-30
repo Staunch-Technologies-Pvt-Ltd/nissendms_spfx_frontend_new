@@ -24,6 +24,7 @@ import { CopilotSearchPanel } from '../copilot/CopilotSearchPanel';
 import { FolderTreeSelect, FolderTreeNode } from './FolderTreeSelect';
 import { DebouncedSearchInput } from './DebouncedSearchInput';
 
+import { clay } from '../clayTheme';
 // ── List view table styles ────────────────────────────────────────────────
 // Every cell is top-aligned with the same padding, and each file line in the
 // File name / Size / Date columns has the same fixed height, so a file's size
@@ -73,8 +74,28 @@ interface GroupCatTreeEntry {
   items: any[];
   truncated: boolean;
   at: number;
+  /** First attempt of this search (kept across polls of a still-building index). */
+  since?: number;
+  /** Waiting for the backend's folder/file index to finish its first build: re-ask at `retryAt`. */
+  idle?: boolean;
+  retryAt?: number;
+  /** Consecutive failed lookups (drives the retry pause). */
+  failures?: number;
 }
+/** Pause before retrying a failed lookup: 4 s, 8 s, 16 s, then 30 s. */
+const groupCatRetryDelayMs = (failures: number): number => Math.min(30000, 4000 * Math.pow(2, Math.max(0, failures - 1)));
 const GROUP_CAT_TREE_TTL_MS = 5 * 60 * 1000;
+/** How long to keep polling the backend's index before falling back to the slow Graph walk. */
+const GROUP_CAT_INDEX_WAIT_MS = 150 * 1000;
+/** Words a folder name must contain for the backend to pre-select files of a Group (superset of the exact client rule). */
+function groupCatPathWords(group: string): string[] {
+  const g = (group || '').trim().toLowerCase();
+  if (!g || g === 'all') return [];
+  if (g === 'drawings') return ['drawing', 'drawings', 'dwg', 'dwgs'];
+  if (g === 'manuals') return ['manual', 'manuals'];
+  if (g === 'to be classified') return ['classified'];
+  return ['drawing', 'drawings', 'dwg', 'dwgs', 'manual', 'manuals'];
+}
 const groupCatTreeCache: Map<string, GroupCatTreeEntry> = new Map();
 
 /** ✕ marker for a List view cell whose value isn't present in the path. */
@@ -346,9 +367,33 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     const effectiveLiveSiteId = sitesScopeSiteId || activeLiveSite?.site_id || '';
     const effectiveLiveDriveId = sitesScopeDriveId || activeLiveSite?.drive_id || '';
 
-    const directRootItems = effectiveLiveSiteId && effectiveLiveDriveId
+    const liveLibraryResolved = !!(effectiveLiveSiteId && effectiveLiveDriveId) &&
+      (docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents');
+    // The library's folders 3 levels deep, from the backend's drive folder
+    // index (one call, no per-folder listing). Used to find vessel folders
+    // and as a second source for the top-level folders below.
+    const shallowRootTree = liveLibraryResolved
+      ? host._getOrLoadSiteFolderTree(effectiveLiveSiteId, effectiveLiveDriveId, 'root', 3)
+      : null;
+    let directRootItems: any[] = effectiveLiveSiteId && effectiveLiveDriveId
       ? host._getOrLoadSiteFolderChildren(effectiveLiveSiteId, effectiveLiveDriveId, 'root').items
       : [];
+    if (liveLibraryResolved) {
+      // The root listing can fail or still be loading (Graph throttling, a
+      // timed-out request) while the folder index already knows the top-level
+      // folders. Without any source the Main folder dropdown collapsed to a
+      // made-up "Technical & Crewing" and a vessel could not be opened until
+      // the user pressed Retry. Order: live listing → folder index → last
+      // good list for this library.
+      const rootMemo: Map<string, any[]> = ((host as any)._rootFolderItemsMemo ||= new Map<string, any[]>());
+      const rootMemoKey = `${effectiveLiveSiteId}::${effectiveLiveDriveId}`;
+      if (!directRootItems.some(i => !!i?.folder)) {
+        const top = (shallowRootTree?.folders || []).filter(f => f.depth === 1);
+        if (top.length > 0) directRootItems = top.map(f => ({ id: f.id, name: f.name, folder: {} }));
+      }
+      if (directRootItems.some(i => !!i?.folder)) rootMemo.set(rootMemoKey, directRootItems);
+      else if (rootMemo.has(rootMemoKey)) directRootItems = rootMemo.get(rootMemoKey)!;
+    }
     const liveRootSource = effectiveLiveSiteId && effectiveLiveDriveId
       ? directRootItems
       : (host.state.documentLiveFolders || []).filter(folder => folder.is_folder !== false && folder.depth === 0);
@@ -1705,15 +1750,19 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // New", plus a canonical "Technical & Crewing" that matches neither
     // literal folder, so the dropdown showed 3 entries for 2 real folders.
     // Once live data is available, trust it exclusively.
+    // For a resolved live library never fall back to the row-derived
+    // canonical names ("Technical & Crewing"): while the live list is still
+    // loading the dropdown shows just "All main folders" instead of a
+    // folder that does not exist on the site.
     const mainFolderOptionsLive = liveMainFolderNames.length > 0
       ? liveMainFolderNames
-      : Array.from(new Set([...liveMainFolderNames, ...rowScannedMainFolderNames]));
+      : (liveLibraryResolved ? [] : Array.from(new Set([...liveMainFolderNames, ...rowScannedMainFolderNames])));
     // While both sources are still loading (first render after a site
     // switch, or before any row has been scanned) fall back to the known
     // department set so the dropdown isn't empty for a moment.
     const mainFolderOptions = mainFolderOptionsLive.length > 0
       ? mainFolderOptionsLive.sort()
-      : Object.keys(KNOWN_MAIN_FOLDER_MAP);
+      : (liveLibraryResolved ? [] : Object.keys(KNOWN_MAIN_FOLDER_MAP));
 
     // "Sub-folder" = a real folder found *nested* one level under the
     // *currently selected/navigated* main folder — not any main folder in
@@ -1982,12 +2031,45 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         });
     };
     const liveSubfolderEntries: LiveSubfolderEntry[] = [];
-    if (scopedMainFolderLiveFolderId) {
-      // Depth bound of 6 (not truly infinite) so one pathological tree can't
-      // hang the browser or fan out into hundreds of Graph calls; combined
-      // with the 300-entry budget above this comfortably covers real
-      // folder structures (e.g. SSxxx > FINISH PLAN > ELECTRIC/HULL/...)
-      // while staying bounded.
+    // FAST PATH: the whole folder-only tree of the main folder comes from ONE
+    // cached backend call (/folder-tree) — no per-folder /children requests,
+    // no 15-per-level slice, no 300-entry budget (which is what hid the
+    // nested folders of every vessel past the first few). The old bounded
+    // walk below is kept only as a fallback if that call fails.
+    const folderTreeRes = (scopedMainFolderLiveFolderId && effectiveLiveSiteId && effectiveLiveDriveId)
+      ? host._getOrLoadSiteFolderTree(effectiveLiveSiteId, effectiveLiveDriveId, scopedMainFolderLiveFolderId)
+      : null;
+    // Even a partial tree is used as-is (the host quietly re-fetches until it is
+    // complete) — falling back to per-folder loading on top of a throttled
+    // Graph only made things slower and less complete.
+    const liveFolderTreeComplete = !!folderTreeRes && folderTreeRes.folders.length > 0;
+    if (scopedMainFolderLiveFolderId && folderTreeRes && folderTreeRes.folders.length > 0) {
+      const treeByParent = new Map<string, typeof folderTreeRes.folders>();
+      folderTreeRes.folders.forEach(r => {
+        const arr = treeByParent.get(r.parent_id);
+        if (arr) arr.push(r); else treeByParent.set(r.parent_id, [r]);
+      });
+      const treeRootId = folderTreeRes.folders.find(r => r.depth === 1)?.parent_id;
+      const emitTree = (parentId: string, depth: number, pIds: string[], pNames: string[]): void => {
+        const seenAtLevel = new Set<string>();
+        (treeByParent.get(parentId) || []).forEach(f => {
+          const name = (f.name || '').trim();
+          const cIds = [...pIds, f.id];
+          const cNames = [...pNames, name];
+          const low = name.toLowerCase();
+          if (name && low !== 'sharepoint sites' && low !== 'main folder not assigned' &&
+            !KNOWN_MAIN_FOLDER_NAME_SET.has(low) && !KNOWN_CATEGORY_NAME_SET.has(low) &&
+            !liveSiteOwnNameSet.has(low) && !seenAtLevel.has(low)) {
+            seenAtLevel.add(low);
+            liveSubfolderEntries.push({ name, id: f.id, depth, pathIds: cIds, pathNames: cNames });
+          }
+          emitTree(f.id, depth + 1, cIds, cNames);
+        });
+      };
+      if (treeRootId) emitTree(treeRootId, 1, [], []);
+    } else if (scopedMainFolderLiveFolderId && !!folderTreeRes && folderTreeRes.error && !folderTreeRes.loading && Date.now() >= host._graphThrottledUntil) {
+      // Fallback (tree call failed/empty): the old bounded walk. Depth bound
+      // of 6 so one pathological tree can't fan out into hundreds of calls.
       collectLiveFolderEntriesRecursive(scopedMainFolderLiveFolderId, 6, 1, [], [], liveSubfolderEntries);
     }
     // The folder the user is currently inside (and every folder between it
@@ -2034,6 +2116,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // simply clicking through "SharePoint Sites" breadcrumb tiles (the
     // normal navigation flow) never touches vesselFilter at all.
     if (
+      !liveFolderTreeComplete &&
       isWithinLiveFolderView &&
       scopedMainFolderForSubfolders &&
       folderPathStack.length > 4
@@ -2062,6 +2145,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // 15 under its main folder (e.g. #20 of "Technical"'s 23) never had its
     // sub-folders collected, leaving the Sub-folder dropdown empty.
     if (
+      !liveFolderTreeComplete &&
       activeVesselFilter &&
       scopedMainFolderForSubfolders &&
       folderPathStack[0]?.id === 'sites_root' &&
@@ -2262,7 +2346,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // Selecting a Main folder / Sub-folder from the dropdown must not just
     // filter the grid — it must navigate the Folder view to that folder's
     // real contents, exactly as clicking its tile/breadcrumb would.
-    const navigateToLiveMainFolder = (folderKey: string): void => {
+    const navigateToLiveMainFolder = (folderKey: string, carry?: CarrySubfolder | null): void => {
       const card = rootFolderCards.find(c => c.key.trim().toLowerCase() === folderKey.trim().toLowerCase());
       if (card && card.liveFolderId && siteNavPrefix) {
         // A vessel already selected (it has a folder under this main folder
@@ -2276,10 +2360,26 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         // showing that vessel's documents under the newly picked main folder.
         if (vesselFilter && vesselFilter !== 'all' && vesselFilter.trim().toLowerCase() !== 'not listed') {
           const vesselPaths = siteVesselFolderPaths.get(vesselFilter.trim().toLowerCase()) || [];
-          const vesselPathUnderNewMain = vesselPaths.find(p =>
-            (p.split('/')[0] || '').trim().toLowerCase() === folderKey.trim().toLowerCase());
+          // Take the SHORTEST recorded path under the new main folder (the
+          // vessel's own "<main>/<vessel>" folder), same rule as
+          // vesselBasePathUnderMain. The recorded list can also hold deeper
+          // nested discoveries ("<main>/<vessel>/Drawings and Manuals"), and
+          // whichever came first after a refresh used to win via .find(),
+          // dropping the user inside a sub-folder instead of the vessel root.
+          // Single-segment paths (the vessel folder sitting at the library
+          // root) are not a "home" under this main folder, so skip them.
+          const vesselPathUnderNewMain = vesselPaths
+            .filter(p => p.includes('/') &&
+              (p.split('/')[0] || '').trim().toLowerCase() === folderKey.trim().toLowerCase())
+            .sort((a, b) => a.length - b.length)[0];
           if (vesselPathUnderNewMain) {
             const nodes = resolveCachedDriveFolderStack(vesselPathUnderNewMain);
+            // Carrying a Sub-folder pick (e.g. Drawings > Hull) from the same
+            // vessel under another main folder: open it here too.
+            if (nodes && carry) {
+              openVesselWithCarry(vesselFilter, nodes, carry);
+              return;
+            }
             if (nodes) {
               const vesselStack = [...siteNavPrefix, ...nodes];
               host._pushFolderNav(vesselStack, 'SharePoint Sites');
@@ -2309,7 +2409,15 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             if (liveNavSync.derive) host.setState({ vesselFilter: liveNavSync.derive(rootStack).vesselFilter });
             const targetVessel = vesselFilter;
             resolveLiveDriveFolderStackAsync(vesselPathUnderNewMain).then(resolvedNodes => {
-              if (!resolvedNodes) return;
+              if (!resolvedNodes) {
+                // Vessel folder not reachable here: don't leave a carried
+                // Sub-folder pinned on the main folder's root.
+                if (carry && subfolderStillIs(carry) && host.state.vesselFilter === targetVessel) {
+                  (host as any)._subfolderSelectedPath = undefined;
+                  host.setState({ docSubfolderOtherFilter: 'all', docListPage: 0 });
+                }
+                return;
+              }
               // Only complete the jump if the user hasn't since navigated
               // away from the root this redirected them to, or changed the
               // vessel selection — otherwise the fetch's result is stale
@@ -2320,6 +2428,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 current[current.length - 1]?.id === rootStack[rootStack.length - 1]?.id &&
                 host.state.vesselFilter === targetVessel;
               if (!stillAtRedirectedRoot) return;
+              if (carry) {
+                openVesselWithCarry(targetVessel, resolvedNodes, carry);
+                return;
+              }
               const vesselStack = [...siteNavPrefix, ...resolvedNodes];
               host._pushFolderNav(vesselStack, 'SharePoint Sites');
               host.setState({
@@ -2335,11 +2447,61 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         const stack = [...siteNavPrefix, { id: card.liveFolderId, name: card.key }];
         host._pushFolderNav(stack, 'SharePoint Sites');
         if (liveNavSync.derive) host.setState({ vesselFilter: liveNavSync.derive(stack).vesselFilter });
+        if (carry) {
+          // No vessel folder under this main folder to carry the pick into.
+          (host as any)._subfolderSelectedPath = undefined;
+          host.setState({ docSubfolderOtherFilter: 'all', docListPage: 0 });
+        }
       }
     };
-    const navigateToLiveSubfolder = (subfolderName: string): void => {
-      const entry = liveSubfolderEntryByName.get(subfolderName.trim().toLowerCase())
-        || (((host as any)._lazySubfolderEntries as Map<string, LiveSubfolderEntry> | undefined)?.get(subfolderName.trim().toLowerCase()));
+    const navigateToLiveSubfolder = (subfolderName: string, namePath?: string[], nodeId?: string): void => {
+      // A bare name is ambiguous ("Safety" exists under both Drawings and
+      // Manuals) — when the caller knows the full tree path, resolve by that
+      // first so the right branch is opened.
+      const pathKey = namePath && namePath.length ? namePath.map(n => n.trim().toLowerCase()).join('/') : '';
+      const lazyMap = (host as any)._lazySubfolderEntries as Map<string, LiveSubfolderEntry> | undefined;
+      // With a vessel selected the dropdown tree is scoped to that vessel, so
+      // its paths are RELATIVE to the vessel (no vessel segment) while
+      // liveSubfolderEntries now holds every vessel's folders. Resolve inside
+      // the selected vessel first — otherwise a shared name/path such as
+      // Drawings > Basic matched whichever vessel came first in the list
+      // (Belle Lune), silently jumping to the wrong vessel.
+      const lowPath = (names: string[]): string => names.map(n => n.trim().toLowerCase()).join('/');
+      const inSelectedVessel = activeVesselFilter
+        ? liveSubfolderEntries.filter(e => vesselIndexInPath(e) >= 0)
+        : [];
+      // Folder ids are unique across vessels, so when the dropdown hands us the
+      // clicked node's own id, that is the one unambiguous way to find it —
+      // names/paths repeat under every vessel (Drawings > Basic ...).
+      const byNodeId = nodeId
+        ? (liveSubfolderEntries.find(e => e.id === nodeId)
+          || (lazyMap ? Array.from(lazyMap.values()).find(e => e.id === nodeId) : undefined)
+          // A folder that was filtered out of the entry list itself (e.g. the
+          // "Drawings"/"Manuals" ancestors) still appears in every descendant's
+          // id chain — rebuild its entry from that chain.
+          || (() => {
+            for (const e of liveSubfolderEntries) {
+              const idx = e.pathIds.indexOf(nodeId);
+              if (idx >= 0) {
+                return { name: e.pathNames[idx], id: nodeId, depth: idx + 1, pathIds: e.pathIds.slice(0, idx + 1), pathNames: e.pathNames.slice(0, idx + 1) } as LiveSubfolderEntry;
+              }
+            }
+            return undefined;
+          })())
+        : undefined;
+      const entry = byNodeId || (pathKey && (
+          liveSubfolderEntries.find(e => lowPath(e.pathNames) === pathKey)
+          || inSelectedVessel.find(e => lowPath(e.pathNames.slice(vesselIndexInPath(e) + 1)) === pathKey)
+          || lazyMap?.get('path:' + pathKey)))
+        || (namePath && namePath.length >= 2 ? (activeVesselFilter ? inSelectedVessel : liveSubfolderEntries).find(e => {
+              const en = e.pathNames.map(n => n.trim().toLowerCase());
+              const np = namePath.map(n => n.trim().toLowerCase());
+              const k = Math.min(en.length, np.length, 2);
+              return k >= 2 && en.slice(-k).join('/') === np.slice(-k).join('/');
+            }) : undefined)
+        || (activeVesselFilter ? inSelectedVessel.find(e => e.name.trim().toLowerCase() === subfolderName.trim().toLowerCase()) : undefined)
+        || liveSubfolderEntryByName.get(subfolderName.trim().toLowerCase())
+        || lazyMap?.get(subfolderName.trim().toLowerCase());
       if (entry && siteNavPrefix && scopedMainFolderLiveFolderId && scopedMainFolderForSubfolders) {
         const mainFolderNode = { id: scopedMainFolderLiveFolderId, name: scopedMainFolderForSubfolders };
         const extraStack = entry.pathIds.map((id, i) => ({ id, name: entry.pathNames[i] }));
@@ -2492,6 +2654,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           // "To Be Classified" folder (at any depth) belongs to it.
           if (!segments.some(isToBeClassifiedName)) return false;
         } else {
+          // Files filed under a "To Be Classified" folder belong only to the
+          // "To Be Classified" group, never to Drawings / Manuals.
+          if (segments.some(isToBeClassifiedName)) return false;
           const g = decisiveGroupOf(segments);
           if (!g) return false;
           if (want === 'drawings' && !g.drawings) return false;
@@ -2543,7 +2708,25 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       if (exact) return exact;
       return categoryOptions.find(c => folderMatchesCategory(folderName, c)) || null;
     };
-    const findSubfolderNodeForCategory = (category: string): { name: string; path: string[] } | null => {
+    /** Does a tree path sit inside the given Group / Category selection? */
+    const pathFitsGroupContext = (path: string[], ctx?: { group?: string; category?: string }): boolean => {
+      if (!ctx) return true;
+      const group = (ctx.group || 'all').trim().toLowerCase();
+      if (group !== 'all') {
+        if (group === TBC_GROUP_LABEL.toLowerCase()) {
+          if (!path.some(isToBeClassifiedName)) return false;
+        } else {
+          if (path.some(isToBeClassifiedName)) return false;
+          const wantDrawings = group === 'drawings';
+          if (!path.some(seg => { const g = folderGroupsOf(seg); return wantDrawings ? g.drawings : g.manuals; })) return false;
+        }
+      }
+      if (ctx.category && ctx.category !== 'all') {
+        if (!path.some(seg => folderMatchesCategory(seg, ctx.category as string))) return false;
+      }
+      return true;
+    };
+    const findSubfolderNodeForCategory = (category: string, ctx?: { group?: string; category?: string }): { name: string; path: string[] } | null => {
       if (!category || category === 'all') return null;
       const norm = category.trim().toLowerCase();
       const isTbcQuery = isToBeClassifiedName(category);
@@ -2552,8 +2735,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       const walk = (nodes: FolderTreeNode[], trail: string[]): void => {
         for (const node of nodes) {
           const ownPath = [...trail, node.name];
-          if (!exactHit && (node.name.trim().toLowerCase() === norm || (isTbcQuery && isToBeClassifiedName(node.name)))) exactHit = { name: node.name, path: ownPath };
-          if (!fuzzyHit && folderMatchesCategory(node.name, category)) fuzzyHit = { name: node.name, path: ownPath };
+          const fits = pathFitsGroupContext(ownPath, ctx);
+          if (fits && !exactHit && (node.name.trim().toLowerCase() === norm || (isTbcQuery && isToBeClassifiedName(node.name)))) exactHit = { name: node.name, path: ownPath };
+          if (fits && !fuzzyHit && folderMatchesCategory(node.name, category)) fuzzyHit = { name: node.name, path: ownPath };
           if (node.children.length) walk(node.children, ownPath);
         }
       };
@@ -2695,7 +2879,15 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       }
       return exactCount > 0;
     };
-    const folderVesselMatchCache = new Map<string, string | null>();
+    // Kept across renders (reset only when the candidate vessel set changes):
+    // the folder lists feeding this now include the library's folder tree,
+    // and re-matching every folder name on every render was wasted work.
+    const vesselCandidateSig = Array.from(vesselCandidateByKey.entries()).map(([k, v]) => `${k}=${v}`).join('|');
+    const persistedVesselMatch = (host as any)._folderVesselMatchMemo as { sig: string; map: Map<string, string | null> } | undefined;
+    const folderVesselMatchCache: Map<string, string | null> = persistedVesselMatch && persistedVesselMatch.sig === vesselCandidateSig
+      ? persistedVesselMatch.map
+      : new Map<string, string | null>();
+    (host as any)._folderVesselMatchMemo = { sig: vesselCandidateSig, map: folderVesselMatchCache };
     const matchFolderToVessel = (folderName: string): string | null => {
       const raw = (folderName || '').trim();
       if (!raw) return null;
@@ -2747,6 +2939,24 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         knownSiteFolderPaths.push(clean);
       };
       liveRootFolders.forEach(f => addFolderPath(f.key));
+      // Vessel folders sit BELOW the main folders (Technical/Bow Fighter,
+      // ACRA CHARGE/NKS/<vessel>), so at the library root none of them had
+      // been listed yet and the Vessel filter came up empty until a main
+      // folder was opened. (The folder tiles used to list each main folder's
+      // children as a side effect; they now use /subfolder-counts instead.)
+      //   • each main folder's own listing — one cached call per main folder,
+      //     quick, finds vessels one level down;
+      //   • the library's folder tree 3 levels deep — one call, served from
+      //     the backend's drive folder index, finds vessels nested deeper.
+      if (effectiveLiveSiteId && effectiveLiveDriveId &&
+        (docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents')) {
+        if (Date.now() >= host._graphThrottledUntil) {
+          liveRootFolders.slice(0, 40).forEach(card => {
+            if (card.liveFolderId) host._getOrLoadSiteFolderChildren(effectiveLiveSiteId, effectiveLiveDriveId, card.liveFolderId);
+          });
+        }
+        (shallowRootTree?.folders || []).forEach(f => { if (f && f.path) addFolderPath(f.path); });
+      }
       if (effectiveLiveSiteId && effectiveLiveDriveId) {
         const cachePrefix = `${effectiveLiveSiteId}::${effectiveLiveDriveId}::`;
         host._siteFolderItemsCache.forEach((entry, key) => {
@@ -2931,6 +3141,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     const siteVesselOptions = Array.from(allSiteVesselNamesByLower.values())
       .sort((a, b) => a.localeCompare(b))
       .map(name => ({ id: name, name }));
+    // Shared Documents / Documents libraries: vessels from loaded rows plus
+    // every vessel whose folder was found in the library (siteVesselNames) —
+    // rows alone are empty until something has been opened, which left the
+    // Vessel filter with nothing but "All vessels" on first load.
+    const libraryVesselOptions: string[] = (() => {
+      const byKey = new Map<string, string>();
+      distinctVesselsInScope.concat(siteVesselNames).forEach(n => {
+        const key = normVesselText(n || '');
+        if (key && !byKey.has(key)) byKey.set(key, n);
+      });
+      return Array.from(byKey.values()).sort((a, b) => {
+        if (a === 'Not Listed') return 1;
+        if (b === 'Not Listed') return -1;
+        return a.localeCompare(b);
+      });
+    })();
 
     // Every main folder the *selected* vessel has a known folder under —
     // shared by the "also under" chip strip, the Compare toggle, and the
@@ -3033,10 +3259,40 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // _getOrLoadSiteFolderChildren derives it synchronously from the
     // already-loaded live tree (documentLiveFolders). Returns null only if a
     // level genuinely still needs a Graph round-trip.
+    // Resolve a drive-relative path to breadcrumb nodes from the folder-index
+    // trees already in the browser (root tree 3 levels deep + each main
+    // folder's full tree) — no /children call, so opening a vessel works even
+    // while folder listings are slow, throttled or failed.
+    const resolveStackFromTrees = (segments: string[]): { id: string; name: string }[] | null => {
+      if (!effectiveLiveSiteId || !effectiveLiveDriveId || segments.length === 0) return null;
+      const prefix = `${effectiveLiveSiteId}::${effectiveLiveDriveId}::`;
+      const rootTree = host._siteFolderTreeCache.get(`${prefix}root::d3`);
+      const rootId = rootTree?.folders.find(f => f.depth === 1)?.parent_id;
+      if (!rootId) return null;
+      const childrenOf = new Map<string, { id: string; name: string }[]>();
+      host._siteFolderTreeCache.forEach((t, k) => {
+        if (!k.startsWith(prefix) || !t || !t.folders || t.folders.length === 0) return;
+        t.folders.forEach(f => {
+          const arr = childrenOf.get(f.parent_id);
+          if (arr) arr.push(f); else childrenOf.set(f.parent_id, [f]);
+        });
+      });
+      const nodes: { id: string; name: string }[] = [];
+      let parentId = rootId;
+      for (const segment of segments) {
+        const hit = (childrenOf.get(parentId) || []).find(f => (f.name || '').trim().toLowerCase() === segment.toLowerCase());
+        if (!hit) return null;
+        nodes.push({ id: hit.id, name: hit.name });
+        parentId = hit.id;
+      }
+      return nodes;
+    };
     const resolveCachedDriveFolderStack = (path: string): { id: string; name: string }[] | null => {
       if (!effectiveLiveSiteId || !effectiveLiveDriveId) return null;
       const segments = path.replace(/\\/g, '/').split('/').map(seg => seg.trim()).filter(Boolean);
       if (segments.length === 0) return null;
+      const fromTrees = resolveStackFromTrees(segments);
+      if (fromTrees) return fromTrees;
       const nodes: { id: string; name: string }[] = [];
       let parentId = 'root';
       for (const segment of segments) {
@@ -3064,6 +3320,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       if (!effectiveLiveSiteId || !effectiveLiveDriveId) return null;
       const segments = path.replace(/\\/g, '/').split('/').map(seg => seg.trim()).filter(Boolean);
       if (segments.length === 0) return null;
+      const fromTrees = resolveStackFromTrees(segments);
+      if (fromTrees) return fromTrees;
       const nodes: { id: string; name: string }[] = [];
       let parentId = 'root';
       for (const segment of segments) {
@@ -3245,7 +3503,277 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     //   • Shared Documents / Documents → [lib:…, …]                    (1 prefix node)
     // siteNavPrefix already synthesises the sites_root prefix for the latter,
     // the same way navigateToLiveMainFolder / navigateToLiveSubfolder do.
-    const navigateToSiteVesselFolder = (vesselName: string): void => {
+    //
+    // ── Carrying the selected Sub-folder to another vessel / main folder ──
+    // Changing the Vessel filter, or jumping to the same vessel under another
+    // main folder (the "<vessel> is also under:" chips, or the Main folder
+    // dropdown with a vessel selected), used to reset the Sub-folder dropdown
+    // to "All sub-folders" (and the chips also cleared Group / Category), so
+    // the user had to re-pick "Hull" every time. The Sub-folder value really
+    // means "this folder inside the vessel", so it is re-resolved *inside the
+    // vessel folder being opened* by its path relative to the vessel (e.g.
+    // Drawings > Hull): from the main folder's folder tree, the per-level
+    // folder cache, and finally the live listing. Only when that vessel folder
+    // is confirmed not to have it does the selection fall back to "All
+    // sub-folders". Group / Category are never touched here.
+    type CarrySubfolder = { name: string; rel: string[] };
+    type CarryNode = { id: string; name: string };
+    type CarryResult = { nodes: CarryNode[]; rel: string[] };
+    const carryLow = (names: string[]): string => names.map(n => n.trim().toLowerCase()).join('/');
+    // The selected sub-folder's path relative to the vessel it sits in.
+    // Folder view: the breadcrumb (it also follows tile clicks); otherwise the
+    // branch remembered from the dropdown pick.
+    const buildSubfolderCarry = (): CarrySubfolder | null => {
+      const prevSub = (docSubfolderOtherFilter || 'all').trim();
+      if (!prevSub || prevSub.toLowerCase() === 'all') return null;
+      const prevVesselLabel = activeVesselFilter ? (vesselFilter || '') : '';
+      const isPrevVesselSeg = (n: string): boolean => {
+        if (activeVesselFilter) {
+          if (normalizeVesselKey(n) === activeVesselFilter) return true;
+          const m = matchFolderToVessel(n);
+          return !!m && vesselNamesEqual(m, prevVesselLabel);
+        }
+        return !!matchFolderToVessel(n);
+      };
+      const lastIsPrevSub = (names: string[]): boolean =>
+        names.length > 0 && names[names.length - 1].trim().toLowerCase() === prevSub.toLowerCase();
+      let rel: string[] = [];
+      const prefixLen = folderPathStack[0]?.id === 'sites_root'
+        ? 3
+        : ((folderPathStack[0]?.id === 'lib:shared_documents' || folderPathStack[0]?.id === 'lib:documents') ? 1 : -1);
+      if (docViewMode === 'folder' && prefixLen >= 0 && folderPathStack.length > prefixLen) {
+        const names = folderPathStack.slice(prefixLen).map(n => n.name);
+        const vi = names.findIndex(isPrevVesselSeg);
+        if (vi >= 0 && lastIsPrevSub(names.slice(vi + 1))) rel = names.slice(vi + 1);
+      }
+      if (rel.length === 0) {
+        const sp = (host as any)._subfolderSelectedPath as string[] | undefined;
+        if (sp && sp.length && lastIsPrevSub(sp)) {
+          const vi = sp.findIndex(isPrevVesselSeg);
+          rel = vi >= 0 ? sp.slice(vi + 1) : sp.slice();
+        }
+      }
+      if (rel.length === 0) rel = [prevSub];
+      return { name: rel[rel.length - 1], rel };
+    };
+    // The vessel's own folder paths, those under `mainFolder` (default: the
+    // one being browsed) first, the shortest ("<main>/<vessel>") first.
+    const carryBasePaths = (vesselName: string, onlyMain?: string): string[] => {
+      const curMain = (onlyMain || scopedMainFolderForSubfolders || '').trim().toLowerCase();
+      const all = siteVesselFolderPaths.get(vesselName.trim().toLowerCase()) || [];
+      const byLen = (a: string, b: string): number => a.length - b.length;
+      const underMain = curMain
+        ? all.filter(p => p.includes('/') && (p.split('/')[0] || '').trim().toLowerCase() === curMain).sort(byLen)
+        : [];
+      if (onlyMain) return underMain;
+      return [...underMain, ...all.filter(p => underMain.indexOf(p) < 0).sort(byLen)];
+    };
+    // Exact relative path first; with `exactOnly` false also the same last
+    // two folder names (vessels may nest the group folders differently),
+    // then the shallowest folder with the same name.
+    const pickCarry = (cands: CarryResult[], carry: CarrySubfolder, exactOnly: boolean): CarryResult | null => {
+      if (cands.length === 0) return null;
+      const want = carry.rel.map(n => n.trim().toLowerCase());
+      const byDepth = (a: CarryResult, b: CarryResult): number => a.rel.length - b.rel.length;
+      const exact = cands.filter(c => carryLow(c.rel) === want.join('/')).sort(byDepth)[0];
+      if (exact || exactOnly) return exact || null;
+      return cands.filter(c => {
+          const r = c.rel.map(n => n.trim().toLowerCase());
+          const k = Math.min(r.length, want.length, 2);
+          return k >= 2 && r.slice(-k).join('/') === want.slice(-k).join('/');
+        }).sort(byDepth)[0]
+        || cands.filter(c => c.rel[c.rel.length - 1].trim().toLowerCase() === want[want.length - 1]).sort(byDepth)[0]
+        || null;
+    };
+    // Every folder below the vessel folder (last of vesselNodes, a
+    // drive-root-relative stack) that is already known: the main folder's
+    // folder tree plus the Sub-folder dropdown's own entries.
+    const carryCandidates = (vesselNodes: CarryNode[]): CarryResult[] => {
+      if (vesselNodes.length < 2) return [];
+      const main = vesselNodes[0];
+      const vesselId = vesselNodes[vesselNodes.length - 1].id;
+      const out: CarryResult[] = [];
+      const seen = new Set<string>();
+      const addChain = (chain: CarryNode[]): void => {
+        const vi = chain.findIndex(n => n.id === vesselId);
+        if (vi < 0) return;
+        for (let j = vi + 1; j < chain.length; j++) {
+          if (!chain[j].id || seen.has(chain[j].id)) continue;
+          seen.add(chain[j].id);
+          out.push({ nodes: [main, ...chain.slice(0, j + 1)], rel: chain.slice(vi + 1, j + 1).map(n => n.name) });
+        }
+      };
+      if (effectiveLiveSiteId && effectiveLiveDriveId) {
+        const tree = host._getOrLoadSiteFolderTree(effectiveLiveSiteId, effectiveLiveDriveId, main.id);
+        if (tree && tree.folders.length > 0) {
+          const byId = new Map(tree.folders.map(f => [f.id, f]));
+          const parentIds = new Set(tree.folders.map(f => f.parent_id));
+          const treeRootId = tree.folders.find(f => f.depth === 1)?.parent_id || main.id;
+          // Leaves only: each chain already covers all of its ancestors.
+          tree.folders.forEach(f => {
+            if (parentIds.has(f.id)) return;
+            const chain: CarryNode[] = [];
+            let cur: typeof f | undefined = f;
+            let guard = 0;
+            while (cur && guard++ < 64) {
+              chain.unshift({ id: cur.id, name: cur.name });
+              if (cur.parent_id === treeRootId) break;
+              cur = byId.get(cur.parent_id);
+            }
+            if (cur && cur.parent_id === treeRootId) addChain(chain);
+          });
+        }
+      }
+      if (scopedMainFolderLiveFolderId === main.id) {
+        liveSubfolderEntries.forEach(e => addChain(e.pathIds.map((id, i) => ({ id, name: e.pathNames[i] }))));
+      }
+      return out;
+    };
+    const carrySyncFor = (vesselNodes: CarryNode[], carry: CarrySubfolder): CarryResult | null => {
+      const cands = carryCandidates(vesselNodes);
+      const exact = pickCarry(cands, carry, true);
+      if (exact) return exact;
+      const cached = resolveCachedDriveFolderStack([...vesselNodes.map(n => n.name), ...carry.rel].join('/'));
+      if (cached) return { nodes: cached, rel: carry.rel };
+      return pickCarry(cands, carry, false);
+    };
+    // Live, level by level. 'missing' only when the vessel folder's listing
+    // really came back without the sub-folder; 'unknown' when a level could
+    // not be read (throttled / failed) — the selection is then kept as is.
+    const carryAsyncFor = async (vesselNodes: CarryNode[], carry: CarrySubfolder): Promise<CarryResult | 'missing' | 'unknown'> => {
+      if (!effectiveLiveSiteId || !effectiveLiveDriveId || vesselNodes.length === 0) return 'unknown';
+      const siteId = effectiveLiveSiteId;
+      const driveId = effectiveLiveDriveId;
+      const nodes = vesselNodes.slice();
+      let parentId = nodes[nodes.length - 1].id;
+      for (const seg of carry.rel) {
+        const items = await host._loadAndCacheSiteFolderChildren(siteId, driveId, parentId);
+        const hit = (items || []).find((item: any) =>
+          item?.folder && String(item.name || '').trim().toLowerCase() === seg.trim().toLowerCase());
+        if (!hit) {
+          const level = host._siteFolderItemsCache.get(`${siteId}::${driveId}::${parentId}`) as any;
+          if (!level || level.error || level.loading) return 'unknown';
+          // Not at the exact path — the vessel may nest it differently. Give
+          // the main folder's tree a moment to arrive, then match loosely.
+          for (let i = 0; i < 20; i++) {
+            const t = host._getOrLoadSiteFolderTree(siteId, driveId, vesselNodes[0].id);
+            if (!t || !t.loading) break;
+            await new Promise(r => window.setTimeout(r, 1500));
+          }
+          return pickCarry(carryCandidates(vesselNodes), carry, false) || 'missing';
+        }
+        nodes.push({ id: hit.id, name: hit.name });
+        parentId = hit.id;
+      }
+      return { nodes, rel: carry.rel };
+    };
+    const isSameVesselNow = (vesselName: string): boolean =>
+      normalizeVesselKey(String(host.state.vesselFilter || '')) === normalizeVesselKey(vesselName);
+    const subfolderStillIs = (carry: CarrySubfolder): boolean =>
+      (host.state.docSubfolderOtherFilter || '').trim().toLowerCase() === carry.name.trim().toLowerCase();
+    // Opens the vessel folder (drive-root-relative `vesselNodes`) and, when a
+    // sub-folder is being carried, that sub-folder inside it instead.
+    const openVesselWithCarry = (vesselName: string, vesselNodes: CarryNode[], carry?: CarrySubfolder | null): void => {
+      if (!siteNavPrefix) return;
+      const prefix = siteNavPrefix;
+      const carried = carry ? carrySyncFor(vesselNodes, carry) : null;
+      const stack = [...prefix, ...(carried ? carried.nodes : vesselNodes)];
+      host._pushFolderNav(stack, 'SharePoint Sites');
+      if (carried) {
+        (host as any)._subfolderSelectedPath = carried.rel;
+        host.setState({
+          ...deriveDocFiltersFromStack(stack),
+          docSubfolderOtherFilter: carried.rel[carried.rel.length - 1] || (carry ? carry.name : 'all'),
+          vesselFilter: vesselName,
+          docListPage: 0,
+        });
+        return;
+      }
+      // Main folder ← stack[3]. Without a sub-folder to carry the Sub-folder
+      // dropdown stays on "All sub-folders": with a vessel selected it lists
+      // that vessel's own sub-folders (the vessel folder itself is not one of
+      // its options).
+      host.setState({
+        ...deriveDocFiltersFromStack(stack),
+        docSubfolderOtherFilter: carry ? carry.name : 'all',
+        vesselFilter: vesselName,
+        docListPage: 0,
+      });
+      if (!carry) return;
+      // Not resolvable from what is loaded yet: keep the pick and finish the
+      // jump into it once the live listing answers (unless the user has moved
+      // on in the meantime).
+      (host as any)._subfolderSelectedPath = carry.rel;
+      void carryAsyncFor(vesselNodes, carry).then(res => {
+        if (!isSameVesselNow(vesselName) || !subfolderStillIs(carry)) return;
+        const cur = host.state.folderPathStack || [];
+        const stillHere = cur.length === stack.length && cur[cur.length - 1]?.id === stack[stack.length - 1]?.id;
+        if (!stillHere || res === 'unknown') return;
+        if (res === 'missing') {
+          (host as any)._subfolderSelectedPath = undefined;
+          host.setState({ docSubfolderOtherFilter: 'all', docListPage: 0 });
+          return;
+        }
+        const deep = [...prefix, ...res.nodes];
+        host._pushFolderNav(deep, 'SharePoint Sites');
+        (host as any)._subfolderSelectedPath = res.rel;
+        host.setState({
+          ...deriveDocFiltersFromStack(deep),
+          docSubfolderOtherFilter: res.rel[res.rel.length - 1] || carry.name,
+          vesselFilter: vesselName,
+          docListPage: 0,
+        });
+      }).catch(() => undefined);
+    };
+    // List view has no breadcrumb to move: keep the Sub-folder pick (its
+    // branch is what the row filter uses) and only drop it once none of the
+    // vessel's folders (under `onlyMain`, when given) has that folder.
+    const finishCarryInList = (vesselName: string, carry: CarrySubfolder, onlyMain?: string): void => {
+      const bases = carryBasePaths(vesselName, onlyMain);
+      for (const base of bases) {
+        const vesselNodes = resolveCachedDriveFolderStack(base);
+        const found = vesselNodes ? carrySyncFor(vesselNodes, carry) : null;
+        if (found) { (host as any)._subfolderSelectedPath = found.rel; return; }
+      }
+      (host as any)._subfolderSelectedPath = carry.rel;
+      if (bases.length === 0) return;
+      void (async (): Promise<CarryResult | 'missing' | 'unknown'> => {
+        let sawMissing = false;
+        for (const base of bases) {
+          const vesselNodes = await resolveLiveDriveFolderStackAsync(base);
+          if (!vesselNodes) continue;
+          const res = await carryAsyncFor(vesselNodes, carry);
+          if (res === 'missing') { sawMissing = true; continue; }
+          if (res !== 'unknown') return res;
+        }
+        return sawMissing ? 'missing' : 'unknown';
+      })().then(res => {
+        if (!isSameVesselNow(vesselName) || !subfolderStillIs(carry) || res === 'unknown') return;
+        if (res === 'missing') {
+          (host as any)._subfolderSelectedPath = undefined;
+          host.setState({ docSubfolderOtherFilter: 'all', docListPage: 0 });
+          return;
+        }
+        (host as any)._subfolderSelectedPath = res.rel;
+        host.setState({ docSubfolderOtherFilter: res.rel[res.rel.length - 1] || carry.name, docListPage: 0 });
+      }).catch(() => undefined);
+    };
+    // Same vessel, other main folder: the "<vessel> is also under:" chips and
+    // the Main folder dropdown (with a vessel selected). Keeps Group /
+    // Category and carries the Sub-folder pick into the vessel's folder there.
+    const switchVesselMainFolder = (mainFolder: string): void => {
+      (host as any)._mainFolderImplicit = undefined;
+      const carry = buildSubfolderCarry();
+      host.setState({
+        docCategoryFilter: mainFolder,
+        catFilter: mainFolder,
+        docSubfolderOtherFilter: carry ? carry.name : 'all',
+        docListPage: 0,
+      });
+      if (carry) (host as any)._subfolderSelectedPath = carry.rel;
+      navigateToLiveMainFolder(mainFolder, carry);
+    };
+    const navigateToSiteVesselFolder = (vesselName: string, carry?: CarrySubfolder | null): void => {
       if (!siteNavPrefix) return;
       const rootId = folderPathStack[0]?.id;
       const livePrefixLength = rootId === 'sites_root'
@@ -3297,10 +3825,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           : '';
         host.setState({
           docCategoryFilter: mainFolderName || 'all',
-          docSubfolderOtherFilter: 'all',
+          docSubfolderOtherFilter: carry ? carry.name : 'all',
           vesselFilter: vesselName,
           docListPage: 0,
         });
+        if (carry) finishCarryInList(vesselName, carry);
         return;
       }
       const here = folderPathStack.slice(livePrefixLength).map(n => n.name).join('/').toLowerCase();
@@ -3316,23 +3845,35 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       });
       if (insideVesselFolder) return;
       const preferred = candidates.filter(p => here && p.toLowerCase().startsWith(`${here}/`));
+      // Coming from another vessel's folder (…/Technical/<old vessel>/Drawings/Hull)
+      // nothing starts with `here`, so without this the new vessel could land
+      // under a different main folder than the one being browsed.
+      const hereMain = here.split('/')[0] || '';
+      const sameMain = hereMain
+        ? candidates.filter(p => preferred.indexOf(p) < 0 && (p.split('/')[0] || '').trim().toLowerCase() === hereMain)
+        : [];
+      const ordered = [...preferred, ...sameMain, ...candidates];
       let nodes: { id: string; name: string }[] | null = null;
-      for (const candidate of [...preferred, ...candidates]) {
+      for (const candidate of ordered) {
         nodes = resolveCachedDriveFolderStack(candidate);
         if (nodes) break;
       }
-      if (!nodes) return;
-      const stack = [...siteNavPrefix, ...nodes];
-      host._pushFolderNav(stack, 'SharePoint Sites');
-      // Main folder ← stack[3]. The Sub-folder dropdown is left on "All
-      // sub-folders": with a vessel selected it lists that vessel's own
-      // sub-folders (the vessel folder itself is not one of its options).
-      host.setState({
-        ...deriveDocFiltersFromStack(stack),
-        docSubfolderOtherFilter: 'all',
-        vesselFilter: vesselName,
-        docListPage: 0,
-      });
+      // A previously selected sub-folder (e.g. Drawings > Hull) is opened
+      // inside this vessel instead of stopping at the vessel's root.
+      if (nodes) { openVesselWithCarry(vesselName, nodes, carry); return; }
+      // The vessel's folder isn't in the per-level cache yet (a level that
+      // needs a Graph round-trip): resolve it level by level instead of
+      // silently leaving the breadcrumb on the previous vessel.
+      void (async () => {
+        for (const candidate of ordered) {
+          const resolved = await resolveLiveDriveFolderStackAsync(candidate);
+          if (resolved) return resolved;
+        }
+        return null;
+      })().then(resolved => {
+        if (!resolved || !isSameVesselNow(vesselName)) return;
+        openVesselWithCarry(vesselName, resolved, carry);
+      }).catch(() => undefined);
     };
 
     // Shared by the Vessel filter <select> below and the search box's
@@ -3345,6 +3886,23 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     const breadcrumbMainFolderName: string | null = liveStackPrefixLen >= 0 && folderPathStack.length > liveStackPrefixLen
       ? (folderPathStack[liveStackPrefixLen]?.name || null)
       : null;
+    // The Main folder dropdown mirrors the folder on screen in Folder view.
+    // Picking a vessel while it reads "All main folders" has to open one of
+    // the vessel's main folders (a vessel is often under several), which used
+    // to flip the dropdown to that folder: a choice the user never made.
+    // `_mainFolderImplicit` remembers that the main folder was picked for the
+    // user, so the dropdown keeps reading "All main folders" (the "<vessel> is
+    // also under" chips show where you actually are). It ends when the vessel
+    // is cleared or changed away, or when a main folder is picked explicitly
+    // (dropdown / chip).
+    const implicitMainRec = (host as any)._mainFolderImplicit as { vessel: string } | undefined;
+    const implicitMainAll = !!implicitMainRec && !!activeVesselFilter && implicitMainRec.vessel === activeVesselFilter;
+    if (implicitMainRec && !implicitMainAll) (host as any)._mainFolderImplicit = undefined;
+    const mainFolderSelectValue: string = implicitMainAll
+      ? 'all'
+      : (docCategoryFilter !== 'all'
+        ? docCategoryFilter
+        : ((breadcrumbMainFolderName && mainFolderOptions.find(o => o.trim().toLowerCase() === breadcrumbMainFolderName.trim().toLowerCase())) || 'all'));
     const applyVesselFilterSelection = (val: string): void => {
       if (docViewMode === 'folder' && mainFolderPage && docMainFolder) {
         if (val && val !== 'all') {
@@ -3359,6 +3917,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         }
       }
       const isLiveLibraryScope = docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents';
+      const clearingVessel = !val || val === 'all';
+      const wasAllMainFolders = mainFolderSelectValue === 'all';
+      if (clearingVessel) (host as any)._mainFolderImplicit = undefined;
       // "All vessels" in a live SharePoint library: the breadcrumb is sitting
       // inside (or below) the previously selected vessel's folder, and only
       // clearing the filter state left it there. Walk the stack back to the
@@ -3376,17 +3937,36 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             const matched = matchFolderToVessel(folderPathStack[i].name);
             if (matched && vesselNamesEqual(matched, prevVessel)) { vesselIdx = i; break; }
           }
-          if (vesselIdx >= 0) {
-            const trimmed = folderPathStack.slice(0, vesselIdx);
+          // "All main folders" was what the user had (the vessel jump picked a
+          // main folder for them): clearing the vessel goes back to the
+          // library root, not to that auto-picked main folder.
+          if (vesselIdx >= 0 || implicitMainAll) {
+            const trimmed = folderPathStack.slice(0, implicitMainAll ? prefixLen : vesselIdx);
             host._pushFolderNav(trimmed, rootId === 'lib:documents' ? 'Documents' : (rootId === 'lib:shared_documents' ? 'Shared Documents' : 'SharePoint Sites'));
             host.setState({ ...deriveDocFiltersFromStack(trimmed), vesselFilter: 'all', docListPage: 0 });
             return;
           }
         }
       }
-      host.setState({ vesselFilter: val || 'all', docListPage: 0 });
+      // The Sub-folder pick (e.g. Drawings > Hull) belongs to the folder, not
+      // the vessel: carried over into the new vessel (see buildSubfolderCarry).
+      const subfolderCarry = (isLiveLibraryScope && val && val !== 'all' && val !== 'Not Listed')
+        ? buildSubfolderCarry()
+        : null;
+      // Remember an "All main folders" selection across the vessel jump (see
+      // implicitMainAll above); anything else is the user's own main folder.
+      (host as any)._mainFolderImplicit = (isLiveLibraryScope && !clearingVessel && val !== 'Not Listed' && wasAllMainFolders)
+        ? { vessel: normalizeVesselKey(val) }
+        : undefined;
+      if (clearingVessel && implicitMainAll) {
+        // List view: the vessel jump may have pinned a main folder; put
+        // "All main folders" back with the vessel cleared.
+        host.setState({ vesselFilter: 'all', docCategoryFilter: 'all', docSubfolderOtherFilter: 'all', docListPage: 0 });
+      } else {
+        host.setState({ vesselFilter: val || 'all', docListPage: 0 });
+      }
       if (isLiveLibraryScope && val && val !== 'all' && val !== 'Not Listed') {
-        navigateToSiteVesselFolder(val);
+        navigateToSiteVesselFolder(val, subfolderCarry);
       }
       if (val && val !== 'all' && val !== 'Not Listed' && !isLiveLibraryScope) {
         void host._loadVesselRowsFromApi(val).catch(() => undefined);
@@ -3509,15 +4089,29 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       // The label-based checks stay as a fallback for rows whose path
       // string doesn't cleanly carry the segment (legacy vessel/department
       // rows where "sub-folder" maps onto group/category instead).
-      if (docSubfolderOtherFilter !== 'all') {
+      // (skipLevels 3 = computing Group / Category / Sub-category dropdown
+      // options: those lists must keep offering every value in the folder
+      // scope — with the current pick highlighted — instead of shrinking to
+      // whatever the sub-folder pick leaves.)
+      if (docSubfolderOtherFilter !== 'all' && skipLevels < 3) {
         const normFilter = docSubfolderOtherFilter.trim().toLowerCase();
         const pathSegments = (r.subFolderPath || '').split('>').map(s => s.trim().toLowerCase());
-        const subfolderMatch = pathSegments.indexOf(normFilter) !== -1 ||
+        // When the exact branch is known (tree pick), require that branch —
+        // the parent folder must precede the name in the row's path.
+        const selPath = ((host as any)._subfolderSelectedPath as string[] | undefined) || [];
+        const branchKey = selPath.length >= 2 && selPath[selPath.length - 1].trim().toLowerCase() === normFilter
+          ? selPath.slice(-2).map(x => x.trim().toLowerCase()) : null;
+        const branchMatch = (): boolean => {
+          if (!branchKey) return false;
+          const at = pathSegments.indexOf(branchKey[1]);
+          return at > 0 && pathSegments.slice(0, at).indexOf(branchKey[0]) !== -1;
+        };
+        const subfolderMatch = branchKey ? branchMatch() : (pathSegments.indexOf(normFilter) !== -1 ||
           (labels.mainFolder || '').trim().toLowerCase() === normFilter ||
           (labels.group || '').trim().toLowerCase() === normFilter ||
           (labels.category || '').trim().toLowerCase() === normFilter ||
           (labels.documentSection || '').trim().toLowerCase() === normFilter ||
-          (r.group || '').trim().toLowerCase() === normFilter;
+          (r.group || '').trim().toLowerCase() === normFilter);
         if (!subfolderMatch) return false;
       }
 
@@ -3634,6 +4228,119 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       });
       return Array.from(seen);
     };
+    // Every folder path known for this vessel/main folder — the nested tree,
+    // the flat live-scan entries and anything loaded on demand.
+    const knownFolderPaths: string[][] = (() => {
+      const out: string[][] = [];
+      const walk = (nodes: FolderTreeNode[], trail: string[]): void => {
+        for (const node of nodes) {
+          const own = [...trail, node.name];
+          out.push(own);
+          if (node.children.length) walk(node.children, own);
+        }
+      };
+      walk(subfolderTree, []);
+      liveSubfolderEntries.forEach(e => { if (e.pathNames && e.pathNames.length) out.push(e.pathNames); });
+      const lazy = (host as any)._lazySubfolderEntries as Map<string, LiveSubfolderEntry> | undefined;
+      lazy?.forEach((e, k) => { if (k.indexOf('path:') === 0 && e.pathNames && e.pathNames.length) out.push(e.pathNames); });
+      return out;
+    })();
+    // Library-wide (All vessels + All main folders): nothing is scanned into
+    // the tree yet, so category / sub-category choices come from the cached
+    // recursive library walk (folder paths relative to the library root).
+    const libraryWideScope = vesselFilter === 'all' && docCategoryFilter === 'all';
+    const libWalkPaths: string[][] = (() => {
+      const out: string[][] = [];
+      if (!libraryWideScope) return out;
+      groupCatTreeCache.forEach((entry, key) => {
+        if (entry.status !== 'done' || !/::root(::w:[^:]*)?$/.test(key)) return;
+        entry.items.forEach((item: any) => {
+          if (!item) return;
+          const parts = String(item.path || item.name || '').split('/').filter(Boolean);
+          const folderParts = item.is_folder ? parts : parts.slice(0, -1);
+          if (folderParts.length) out.push(folderParts);
+        });
+      });
+      return out;
+    })();
+    // Library-wide taxonomy: every Group > Category > Sub-category folder in
+    // the whole library, read from ONE folder-only tree of the library root
+    // (backend drive index). Without it nothing is known until a Group /
+    // Category is picked (the recursive file walk only runs then), so under
+    // All vessels / All main folders / All groups the Category list had no
+    // "To Be Classified" entries and the Sub-category list was empty.
+    // Memoised on the tree's folder array — it only changes when the tree is
+    // re-fetched, not on every render.
+    interface LibTaxonomyIndex {
+      tbcCategories: string[];
+      subs: Map<string, Map<string, string>>; // `${group}::${category}` (lower) -> lower -> display
+    }
+    const libFolderTreeRes = (libraryWideScope && liveLibraryResolved)
+      ? host._getOrLoadSiteFolderTree(effectiveLiveSiteId, effectiveLiveDriveId, 'root', undefined, 20000)
+      : null;
+    const libTaxonomy: LibTaxonomyIndex = (() => {
+      const empty: LibTaxonomyIndex = { tbcCategories: [], subs: new Map() };
+      const src = libFolderTreeRes?.folders;
+      if (!src || src.length === 0) return empty;
+      const memo = (host as any)._libTaxonomyMemo as { src: any; index: LibTaxonomyIndex } | undefined;
+      if (memo && memo.src === src) return memo.index;
+      const tbc = new Map<string, string>();
+      const subs = new Map<string, Map<string, string>>();
+      const addSub = (group: string, category: string, sub: string): void => {
+        const nm = (sub || '').trim();
+        if (!nm || /\.[a-z0-9]{2,5}$/i.test(nm)) return;
+        const key = `${group.toLowerCase()}::${category.trim().toLowerCase()}`;
+        let m = subs.get(key);
+        if (!m) { m = new Map(); subs.set(key, m); }
+        if (!m.has(nm.toLowerCase())) m.set(nm.toLowerCase(), nm);
+      };
+      const findKnown = (seg: string, list: string[]): string | undefined => {
+        const low = seg.trim().toLowerCase();
+        return list.find(c => c.toLowerCase() === low) || list.find(c => folderMatchesCategory(seg, c));
+      };
+      src.forEach(f => {
+        const p = String(f.path || f.name || '').split('/').map(x => x.trim()).filter(Boolean);
+        let grp: '' | 'drawings' | 'manuals' | 'both' = '';
+        for (let i = 0; i < p.length; i++) {
+          const seg = p[i];
+          if (isToBeClassifiedName(seg)) {
+            const cat = p[i + 1];
+            if (cat) {
+              if (!tbc.has(cat.toLowerCase())) tbc.set(cat.toLowerCase(), cat);
+              if (p[i + 2]) addSub(TBC_GROUP_LABEL, cat, p[i + 2]);
+            }
+            return;
+          }
+          if (grp) {
+            // The first known category folder below the group folder; the
+            // folder right under it is the sub-category.
+            const lists: Array<[string, string[]]> = grp === 'both'
+              ? [['Drawings', drawingCategories], ['Manuals', manualCategories]]
+              : grp === 'drawings' ? [['Drawings', drawingCategories]] : [['Manuals', manualCategories]];
+            let hit = false;
+            lists.forEach(([gl, list]) => {
+              const cat = findKnown(seg, list);
+              if (!cat) return;
+              hit = true;
+              if (p[i + 1]) addSub(gl, cat, p[i + 1]);
+            });
+            if (hit) return;
+          }
+          const g = folderGroupsOf(seg);
+          if (g.drawings || g.manuals) grp = g.drawings && g.manuals ? 'both' : (g.drawings ? 'drawings' : 'manuals');
+        }
+      });
+      const index: LibTaxonomyIndex = {
+        tbcCategories: Array.from(tbc.values()).sort((a, b) => a.localeCompare(b)),
+        subs,
+      };
+      (host as any)._libTaxonomyMemo = { src, index };
+      return index;
+    })();
+    const libSubsFor = (group: string, category: string): string[] => {
+      const m = libTaxonomy.subs.get(`${group.toLowerCase()}::${category.trim().toLowerCase()}`);
+      return m ? Array.from(m.values()) : [];
+    };
     const groupOptions: string[] = (() => {
       let hasDrawings = false;
       let hasManuals = false;
@@ -3641,23 +4348,103 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       gcUniquePaths(3).forEach(p => {
         const segs = pathFolderSegments(p);
         const g = decisiveGroupOf(segs);
-        if (g && g.drawings) hasDrawings = true;
-        if (g && g.manuals) hasManuals = true;
-        if (segs.some(isToBeClassifiedName)) hasToBeClassified = true;
+        const inTbc = segs.some(isToBeClassifiedName);
+        if (g && g.drawings && !inTbc) hasDrawings = true;
+        if (g && g.manuals && !inTbc) hasManuals = true;
+        if (inTbc) hasToBeClassified = true;
       });
+      // The visible rows shrink to whatever folder is open (e.g. once
+      // Drawings > Electrical is picked only Drawings files remain), so also
+      // read the groups off the folder tree itself — every group stays
+      // selectable, with the current one highlighted.
+      const walkGroups = (nodes: FolderTreeNode[], trail: string[]): void => {
+        for (const node of nodes) {
+          const own = [...trail, node.name];
+          const g = folderGroupsOf(node.name);
+          const inTbc = own.some(isToBeClassifiedName);
+          if (!inTbc && g.drawings && !g.manuals) hasDrawings = true;
+          if (!inTbc && g.manuals && !g.drawings) hasManuals = true;
+          if (isToBeClassifiedName(node.name)) hasToBeClassified = true;
+          if (node.children.length) walkGroups(node.children, own);
+        }
+      };
+      walkGroups(subfolderTree, []);
       // The current selection must always be offered, otherwise the <select>
       // has no matching <option> and silently falls back to "All groups".
       if (docGroupLevelFilter === TBC_GROUP_LABEL) hasToBeClassified = true;
+      if (docGroupLevelFilter.trim().toLowerCase() === 'drawings') hasDrawings = true;
+      if (docGroupLevelFilter.trim().toLowerCase() === 'manuals') hasManuals = true;
+      // "All vessels" + "All main folders" (e.g. the library root, before any
+      // folder has been opened): nothing is scanned yet, but every group must
+      // still be selectable — picking one searches the whole library.
+      const atLibraryWide = vesselFilter === 'all' && docCategoryFilter === 'all';
+      if (atLibraryWide) { hasDrawings = true; hasManuals = true; hasToBeClassified = true; }
       return [hasDrawings ? 'Drawings' : '', hasManuals ? 'Manuals' : '', hasToBeClassified ? TBC_GROUP_LABEL : ''].filter(Boolean);
     })();
-    const categoryOptions: string[] = (() => {
-      const normalizedGroup = (docGroupLevelFilter || 'all').trim().toLowerCase();
+    // Categories on offer for one Group ('all' = every group, merged). The
+    // current category pick is always kept for the group it belongs to.
+    const categoriesForGroup = (groupSel: string): string[] => {
+      const isCurrentGroup = groupSel === docGroupLevelFilter;
+      const normalizedGroup = (groupSel || 'all').trim().toLowerCase();
+      // "To Be Classified" has no fixed Drawings/Manuals taxonomy: its
+      // categories are simply the folders that were created directly inside
+      // it (Basic, Electric Maker, Outfit, ...).
+      if (normalizedGroup === TBC_GROUP_LABEL.toLowerCase()) {
+        const kids = new Map<string, string>();
+        knownFolderPaths.forEach(p => {
+          if (p.length >= 2 && isToBeClassifiedName(p[p.length - 2])) {
+            const nm = p[p.length - 1].trim();
+            if (nm && !kids.has(nm.toLowerCase())) kids.set(nm.toLowerCase(), nm);
+          }
+        });
+        libWalkPaths.forEach(p => {
+          for (let i = 0; i + 1 < p.length; i++) {
+            if (isToBeClassifiedName(p[i])) {
+              const nm = p[i + 1].trim();
+              if (nm && !/\.[a-z0-9]{2,5}$/i.test(nm) && !kids.has(nm.toLowerCase())) kids.set(nm.toLowerCase(), nm);
+              break;
+            }
+          }
+        });
+        libTaxonomy.tbcCategories.forEach(nm => { if (!kids.has(nm.toLowerCase())) kids.set(nm.toLowerCase(), nm); });
+        if (isCurrentGroup && docLeafCategoryFilter !== 'all' && !kids.has(docLeafCategoryFilter.trim().toLowerCase())) kids.set(docLeafCategoryFilter.trim().toLowerCase(), docLeafCategoryFilter);
+        return Array.from(kids.values()).sort((a, b) => a.localeCompare(b));
+      }
       const candidates = normalizedGroup === 'drawings' ? drawingCategories
         : normalizedGroup === 'manuals' ? manualCategories
         : drawingCategories.concat(manualCategories).filter((v, i, arr) => arr.indexOf(v) === i);
+      // Library-wide: the fixed taxonomy for the chosen group is always on offer.
+      if (libraryWideScope) return candidates.slice();
       const paths = gcUniquePaths(2);
-      return candidates.filter(c => paths.some(p => pathMatchesGroupCategory(p, docGroupLevelFilter, c)));
-    })();
+      // Same idea as the groups: also offer every category that exists as a
+      // folder under the chosen group in the tree, not only those still
+      // present in the (folder-narrowed) visible rows.
+      const treeCategories = new Set<string>();
+      const walkCats = (nodes: FolderTreeNode[], trail: string[]): void => {
+        for (const node of nodes) {
+          const own = [...trail, node.name];
+          if (pathFitsGroupContext(own, { group: groupSel })) {
+            candidates.forEach(c => { if (folderMatchesCategory(node.name, c)) treeCategories.add(c); });
+          }
+          if (node.children.length) walkCats(node.children, own);
+        }
+      };
+      walkCats(subfolderTree, []);
+      return candidates.filter(c =>
+        treeCategories.has(c) ||
+        (isCurrentGroup && c === docLeafCategoryFilter) ||
+        paths.some(p => pathMatchesGroupCategory(p, groupSel, c)));
+    };
+    const categoryOptions: string[] = categoriesForGroup(docGroupLevelFilter);
+    // "All groups": the same categories, classified under the group they
+    // belong to (Drawings / Manuals / To Be Classified) — "Electrical" and
+    // "Safety" exist in both Drawings and Manuals, and the To Be Classified
+    // folders have their own. Picking one also selects its group.
+    const categoryOptionGroups: Array<{ group: string; categories: string[] }> = docGroupLevelFilter === 'all'
+      ? groupOptions
+        .map(g => ({ group: g, categories: categoriesForGroup(g) }))
+        .filter(x => x.categories.length > 0)
+      : [];
     // A file has a sub-category only when one is really tagged / present in
     // its folder path — not when the value is just its category/group name
     // echoed back (see rowSubCat fallback in addFlatRow) or a "not assigned"
@@ -3692,7 +4479,75 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         const v = realSubCategoryOf(r);
         if (v) set.add(v);
       });
-      return Array.from(set).sort((a, b) => a.localeCompare(b));
+      // Library-wide: folders sitting directly under the chosen category
+      // (or under any category of the chosen group) in the library walk.
+      if (libraryWideScope) {
+        const grp = (docGroupLevelFilter || 'all').trim().toLowerCase();
+        const cats = docLeafCategoryFilter !== 'all'
+          ? [docLeafCategoryFilter]
+          : (grp === 'drawings' ? drawingCategories : grp === 'manuals' ? manualCategories : drawingCategories.concat(manualCategories));
+        libWalkPaths.forEach(p => {
+          const joined = p.join(' > ');
+          const inTbc = p.some(isToBeClassifiedName);
+          if (grp === TBC_GROUP_LABEL.toLowerCase()) {
+            for (let i = 0; i + 2 < p.length; i++) {
+              if (!isToBeClassifiedName(p[i])) continue;
+              if (docLeafCategoryFilter === 'all' || p[i + 1].trim().toLowerCase() === docLeafCategoryFilter.trim().toLowerCase()) {
+                const nm = p[i + 2].trim();
+                if (nm && !/\.[a-z0-9]{2,5}$/i.test(nm)) set.add(nm);
+              }
+              break;
+            }
+            return;
+          }
+          if (inTbc && grp !== 'all') return;
+          if (!inTbc && grp !== 'all' && !pathMatchesGroupCategory(joined, docGroupLevelFilter, 'all')) return;
+          for (let i = 0; i + 1 < p.length; i++) {
+            if (cats.some(c => folderMatchesCategory(p[i], c)) && (grp === 'all' || pathMatchesGroupCategory(p.slice(0, i + 1).join(' > '), docGroupLevelFilter, 'all'))) {
+              const nm = p[i + 1].trim();
+              if (nm && !/\.[a-z0-9]{2,5}$/i.test(nm)) set.add(nm);
+              break;
+            }
+          }
+        });
+        // ...and every sub-category folder of the library-wide taxonomy
+        // (known before any Group / Category is picked).
+        libTaxonomy.subs.forEach((m, key) => {
+          const sep = key.indexOf('::');
+          const kg = key.slice(0, sep);
+          const kc = key.slice(sep + 2);
+          if (grp !== 'all' && kg !== grp) return;
+          if (docLeafCategoryFilter !== 'all' && kc !== docLeafCategoryFilter.trim().toLowerCase()) return;
+          m.forEach(nm => set.add(nm));
+        });
+        if (docSubCategoryFilter !== 'all') set.add(docSubCategoryFilter);
+      }
+      return Array.from(set)
+        .filter((v, i, arr) => arr.findIndex(x => x.toLowerCase() === v.toLowerCase()) === i)
+        .sort((a, b) => a.localeCompare(b));
+    })();
+    // Library-wide with no Category picked: the sub-categories classified
+    // under their Group > Category, so the same folder name under two
+    // categories stays distinguishable. Picking one changes ONLY the
+    // Sub-category filter (Groups / Categories keep the user's choice).
+    const subCategoryOptionGroups: Array<{ group: string; category: string; subs: string[] }> = (() => {
+      if (!libraryWideScope || docLeafCategoryFilter !== 'all') return [];
+      const out: Array<{ group: string; category: string; subs: string[] }> = [];
+      const groupsToShow = docGroupLevelFilter === 'all' ? groupOptions : [docGroupLevelFilter];
+      groupsToShow.forEach(gl => {
+        categoriesForGroup(gl).forEach(c => {
+          const subs = libSubsFor(gl, c).sort((a, b) => a.localeCompare(b));
+          if (subs.length) out.push({ group: gl, category: c, subs });
+        });
+      });
+      return out;
+    })();
+    // Sub-categories that exist only on already-loaded rows (no taxonomy
+    // folder for them) stay selectable as plain options above the groups.
+    const subCategoryUngrouped: string[] = subCategoryOptionGroups.length === 0 ? subCategoryOptions : (() => {
+      const grouped = new Set<string>();
+      subCategoryOptionGroups.forEach(x => x.subs.forEach(v => grouped.add(v.toLowerCase())));
+      return subCategoryOptions.filter(v => !grouped.has(v.toLowerCase()));
     })();
 
     // De-duplicate the same physical file when the SharePoint Sites scope
@@ -4240,7 +5095,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       // reported when switching back to Folder view.
       if (docCategoryFilter !== 'all') {
         if (docSubfolderOtherFilter !== 'all' && liveSubfolderEntryByName.has(docSubfolderOtherFilter.trim().toLowerCase())) {
-          navigateToLiveSubfolder(docSubfolderOtherFilter);
+          navigateToLiveSubfolder(docSubfolderOtherFilter, (host as any)._subfolderSelectedPath as string[] | undefined);
           host.setState({ docViewMode: 'folder' });
           return;
         }
@@ -4370,7 +5225,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       // stomped); the other three hierarchy filters need the same
       // treatment for consistency.
       const isLiveSitesFolderNav = folderPathStack[0]?.id === 'sites_root';
-      const nextDocCategoryFilter: string = isLiveSitesFolderNav ? docCategoryFilter : level0;
+      // "All main folders" picked before the vessel: List view must span all
+      // of the vessel's main folders, not just the one Folder view opened.
+      const nextDocCategoryFilter: string = isLiveSitesFolderNav
+        ? ((implicitMainAll && vesselMainFolders.length > 1) ? 'all' : docCategoryFilter)
+        : level0;
       const nextDocSubfolderOtherFilter: string = isLiveSitesFolderNav ? docSubfolderOtherFilter : 'all';
       const nextDocGroupLevelFilter: string = isLiveSitesFolderNav ? docGroupLevelFilter : level1;
       const nextDocLeafCategoryFilter: string = isLiveSitesFolderNav ? docLeafCategoryFilter : level2;
@@ -4699,24 +5558,47 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       return { folders, files: directItems.length - folders };
     };
 
-    // Sites-style count pill from server-computed counts (/subfolder-counts).
+    // Count chips from server-computed FULL-DEPTH counts (/subfolder-counts):
+    // total nested folders + total files anywhere under the folder. Tooltip
+    // shows the direct-vs-nested breakdown. "~" = still partial/estimated.
     const renderServerCountPill = (
-      fc: { direct_subfolders: number; total_files: number },
+      fc: {
+        direct_subfolders: number; total_subfolders?: number;
+        direct_files?: number; total_files: number;
+        is_partial?: boolean; is_estimated?: boolean;
+      },
       name: string,
     ): React.ReactElement => {
-      const files = fc.total_files;
-      const hasSub = fc.direct_subfolders > 0;
+      const fmt = (n: number): string => n.toLocaleString();
+      const totalFolders = Math.max(fc.total_subfolders ?? 0, fc.direct_subfolders);
+      const totalFiles = fc.total_files;
+      const approx = !!(fc.is_partial || fc.is_estimated);
+      const nestedFolders = totalFolders - fc.direct_subfolders;
+      const directFiles = fc.direct_files ?? 0;
+      const title = [
+        `${name}${approx ? ' (partial count — still loading or throttled)' : ''}`,
+        `Folders: ${fmt(totalFolders)} total (${fmt(fc.direct_subfolders)} direct, ${fmt(nestedFolders)} nested)`,
+        `Files: ${fmt(totalFiles)} total (${fmt(directFiles)} directly inside, ${fmt(Math.max(totalFiles - directFiles, 0))} in subfolders)`,
+      ].join('\n');
+      const chip = (on: boolean, bg: string, fg: string): React.CSSProperties => ({
+        display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 8,
+        padding: '2px 9px', fontSize: 11, fontWeight: 700, lineHeight: '16px',
+        whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums',
+        background: on ? bg : 'var(--vdms-border-soft)',
+        color: on ? fg : 'var(--vdms-text-faint)',
+      });
       return (
-        <span
-          style={{
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            background: files > 0 ? '#0284c7' : 'var(--vdms-text-faint)', color: '#fff',
-            borderRadius: 20, padding: hasSub ? '2px 10px' : '1px 8px',
-            fontSize: hasSub ? 11 : 10, fontWeight: 700, lineHeight: '16px', whiteSpace: 'nowrap',
-          }}
-          title={`${fc.direct_subfolders} direct subfolder${fc.direct_subfolders === 1 ? '' : 's'}, ${files} total file${files === 1 ? '' : 's'} inside ${name}`}
-        >
-          {hasSub ? `📁 ${fc.direct_subfolders} ${fc.direct_subfolders === 1 ? 'subfolder' : 'subfolders'} · ` : ''}{files} {files === 1 ? 'file' : 'files'}
+        <span title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span style={chip(totalFolders > 0, '#e0f2fe', '#0369a1')}>
+            <span aria-hidden="true">📁</span>
+            {approx ? '~' : ''}{fmt(totalFolders)}
+            <span style={{ fontWeight: 600, opacity: 0.8 }}>{totalFolders === 1 ? 'folder' : 'folders'}</span>
+          </span>
+          <span style={chip(totalFiles > 0, '#dcfce7', '#15803d')}>
+            <span aria-hidden="true">📄</span>
+            {approx ? '~' : ''}{fmt(totalFiles)}
+            <span style={{ fontWeight: 600, opacity: 0.8 }}>{totalFiles === 1 ? 'file' : 'files'}</span>
+          </span>
         </span>
       );
     };
@@ -4776,8 +5658,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
                 {childFolders.map((sf, idx) => {
                   const sfInTree = !!sf.id && liveTreeIndex.ids.has(sf.id);
-                  const sfChildData = sf.id && !sfInTree ? host._getOrLoadSiteFolderChildren(siteId, driveId, sf.id) : null;
-                  const sfLoading = sfChildData ? (sfChildData.loading && sfChildData.items.length === 0) : false;
+                  // Server counts (one /subfolder-counts call) already feed every tile pill, so
+                  // don't also fire a full /children call per tile just to count.
+                  const sfCountsPending = !folderServerCounts && host._folderCountsLoading(siteId, driveId, currentFolderId);
+                  const sfChildData = sf.id && !sfInTree && !folderServerCounts && !sfCountsPending ? host._getOrLoadSiteFolderChildren(siteId, driveId, sf.id) : null;
+                  const sfLoading = sfChildData ? (sfChildData.loading && sfChildData.items.length === 0) : (sfCountsPending && !sfInTree);
                   const sfCounts = sfLoading ? null : getFolderTileCounts(sf.id, sfChildData ? sfChildData.items : null);
                   const sfFolderCount = sfCounts ? sfCounts.folders : null;
                   const sfFileCount  = sfCounts ? sfCounts.files : null;
@@ -4939,6 +5824,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           .dms-nav-arrow:not(:disabled):hover { transform: translateY(-2px) scale(1.08); filter: saturate(1.2); }
           .dms-nav-arrow:not(:disabled):active { transform: translateY(0) scale(0.96); }
         `}</style>
+        {/* Sticky header: breadcrumb + module header + filter toolbar stay pinned
+            while the file table scrolls underneath. */}
+        <div style={{ position: 'sticky', top: 0, zIndex: 30, background: clay.bg, display: 'flex', flexDirection: 'column', gap: 16, paddingBottom: 8, boxShadow: '0 6px 8px -6px rgba(0,0,0,0.18)' }}>
         {/* Breadcrumb Navigation Trail */}
         <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           {/* Back / Forward navigation buttons */}
@@ -5483,8 +6371,6 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           </div>
         </div>
 
-        <CopilotSearchPanel host={host} />
-
         {/* ── Filter Toolbar ── */}
         <div style={{ background: 'var(--vdms-surface)', borderRadius: 10, padding: '10px 12px', border: '1px solid var(--vdms-border)', display: 'flex', flexDirection: 'column', gap: 10 }}>
           {docViewMode === 'list' && (
@@ -5590,7 +6476,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     <option key={v.id || v.name} value={v.name}>{v.name}</option>
                   ))
                 ) : (
-                  distinctVesselsInScope.map(vName => (
+                  (docScopeType === 'shared_docs' || docScopeType === 'documents' ? libraryVesselOptions : distinctVesselsInScope).map(vName => (
                     <option key={vName} value={vName}>{vName}</option>
                   ))
                 )}
@@ -5598,9 +6484,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             )}
             <select
               aria-label="Main folder filter"
-              value={docCategoryFilter !== 'all' ? docCategoryFilter : ((breadcrumbMainFolderName && mainFolderOptions.find(o => o.trim().toLowerCase() === breadcrumbMainFolderName.trim().toLowerCase())) || 'all')}
+              value={mainFolderSelectValue}
               onChange={e => {
                 const val = e.target.value;
+                // An explicit pick ends the "All main folders" placeholder.
+                (host as any)._mainFolderImplicit = undefined;
                 // "All main folders" while inside a live main folder: go back to
                 // the library root (site + drive) so every main folder shows
                 // again, with the vessel / sub-folder / category filters cleared.
@@ -5617,6 +6505,15 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     catFilter: 'all',
                     docListPage: 0,
                   });
+                  return;
+                }
+                // With a vessel selected, picking another main folder is the
+                // same as its "is also under" chip: keep Sub-folder / Group /
+                // Category and open the same sub-folder in the vessel there.
+                if (val !== 'all' && activeVesselFilter && docSubfolderOtherFilter !== 'all' &&
+                  (docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents') &&
+                  carryBasePaths(vesselFilter, val).length > 0) {
+                  switchVesselMainFolder(val);
                   return;
                 }
                 host.setState({ docCategoryFilter: val, docGroupLevelFilter: 'all', docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', docSubfolderOtherFilter: 'all', catFilter: val, docListPage: 0 });
@@ -5651,39 +6548,81 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               <FolderTreeSelect
                 tree={subfolderTree}
                 value={docSubfolderOtherFilter}
-                onChange={(val, path) => {
+                selectedPath={(() => {
+                  const sp = (host as any)._subfolderSelectedPath as string[] | undefined;
+                  return sp && sp.length && sp[sp.length - 1].trim().toLowerCase() === docSubfolderOtherFilter.trim().toLowerCase() ? sp : undefined;
+                })()}
+                onChange={(val, path, nodeId) => {
                   // Keep the "All categories" dropdown in step with whatever
                   // was just picked here: a folder that matches one of the
                   // fixed category names selects that category too, and
                   // clearing the tree back to "All sub-folders" clears the
                   // category dropdown the same way.
-                  const matchedCategory = val === 'all' ? 'all' : (findCategoryForFolderName(val) || docLeafCategoryFilter);
+                  // Category / Sub-category come from the picked PATH, not just
+                  // the folder's own name: Manuals > Other Manuals > Electric_Maker
+                  // is category "Other Manuals" + sub-category "Electric_Maker"
+                  // (matching the name alone wrongly gave "Electrical").
+                  let pathCategory = '';
+                  let pathSubCategory = 'all';
+                  if (val !== 'all') {
+                    const segs = path || [];
+                    let gi = -1;
+                    for (let i = segs.length - 1; i >= 0; i--) {
+                      const fg = folderGroupsOf(segs[i]);
+                      if (fg.drawings !== fg.manuals) { gi = i; break; }
+                    }
+                    if (gi >= 0) {
+                      const known = folderGroupsOf(segs[gi]).drawings ? drawingCategories : manualCategories;
+                      for (let i = gi + 1; i < segs.length && !pathCategory; i++) {
+                        const hit = known.find(c => segs[i].trim().toLowerCase() === c.trim().toLowerCase())
+                          || known.find(c => folderMatchesCategory(segs[i], c));
+                        if (hit) {
+                          pathCategory = hit;
+                          if (segs[i + 1]) pathSubCategory = segs[i + 1];
+                        }
+                      }
+                    }
+                  }
+                  const matchedCategory = val === 'all' ? 'all' : (pathCategory || findCategoryForFolderName(val) || docLeafCategoryFilter);
                   // Same for the Groups dropdown: picking "To Be Classified"
                   // (or anything nested under it) selects that group; picking
                   // a folder outside it releases a previously auto-selected
                   // "To Be Classified" group.
                   const inToBeClassified = val !== 'all' && (path || []).some(isToBeClassifiedName);
+                  // Picking a folder under "Drawings" / "Manuals" selects that
+                  // group too, so a name that exists in both (e.g. Safety)
+                  // resolves to the branch that was actually clicked.
+                  const pathGroup = val === 'all' ? '' : ((path || []).map(seg => seg.trim().toLowerCase())
+                    .map(seg => (seg === 'drawings' || seg === 'drawing') ? 'Drawings' : ((seg === 'manuals' || seg === 'manual') ? 'Manuals' : ''))
+                    .filter(Boolean).pop() || '');
                   const nextGroupLevel = inToBeClassified
                     ? TBC_GROUP_LABEL
-                    : (docGroupLevelFilter === TBC_GROUP_LABEL ? 'all' : docGroupLevelFilter);
+                    : (pathGroup || (docGroupLevelFilter === TBC_GROUP_LABEL ? 'all' : docGroupLevelFilter));
                   host.setState({
                     docGroupLevelFilter: nextGroupLevel,
                     docSubfolderOtherFilter: val,
                     docLeafCategoryFilter: matchedCategory,
-                    docSubCategoryFilter: 'all',
+                    docSubCategoryFilter: pathSubCategory,
                     docListPage: 0,
                   });
+                  // Remember the exact branch clicked — the filter value is only
+                  // the folder's name, and e.g. "Electrical" exists under both
+                  // Drawings and Manuals.
+                  (host as any)._subfolderSelectedPath = val === 'all' ? undefined : path;
                   if (val === 'all') return;
-                  if (atSitesRoot) navigateToLiveSubfolder(val);
+                  if (atSitesRoot) navigateToLiveSubfolder(val, path, nodeId);
                   else navigateToDeptSubfolder(path);
                 }}
                 allLabel="All sub-folders"
-                canLoadChildren={node => !!effectiveLiveSiteId && !!effectiveLiveDriveId && !!node.id && node.id !== node.name && !/^(sf_|category_|common|kaizen_root|dept_|vessels_root|specific_vessels|sites_root|site:|drive:|lib:)/.test(node.id)}
-                loadChildren={async node => {
+                canLoadChildren={node => !liveFolderTreeComplete && !!effectiveLiveSiteId && !!effectiveLiveDriveId && !!node.id && node.id !== node.name && !/^(sf_|category_|common|kaizen_root|dept_|vessels_root|specific_vessels|sites_root|site:|drive:|lib:)/.test(node.id)}
+                loadChildren={async (node, treePath) => {
                   if (!effectiveLiveSiteId || !effectiveLiveDriveId) return [];
                   const lazyEntries: Map<string, LiveSubfolderEntry> = ((host as any)._lazySubfolderEntries ||= new Map<string, LiveSubfolderEntry>());
                   const lowName = node.name.trim().toLowerCase();
-                  const parent = liveSubfolderEntryByName.get(lowName) || lazyEntries.get(lowName);
+                  const parentPathKey = 'path:' + (treePath || []).map(n => n.trim().toLowerCase()).join('/');
+                  const parent = lazyEntries.get(parentPathKey)
+                    || liveSubfolderEntries.find(e => e.pathNames.map(n => n.trim().toLowerCase()).join('/') === parentPathKey.slice(5))
+                    || liveSubfolderEntryByName.get(lowName) || lazyEntries.get(lowName);
                   const parentIds = parent ? parent.pathIds : [node.id];
                   const parentNames = parent ? parent.pathNames : [node.name];
                   const items = await host._loadAndCacheSiteFolderChildren(effectiveLiveSiteId, effectiveLiveDriveId, node.id);
@@ -5695,10 +6634,14 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     const low = name.toLowerCase();
                     if (seen.has(low)) return;
                     seen.add(low);
-                    lazyEntries.set(low, {
+                    const lazyEntry: LiveSubfolderEntry = {
                       name, id: f.id, depth: (parent ? parent.depth : 1) + 1,
                       pathIds: [...parentIds, f.id], pathNames: [...parentNames, name],
-                    });
+                    };
+                    // Keyed by full tree path (unambiguous) and, for older
+                    // callers, by bare name (last one wins).
+                    lazyEntries.set('path:' + [...(treePath || []), name].map(n => n.trim().toLowerCase()).join('/'), lazyEntry);
+                    lazyEntries.set(low, lazyEntry);
                     kids.push({ name, id: f.id, children: [] });
                   });
                   return kids;
@@ -5733,7 +6676,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 // to that folder node when it exists; leaving it clears a
                 // sub-folder that was only there because of it.
                 if (val === TBC_GROUP_LABEL) {
-                  const tbcNode = findSubfolderNodeForCategory(TBC_GROUP_LABEL);
+                  const tbcNode = findSubfolderNodeForCategory(TBC_GROUP_LABEL, { group: TBC_GROUP_LABEL });
                   host.setState({
                     docGroupLevelFilter: val,
                     docLeafCategoryFilter: 'all',
@@ -5742,40 +6685,81 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     docListPage: 0,
                   });
                   if (tbcNode) {
-                    if (atSitesRoot) navigateToLiveSubfolder(tbcNode.name);
+                    (host as any)._subfolderSelectedPath = tbcNode.path;
+                    if (atSitesRoot) navigateToLiveSubfolder(tbcNode.name, tbcNode.path);
                     else navigateToDeptSubfolder(tbcNode.path);
                   }
                   return;
                 }
+                // Drawings / Manuals: jump the Sub-folder tree to that group's
+                // own folder (never one under "To Be Classified"). "All
+                // groups": drop a sub-folder that was only there for a group.
+                const groupNode = val === 'all' ? null : findSubfolderNodeForCategory(val, { group: val });
+                (host as any)._subfolderSelectedPath = groupNode ? groupNode.path : undefined;
                 host.setState({
                   docGroupLevelFilter: val,
                   docLeafCategoryFilter: 'all',
                   docSubCategoryFilter: 'all',
-                  docSubfolderOtherFilter: (docGroupLevelFilter === TBC_GROUP_LABEL && isToBeClassifiedName(docSubfolderOtherFilter)) ? 'all' : docSubfolderOtherFilter,
+                  docSubfolderOtherFilter: groupNode
+                    ? groupNode.name
+                    : (val === 'all' || docGroupLevelFilter !== 'all' ? 'all' : docSubfolderOtherFilter),
                   docListPage: 0,
                 });
+                if (groupNode) {
+                  if (atSitesRoot) navigateToLiveSubfolder(groupNode.name, groupNode.path);
+                  else navigateToDeptSubfolder(groupNode.path);
+                }
               }}
               style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 160, cursor: groupOptions.length === 0 ? 'not-allowed' : 'pointer', opacity: groupOptions.length === 0 ? 0.6 : 1 }}
             >
               <option value="all">{groupOptions.length === 0 ? 'No groups found' : 'All groups'}</option>
               {groupOptions.map(g => <option key={g} value={g}>{g}</option>)}
             </select>
-            {categoryOptions.length > 0 ? (
+            {(categoryOptions.length > 0 || categoryOptionGroups.length > 0 || libraryWideScope) ? (
               <select
                 aria-label="Category filter"
-                value={docLeafCategoryFilter}
+                value={(() => {
+                  // Classified (All groups) options carry "<Group>::<Category>";
+                  // show the exact entry the user clicked (a name such as
+                  // "Electrical" is listed under both Drawings and Manuals).
+                  if (docGroupLevelFilter !== 'all' || categoryOptionGroups.length === 0 || docLeafCategoryFilter === 'all') return docLeafCategoryFilter;
+                  const picked = (host as any)._categoryPickKey as string | undefined;
+                  if (picked && picked.slice(picked.indexOf('::') + 2) === docLeafCategoryFilter &&
+                    categoryOptionGroups.some(x => `${x.group}::${docLeafCategoryFilter}` === picked && x.categories.indexOf(docLeafCategoryFilter) !== -1)) return picked;
+                  const owner = categoryOptionGroups.find(x => x.categories.indexOf(docLeafCategoryFilter) !== -1);
+                  return owner ? `${owner.group}::${docLeafCategoryFilter}` : docLeafCategoryFilter;
+                })()}
                 onChange={e => {
-                  const val = e.target.value;
+                  let val = e.target.value;
+                  // "<Group>::<Category>" (All groups, classified list): only the
+                  // Category changes — the Groups filter stays exactly as the
+                  // user set it. The group is used just to find the matching
+                  // folder in the Sub-folder tree.
+                  let groupForPick = docGroupLevelFilter;
+                  const sepAt = val.indexOf('::');
+                  (host as any)._categoryPickKey = sepAt > 0 ? val : undefined;
+                  if (sepAt > 0) {
+                    groupForPick = val.slice(0, sepAt);
+                    val = val.slice(sepAt + 2);
+                  }
                   // Mirror the pick into the Sub-folder tree so the two
                   // filters never disagree: picking "all" here clears the
                   // tree back to "All sub-folders" too, and picking a real
                   // category jumps the tree to whichever sub-folder node
                   // matches it, when one exists.
                   if (val === 'all') {
-                    host.setState({ docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', docSubfolderOtherFilter: 'all', docListPage: 0 });
+                    // Fall back to the selected group's folder, if any.
+                    const groupNode = docGroupLevelFilter !== 'all' ? findSubfolderNodeForCategory(docGroupLevelFilter, { group: docGroupLevelFilter }) : null;
+                    (host as any)._subfolderSelectedPath = groupNode ? groupNode.path : undefined;
+                    host.setState({ docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', docSubfolderOtherFilter: groupNode ? groupNode.name : 'all', docListPage: 0 });
+                    if (groupNode) {
+                      if (atSitesRoot) navigateToLiveSubfolder(groupNode.name, groupNode.path);
+                      else navigateToDeptSubfolder(groupNode.path);
+                    }
                     return;
                   }
-                  const match = findSubfolderNodeForCategory(val);
+                  const match = findSubfolderNodeForCategory(val, { group: groupForPick });
+                  (host as any)._subfolderSelectedPath = match ? match.path : (host as any)._subfolderSelectedPath;
                   host.setState({
                     docLeafCategoryFilter: val,
                     docSubCategoryFilter: 'all',
@@ -5783,31 +6767,96 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     docListPage: 0,
                   });
                   if (match) {
-                    if (atSitesRoot) navigateToLiveSubfolder(match.name);
+                    if (atSitesRoot) navigateToLiveSubfolder(match.name, match.path);
                     else navigateToDeptSubfolder(match.path);
                   }
                 }}
                 style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
               >
                 <option value="all">All categories</option>
-                {categoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
+                {docGroupLevelFilter === 'all' && categoryOptionGroups.length > 0 ? (
+                  <>
+                    {docLeafCategoryFilter !== 'all' && !categoryOptionGroups.some(x => x.categories.indexOf(docLeafCategoryFilter) !== -1) && (
+                      <option value={docLeafCategoryFilter}>{docLeafCategoryFilter}</option>
+                    )}
+                    {categoryOptionGroups.map(x => (
+                      <optgroup key={x.group} label={x.group}>
+                        {x.categories.map(category => <option key={`${x.group}::${category}`} value={`${x.group}::${category}`}>{category}</option>)}
+                      </optgroup>
+                    ))}
+                  </>
+                ) : categoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
               </select>
             ) : (
               <select aria-label="Category filter" value="all" disabled style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-faint)', outline: 'none', maxWidth: 180, cursor: 'not-allowed' }}>
                 <option value="all">No categories found</option>
               </select>
             )}
-            {subCategoryOptions.length > 0 ? (
+            {(subCategoryOptions.length > 0 || subCategoryOptionGroups.length > 0 || libraryWideScope) ? (
               <select
                 aria-label="Sub-category filter"
-                value={docSubCategoryFilter}
+                value={(() => {
+                  // Classified options carry "<Group>::<Category>::<Sub>"; show
+                  // the exact entry the user clicked.
+                  if (docSubCategoryFilter === 'all' || subCategoryOptionGroups.length === 0) return docSubCategoryFilter;
+                  const keyOf = (x: { group: string; category: string }): string => `${x.group}::${x.category}::${docSubCategoryFilter}`;
+                  const picked = (host as any)._subCategoryPickKey as string | undefined;
+                  const hits = subCategoryOptionGroups.filter(x => x.subs.indexOf(docSubCategoryFilter) !== -1);
+                  if (picked && hits.some(x => keyOf(x) === picked)) return picked;
+                  return hits.length ? keyOf(hits[0]) : docSubCategoryFilter;
+                })()}
                 onChange={e => {
-                  host.setState({ docSubCategoryFilter: e.target.value, docListPage: 0 });
+                  const raw = e.target.value;
+                  // "<Group>::<Category>::<Sub-category>" (library-wide,
+                  // classified list): only the Sub-category changes — Groups
+                  // and Categories stay exactly as the user set them. The
+                  // group/category are used just to find the matching folder
+                  // in the Sub-folder tree.
+                  const parts = raw.split('::');
+                  (host as any)._subCategoryPickKey = parts.length === 3 ? raw : undefined;
+                  if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
+                    const [pg, pc, ps] = parts;
+                    const subNode = findSubfolderNodeForCategory(ps, { group: pg, category: pc });
+                    if (subNode) (host as any)._subfolderSelectedPath = subNode.path;
+                    host.setState({
+                      docSubCategoryFilter: ps,
+                      docSubfolderOtherFilter: subNode ? subNode.name : docSubfolderOtherFilter,
+                      docListPage: 0,
+                    });
+                    if (subNode) {
+                      if (atSitesRoot) navigateToLiveSubfolder(subNode.name, subNode.path);
+                      else navigateToDeptSubfolder(subNode.path);
+                    }
+                    return;
+                  }
+                  const val = raw;
+                  // Keep the Sub-folder tree in step: a sub-category jumps to
+                  // that folder inside the chosen group/category; "All
+                  // sub-categories" falls back to the category's folder.
+                  const ctx = { group: docGroupLevelFilter, category: docLeafCategoryFilter };
+                  const node = val !== 'all'
+                    ? findSubfolderNodeForCategory(val, ctx)
+                    : (docLeafCategoryFilter !== 'all' ? findSubfolderNodeForCategory(docLeafCategoryFilter, { group: docGroupLevelFilter }) : null);
+                  if (node) (host as any)._subfolderSelectedPath = node.path;
+                  host.setState({
+                    docSubCategoryFilter: val,
+                    docSubfolderOtherFilter: node ? node.name : docSubfolderOtherFilter,
+                    docListPage: 0,
+                  });
+                  if (node) {
+                    if (atSitesRoot) navigateToLiveSubfolder(node.name, node.path);
+                    else navigateToDeptSubfolder(node.path);
+                  }
                 }}
                 style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
               >
                 <option value="all">All sub-categories</option>
-                {subCategoryOptions.map(subCategory => <option key={subCategory} value={subCategory}>{subCategory}</option>)}
+                {subCategoryUngrouped.map(subCategory => <option key={subCategory} value={subCategory}>{subCategory}</option>)}
+                {subCategoryOptionGroups.map(x => (
+                  <optgroup key={`${x.group}::${x.category}`} label={docGroupLevelFilter === 'all' ? `${x.group} › ${x.category}` : x.category}>
+                    {x.subs.map(sub => <option key={`${x.group}::${x.category}::${sub}`} value={`${x.group}::${x.category}::${sub}`}>{sub}</option>)}
+                  </optgroup>
+                ))}
               </select>
             ) : (
               <select aria-label="Sub-category filter" value="all" disabled style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-faint)', outline: 'none', maxWidth: 180, cursor: 'not-allowed' }}>
@@ -5874,6 +6923,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 the Module Header, which does not move. */}
           </div>
         </div>
+        </div>{/* /sticky header */}
+
+        <CopilotSearchPanel host={host} />
 
         {/* Vessel's other main folders — a vessel commonly has a folder under
             several main folders (Technical & Crewing, Commercial &
@@ -5914,16 +6966,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       // this session) — the click looked like a complete
                       // no-op instead of at least switching the Main folder
                       // filter/highlighted chip right away.
-                      host.setState({
-                        docCategoryFilter: m,
-                        docGroupLevelFilter: 'all',
-                        docLeafCategoryFilter: 'all',
-                        docSubCategoryFilter: 'all',
-                        docSubfolderOtherFilter: 'all',
-                        catFilter: m,
-                        docListPage: 0,
-                      });
-                      navigateToLiveMainFolder(m);
+                      //
+                      // Same vessel, other main folder: the Sub-folder pick
+                      // (e.g. Drawings > Hull) and Group / Category are kept
+                      // and the same sub-folder is opened under `m` — they
+                      // used to be reset to "All …" here.
+                      switchVesselMainFolder(m);
                     }}
                     disabled={active}
                     title={active ? `Currently viewing ${vesselFilter} under ${m}` : `Jump to ${vesselFilter} under ${m}`}
@@ -6350,32 +7398,100 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 // > ELECT from the library root, so "Electrical" alone found
                 // nothing. While the walk is in flight, or if it fails, results
                 // from folder listings already cached in the browser are shown.
-                const groupCatOnly = docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all';
+                // Standing in the folder that IS the selected group (e.g. the
+                // "To Be Classified" folder with the To Be Classified group
+                // picked, no category) is just normal folder browsing: show
+                // its sub-folders, not a flat list of every nested file.
+                const openFolderName = (folderPathStack[folderPathStack.length - 1]?.name || '').trim();
+                const openFolderIsSelectedGroup = docGroupLevelFilter !== 'all' && docLeafCategoryFilter === 'all' && docSubCategoryFilter === 'all' && !!openFolderName && (
+                  docGroupLevelFilter === TBC_GROUP_LABEL
+                    ? isToBeClassifiedName(openFolderName)
+                    : (() => {
+                        const fg = folderGroupsOf(openFolderName);
+                        return docGroupLevelFilter.trim().toLowerCase() === 'drawings' ? (fg.drawings && !fg.manuals) : (fg.manuals && !fg.drawings);
+                      })()
+                );
+                // A Sub-category picked on its own (Groups / Categories left at
+                // "All") searches too — before, nothing happened until a Group
+                // or Category was also set.
+                const groupCatOnly = (docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all' || docSubCategoryFilter !== 'all') && !openFolderIsSelectedGroup;
                 // Also drive the recursive subtree walk off a plain text search, not just
                 // the Group/Category filter. Previously a text search only matched files
                 // directly inside the folder currently open (vesselScopedChildFiles below);
                 // a file several levels deeper that matched the search term never surfaced
                 // unless the user happened to open every intermediate folder first.
-                const groupCatActive = groupCatOnly || !!textFilter;
+                // Text search only launches the heavy recursive walk from 2 characters
+                // up — a single letter matches nearly everything and just burns a
+                // full-tree Graph walk (the debounce already covers fast typing).
+                const groupCatActive = groupCatOnly || (textFilter || '').trim().length >= 2;
                 const groupCatMatchRelPath = new Map<string, string[]>();
                 let groupCatMatchedFiles: any[] = [];
                 let groupCatSearching = false;
+                let groupCatFailed = false;
                 let groupCatTruncated = false;
                 if (groupCatActive && effectiveSiteId && rawDriveId) {
-                  const treeKey = `${effectiveSiteId}::${rawDriveId}::${currentFolderId}`;
+                  // The backend answers this from its drive index (one in-memory
+                  // pass) and can pre-select the Group's files by folder-name
+                  // words, so a Group pick at the library root no longer walks
+                  // the whole library folder by folder through Graph. The
+                  // exact Group / Category rule still runs below on what it
+                  // returns. The pre-selection is skipped when a folder
+                  // already open in the breadcrumb carries the Group word.
+                  const preWordsAll = groupCatPathWords(docGroupLevelFilter);
+                  const stackHasGroupWord = folderPathStack.some(n => gcWords(n.name).some(w => preWordsAll.indexOf(w) >= 0));
+                  // A Sub-category is an exact folder name, so its own words are
+                  // a much narrower (still complete) pre-selection than the
+                  // Group's: "Machinery Drawings" → files under a folder with
+                  // "machinery" in its name, instead of every Drawings file
+                  // (which overflowed the 8000-item cap at the library root →
+                  // "No … files here / Large folder"). Group words and filler
+                  // words are dropped unless nothing else is left.
+                  const subPick = docSubCategoryFilter !== 'all' ? docSubCategoryFilter.trim().toLowerCase() : '';
+                  const stackInSub = !!subPick && folderPathStack.some(n => (n.name || '').trim().toLowerCase() === subPick);
+                  const subWordsAll = subPick && !stackInSub ? subPick.split(/[^a-z0-9]+/).filter(Boolean) : [];
+                  const subWordsNarrow = subWordsAll.filter(w => ['drawing', 'drawings', 'dwg', 'dwgs', 'manual', 'manuals', 'and', 'of', 'the', 'for', 'a'].indexOf(w) < 0);
+                  const subWords = subWordsNarrow.length > 0 ? subWordsNarrow : subWordsAll;
+                  const preWords = subWords.length > 0
+                    ? subWords
+                    : (preWordsAll.length > 0 && !stackHasGroupWord ? preWordsAll : []);
+                  const treeKey = `${effectiveSiteId}::${rawDriveId}::${currentFolderId}${preWords.length > 0 ? `::w:${preWords.join('|')}` : ''}`;
                   let tree = groupCatTreeCache.get(treeKey);
+                  let searchSince = tree?.since;
+                  let priorFailures = tree?.failures || 0;
                   if (tree && tree.status !== 'loading' && Date.now() - tree.at > GROUP_CAT_TREE_TTL_MS) {
                     groupCatTreeCache.delete(treeKey);
                     tree = undefined;
+                    searchSince = undefined;
+                    priorFailures = 0;
                   }
+                  // A failed lookup (timeout / throttled) is retried after a
+                  // short pause instead of being remembered for 5 minutes.
+                  if (tree && tree.status === 'error' && Date.now() - tree.at > groupCatRetryDelayMs(tree.failures || 1)) {
+                    groupCatTreeCache.delete(treeKey);
+                    tree = undefined;
+                  }
+                  // Backend index still building: ask again when the pause is over.
+                  if (tree && tree.idle && (tree.retryAt || 0) <= Date.now()) tree = undefined;
                   if (!tree) {
-                    const loading: GroupCatTreeEntry = { status: 'loading', items: [], truncated: false, at: Date.now() };
+                    const since = searchSince || Date.now();
+                    const loading: GroupCatTreeEntry = { status: 'loading', items: [], truncated: false, at: Date.now(), since, failures: priorFailures };
                     groupCatTreeCache.set(treeKey, loading);
                     tree = loading;
+                    const useIndex = Date.now() - since < GROUP_CAT_INDEX_WAIT_MS;
                     const url = `${host._base()}/api/sites/${encodeURIComponent(effectiveSiteId)}/drives/${encodeURIComponent(rawDriveId)}` +
-                      `/folders/${encodeURIComponent(currentFolderId)}/recursive?include_tags=false&max_items=8000`;
+                      `/folders/${encodeURIComponent(currentFolderId)}/recursive?include_tags=false&max_items=8000` +
+                      (preWords.length > 0 ? `&path_words=${encodeURIComponent(preWords.join(','))}` : '') +
+                      (useIndex ? '' : '&use_index=false');
                     host._fetchJson(url)
                       .then((data: any) => {
+                        if (data?.building) {
+                          const waitMs = Math.max(3000, Math.min(10000, (Number(data.retry_after) || 0) * 1000));
+                          groupCatTreeCache.set(treeKey, {
+                            status: 'loading', items: [], truncated: false, at: Date.now(), since, idle: true, retryAt: Date.now() + waitMs, failures: priorFailures,
+                          });
+                          window.setTimeout(() => host._scheduleForceUpdate(), waitMs);
+                          return;
+                        }
                         groupCatTreeCache.set(treeKey, {
                           status: 'done',
                           items: Array.isArray(data?.folders) ? data.folders : [],
@@ -6384,7 +7500,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         });
                       })
                       .catch(() => {
-                        groupCatTreeCache.set(treeKey, { status: 'error', items: [], truncated: false, at: Date.now() });
+                        const failures = priorFailures + 1;
+                        groupCatTreeCache.set(treeKey, { status: 'error', items: [], truncated: false, at: Date.now(), since, failures });
+                        // Nothing else re-renders the page at the end of the
+                        // pause, so ask for it: the retry starts on that render.
+                        window.setTimeout(() => host._scheduleForceUpdate(), groupCatRetryDelayMs(failures) + 200);
                       })
                       .then(() => host._scheduleForceUpdate());
                   }
@@ -6396,6 +7516,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     if (id && seenIds.has(id)) return;
                     const fullNames = [...baseNames, ...relFolderNames];
                     if (!pathMatchesGroupCategory(fullNames.join(' > '), docGroupLevelFilter, docLeafCategoryFilter)) return;
+                    if (docSubCategoryFilter !== 'all' && !fullNames.some(seg => seg.trim().toLowerCase() === docSubCategoryFilter.trim().toLowerCase())) return;
                     if (!insideSelectedVessel) {
                       const inVessel = fullNames.some(seg => {
                         const matched = matchFolderToVessel(seg);
@@ -6425,7 +7546,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     });
                     groupCatTruncated = tree.truncated;
                   } else {
-                    groupCatSearching = tree.status === 'loading';
+                    // A failed lookup is retried automatically, so it still reads
+                    // as "searching" — never as "No files here".
+                    groupCatSearching = tree.status === 'loading' || tree.status === 'error';
+                    groupCatFailed = tree.status === 'error';
                     // Interim / fallback: folder listings already in the browser
                     // cache (folders the user has opened or that were prefetched).
                     const queue: { id: string; names: string[] }[] = [{ id: currentFolderId, names: [] }];
@@ -6499,6 +7623,39 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       groupCatMatchRelPath.set(r.fileId, relFolderNamesForRow);
                     });
                   }
+
+                  // Group / Category picked with no text: the recursive walk above
+                  // is capped (8000 items, 8 levels), so on a big library it can
+                  // miss whole branches. Also take every matching file already in
+                  // the fleet-wide row set (same source List view uses), limited to
+                  // what sits under the folder currently open.
+                  if (groupCatOnly) {
+                    (scopeRows || []).forEach((r: any) => {
+                      if (!r || !r.fileId || seenIds.has(r.fileId)) return;
+                      const segsAll = (r.subFolderPath || '').split('>').map((x: string) => x.trim()).filter(Boolean);
+                      const rel = segsAll.slice(3);
+                      if (baseNames.length > rel.length) return;
+                      for (let i = 0; i < baseNames.length; i++) {
+                        if (rel[i].toLowerCase() !== baseNames[i].toLowerCase()) return;
+                      }
+                      const relBelow = rel.slice(baseNames.length);
+                      if (!pathMatchesGroupCategory(rel.join(' > '), docGroupLevelFilter, docLeafCategoryFilter)) return;
+                      if (docSubCategoryFilter !== 'all' && !rel.some((seg: string) => seg.trim().toLowerCase() === docSubCategoryFilter.trim().toLowerCase())) return;
+                      if (!insideSelectedVessel) {
+                        const rowVessel = getListViewLabels(r).vessel;
+                        if (!rowVessel || !vesselNamesEqual(rowVessel, vesselFilter)) return;
+                      }
+                      seenIds.add(r.fileId);
+                      groupCatMatchedFiles.push({
+                        id: r.fileId,
+                        name: r.fileName,
+                        size: r.fileSize,
+                        lastModifiedDateTime: r.fileUploadedAt,
+                        web_url: r.webUrl || r.fileUrl,
+                      });
+                      groupCatMatchRelPath.set(r.fileId, relBelow);
+                    });
+                  }
                 }
 
                 const folderServerCounts2 = folderData.error ? null : host._getOrLoadFolderCounts(effectiveSiteId, rawDriveId, currentFolderId);
@@ -6519,8 +7676,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
                           {childFolders.map((sf, idx) => {
                             const sfInTree2 = !!sf.id && liveTreeIndex.ids.has(sf.id);
-                            const sfChildData2 = sf.id && !sfInTree2 ? host._getOrLoadSiteFolderChildren(effectiveSiteId, rawDriveId, sf.id) : null;
-                            const sfLoading2 = sfChildData2 ? (sfChildData2.loading && sfChildData2.items.length === 0) : false;
+                            const sfCountsPending2 = !folderServerCounts2 && host._folderCountsLoading(effectiveSiteId, rawDriveId, currentFolderId);
+                            const sfChildData2 = sf.id && !sfInTree2 && !folderServerCounts2 && !sfCountsPending2 ? host._getOrLoadSiteFolderChildren(effectiveSiteId, rawDriveId, sf.id) : null;
+                            const sfLoading2 = sfChildData2 ? (sfChildData2.loading && sfChildData2.items.length === 0) : (sfCountsPending2 && !sfInTree2);
                             const sfCounts2 = sfLoading2 ? null : getFolderTileCounts(sf.id, sfChildData2 ? sfChildData2.items : null);
                             const sfFolderCount2 = sfCounts2 ? sfCounts2.folders : null;
                             const sfFileCount2  = sfCounts2 ? sfCounts2.files : null;
@@ -6588,7 +7746,38 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       const groupCatLabel = [
                         docGroupLevelFilter !== 'all' ? docGroupLevelFilter : null,
                         docLeafCategoryFilter !== 'all' ? docLeafCategoryFilter : null,
+                        docSubCategoryFilter !== 'all' ? docSubCategoryFilter : null,
                       ].filter(Boolean).join(' › ');
+
+                      // Folder-view pagination: 10 files per page, unlimited pages.
+                      // Page resets to 1 whenever the folder or any filter changes
+                      // (tracked via a signature stored next to the page number).
+                      const FOLDER_PAGE_SIZE = 10;
+                      const fvState = host.state as any;
+                      const fvSig = [effectiveSiteId, currentFolderId, textFilter, vesselFilter, docGroupLevelFilter, docLeafCategoryFilter, docCategoryFilter, docListSort, fvState.attachmentFilter].join('|');
+                      const fvTotalPages = Math.max(1, Math.ceil(displayChildFiles.length / FOLDER_PAGE_SIZE));
+                      const fvPage = Math.min(fvState.docFolderPageSig === fvSig ? (fvState.docFolderPage || 0) : 0, fvTotalPages - 1);
+                      const pagedChildFiles = displayChildFiles.slice(fvPage * FOLDER_PAGE_SIZE, (fvPage + 1) * FOLDER_PAGE_SIZE);
+                      const goFvPage = (n: number): void => {
+                        host.setState({ docFolderPage: Math.max(0, Math.min(fvTotalPages - 1, n)), docFolderPageSig: fvSig } as any);
+                      };
+                      const fvPageNums: (number | '…')[] = [];
+                      {
+                        const want = new Set<number>([0, fvTotalPages - 1]);
+                        for (let k = fvPage - 2; k <= fvPage + 2; k++) if (k >= 0 && k < fvTotalPages) want.add(k);
+                        const sorted = Array.from(want).sort((a, b) => a - b);
+                        sorted.forEach((n, i) => {
+                          if (i > 0 && n - sorted[i - 1] > 1) fvPageNums.push('…');
+                          fvPageNums.push(n);
+                        });
+                      }
+                      const fvBtn = (disabled: boolean, active = false): React.CSSProperties => ({
+                        border: active ? 'none' : '1px solid var(--vdms-border)',
+                        background: active ? '#0078d4' : 'var(--vdms-surface)',
+                        color: active ? '#fff' : 'var(--vdms-text)',
+                        borderRadius: 4, padding: '3px 9px', fontSize: 11, fontWeight: active ? 700 : 400,
+                        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.4 : 1,
+                      });
 
                       return (
                         <>
@@ -6618,7 +7807,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                     </tr>
                                   </thead>
                                   <tbody>
-                                    {displayChildFiles.map((file, idx) => {
+                                    {pagedChildFiles.map((file, idx) => {
                                       const fileSize = typeof file.size === 'number'
                                         ? (file.size > 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : `${(file.size / 1024).toFixed(1)} KB`)
                                         : (file.size || '—');
@@ -6716,6 +7905,20 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                     })}
                                   </tbody>
                                 </table>
+                                <div style={{ padding: '10px 14px', color: 'var(--vdms-text-muted)', fontSize: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, borderTop: '1px solid var(--vdms-border-soft)', background: 'var(--vdms-surface-alt)' }}>
+                                  <span>
+                                    Showing {fvPage * FOLDER_PAGE_SIZE + 1}–{Math.min((fvPage + 1) * FOLDER_PAGE_SIZE, displayChildFiles.length)} of {displayChildFiles.length} files
+                                  </span>
+                                  <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <button type="button" onClick={() => goFvPage(fvPage - 1)} disabled={fvPage === 0} style={fvBtn(fvPage === 0)}>← Prev</button>
+                                    {fvPageNums.map((n, i) => n === '…' ? (
+                                      <span key={'gap' + i} style={{ padding: '0 4px' }}>…</span>
+                                    ) : (
+                                      <button key={n} type="button" onClick={() => goFvPage(n)} style={fvBtn(false, n === fvPage)}>{n + 1}</button>
+                                    ))}
+                                    <button type="button" onClick={() => goFvPage(fvPage + 1)} disabled={fvPage >= fvTotalPages - 1} style={fvBtn(fvPage >= fvTotalPages - 1)}>Next →</button>
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           )}
@@ -6741,7 +7944,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   groupCatSearching ? (
                                     <>
                                       <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>Searching for {groupCatLabel} files…</div>
-                                      <div style={{ fontSize: 13, marginTop: 4 }}>Looking through the sub-folders of {currentNode?.name || 'this folder'}.</div>
+                                      <div style={{ fontSize: 13, marginTop: 4 }}>
+                                        {groupCatFailed
+                                          ? 'That took longer than expected. Trying again automatically…'
+                                          : `Looking through the sub-folders of ${currentNode?.name || 'this folder'}.`}
+                                      </div>
                                     </>
                                   ) : (
                                     <>
@@ -6751,6 +7958,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         {docGroupLevelFilter !== 'all' ? ` ${docGroupLevelFilter}` : ''}
                                         {docGroupLevelFilter !== 'all' && docLeafCategoryFilter !== 'all' ? ' and' : ''}
                                         {docLeafCategoryFilter !== 'all' ? ` ${docLeafCategoryFilter}` : ''}
+                                        {docSubCategoryFilter !== 'all' ? `${docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all' ? ' and' : ''} ${docSubCategoryFilter}` : ''}
                                         {vesselFilter !== 'all' ? ` for ${vesselFilter}` : ''}, or those folders have no files.
                                         {groupCatTruncated ? ' Large folder — open a sub-folder to search it fully.' : ''}
                                       </div>

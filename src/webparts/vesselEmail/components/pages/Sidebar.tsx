@@ -101,7 +101,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
   // `AppView`. Annotating ALL_NAV_ITEMS directly keeps every `id` as its
   // literal AppView member.
   const ALL_NAV_ITEMS: Array<{ id: AppView; label: string; iconName: string; badge?: number }> = [
-    { id: 'dashboard',  label: 'Home',            iconName: 'Home' },
+    { id: 'dashboard',  label: 'Dashboard',           iconName: 'Home' },
     { id: 'list',       label: 'Documents',        iconName: 'Documentation' },
     { id: 'sites',      label: 'Sites',             iconName: 'SharepointLogo' },
     { id: 'vessels',    label: 'Vessels',          iconName: 'Ferry' },

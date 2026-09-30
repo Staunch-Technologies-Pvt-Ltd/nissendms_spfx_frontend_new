@@ -1716,7 +1716,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               if (!this._isUnmounted && seq === this._dashboardStatsSeq) {
                 void this._loadDashboardStats(false);
               }
-            }, 3000);
+            }, 2000);
           }
         }
       })
@@ -3075,6 +3075,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       Array.from(this._siteFolderItemsCache.keys())
         .filter(key => key.startsWith(prefix))
         .forEach(key => this._siteFolderItemsCache.delete(key));
+      Array.from(this._siteFolderTreeCache.keys())
+        .filter(key => key.startsWith(prefix))
+        .forEach(key => this._siteFolderTreeCache.delete(key));
     }
     // If the user is already looking at this site's Documents view, refresh
     // it right away instead of waiting for them to navigate away and back.
@@ -3200,7 +3203,108 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   // "Show N more" control in that grid; a plain Set + forceUpdate() rather
   // than state, matching how _siteDrivesCache itself is handled.
   public _systemLibrariesRevealed: Set<string> = new Set();
-  public _siteFolderItemsCache: Map<string, { items: any[]; loading?: boolean; parentPath?: string; error?: boolean; retryAt?: number }> = new Map();
+  public _siteFolderItemsCache: Map<string, { items: any[]; loading?: boolean; parentPath?: string; error?: boolean; retryAt?: number; errorAt?: number; _promise?: Promise<any[]> }> = new Map();
+  // Consecutive non-throttle failures per folder listing (key = cache key).
+  // A failed listing retries by itself with a growing delay (see
+  // _folderListingRetryDelayMs) instead of sitting on "Couldn't load this
+  // folder" until the user presses Retry.
+  public _folderListingFailures: Map<string, number> = new Map();
+  public _folderListingRetryDelayMs(key: string, failed: boolean): number {
+    if (!failed) { this._folderListingFailures.delete(key); return 0; }
+    const n = (this._folderListingFailures.get(key) || 0) + 1;
+    this._folderListingFailures.set(key, n);
+    // 3 s, 6 s, 12 s, 24 s, then leave the manual Retry.
+    return n <= 4 ? 3000 * Math.pow(2, n - 1) : 0;
+  }
+
+  /** Folder-only tree for a folder, fetched with ONE backend call
+   * (GET .../folders/{id}/folder-tree) instead of one /children call per
+   * folder. Feeds the Documents "All sub-folders" dropdown. Flat, parent-linked
+   * rows; `truncated` means the server hit a cap or a branch failed. */
+  public _siteFolderTreeCache: Map<string, {
+    folders: Array<{ id: string; name: string; parent_id: string; path: string; depth: number }>;
+    truncated: boolean; loading: boolean; error: boolean; ts: number;
+  }> = new Map();
+
+  public _getOrLoadSiteFolderTree(siteId: string, driveId: string, folderId: string, maxDepth?: number, maxFolders?: number): {
+    folders: Array<{ id: string; name: string; parent_id: string; path: string; depth: number }>;
+    truncated: boolean; loading: boolean; error: boolean;
+  } {
+    const empty = { folders: [], truncated: false, loading: false, error: false };
+    if (!siteId || !driveId || !folderId) return empty;
+    // maxDepth: a shallow tree (e.g. the whole library 3 levels deep, used to
+    // find vessel folders for the Vessel filter) — cached separately from the
+    // full-depth tree of the same folder.
+    // maxFolders: raise the server's folder cap (default 6000) for a tree that
+    // must reach the deepest levels, e.g. the whole library's categories.
+    const key = `${siteId}::${driveId}::${folderId}${maxDepth ? `::d${maxDepth}` : ''}${maxFolders ? `::f${maxFolders}` : ''}`;
+    const hit = this._siteFolderTreeCache.get(key);
+    const STALE_MS = 5 * 60 * 1000;
+    const retryOk = !!hit && hit.error && Date.now() - hit.ts > 30000;
+    if (hit && hit.loading) return hit;
+    if (hit && !retryOk && Date.now() - hit.ts <= STALE_MS) return hit;
+    // Never add load while Graph is throttling; serve whatever we have.
+    if (Date.now() < this._graphThrottledUntil) return hit || empty;
+    this._fetchSiteFolderTree(key, siteId, driveId, folderId, false, 0, maxDepth, maxFolders);
+    return this._siteFolderTreeCache.get(key)!;
+  }
+
+  private _fetchSiteFolderTree(key: string, siteId: string, driveId: string, folderId: string, refresh: boolean, attempt: number, maxDepth?: number, maxFolders?: number): void {
+    const prev = this._siteFolderTreeCache.get(key);
+    // Stale-while-revalidate: keep serving the previous tree while refreshing.
+    const base = prev || { folders: [], truncated: false, loading: true, error: false, ts: Date.now() };
+    this._siteFolderTreeCache.set(key, { ...base, loading: true });
+    const encodedFolderRef = folderId.split('/').map(p => encodeURIComponent(p)).join('/');
+    // A cold build of a big library can take longer than the default 25 s
+    // fetch timeout (that abort is what logged "folder-tree load failed:
+    // AbortError"), so give this one call its own, longer deadline.
+    const treeAbort = new AbortController();
+    const treeTimer = window.setTimeout(() => treeAbort.abort(), 120000);
+    this._fetchJson(
+      `${this._base()}/api/sites/${encodeURIComponent(siteId)}/drives/${encodeURIComponent(driveId)}/folders/${encodedFolderRef}/folder-tree` +
+        (() => {
+          const qs = [refresh ? 'refresh=true' : '', maxDepth ? `max_depth=${maxDepth}` : '', maxFolders ? `max_folders=${maxFolders}` : ''].filter(Boolean).join('&');
+          return qs ? `?${qs}` : '';
+        })(),
+      treeAbort.signal
+    ).then((data: any) => {
+      window.clearTimeout(treeTimer);
+      const folders = Array.isArray(data?.folders) ? data.folders : [];
+      const truncated = !!data?.truncated;
+      // Never let a smaller partial (throttled) result replace a bigger one.
+      // (A complete delta-index answer is authoritative even when depth-capped,
+      // so a folder deleted since the last load does drop out.)
+      const partialAnswer = !!data?.building || data?.source !== 'delta';
+      const keepOld = truncated && partialAnswer && base.folders.length > folders.length;
+      this._siteFolderTreeCache.set(key, keepOld
+        ? { ...base, loading: false, error: false, ts: Date.now() }
+        : { folders, truncated, loading: false, error: false, ts: Date.now() });
+      // Still building on the server (first drive index pass) or a partial
+      // tree: poll again at a steady pace — never faster than the server's
+      // own retry_after, and never hammering during a quota cooldown.
+      // A shallow tree is "truncated" by design (depth cap) — only poll it
+      // while the server index is still building.
+      const pollPartial = !maxDepth && data?.source !== 'delta';
+      if (truncated && (data?.building || pollPartial) && attempt < 15) {
+        const serverWaitMs = Number(data?.retry_after) > 0 ? Number(data.retry_after) * 1000 + 1000 : 0;
+        const delayMs = Math.min(60000, Math.max(serverWaitMs, data?.building ? 5000 : 8000));
+        window.setTimeout(() => this._fetchSiteFolderTree(key, siteId, driveId, folderId, false, attempt + 1, maxDepth, maxFolders), delayMs);
+      }
+    }).catch((err: any) => {
+      window.clearTimeout(treeTimer);
+      if (typeof err?.message === 'string' && err.message.indexOf('THROTTLED_429:') === 0) {
+        const retryAfterSec = Number(err.message.split(':')[1]) || 60;
+        this._graphThrottledUntil = Math.max(this._graphThrottledUntil, Date.now() + retryAfterSec * 1000);
+      }
+      console.warn('[VesselDMS] folder-tree load failed:', err);
+      this._siteFolderTreeCache.set(key, { ...base, loading: false, error: true, ts: Date.now() });
+      // Retry once the throttle window has passed (not every few seconds).
+      const waitMs = Math.max(10000, this._graphThrottledUntil - Date.now() + 1000);
+      if (attempt < 6) {
+        window.setTimeout(() => this._fetchSiteFolderTree(key, siteId, driveId, folderId, false, attempt + 1, maxDepth, maxFolders), Math.min(waitMs, 90000));
+      }
+    }).then(() => this._scheduleForceUpdate());
+  }
 
   /**
    * Server-computed folder counts for the Documents folder tiles — the same
@@ -3242,6 +3346,11 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       this._folderCountsCache.set(key, { ts: Date.now(), loading: false, counts: entry.counts, summary: entry.summary });
     });
     return entry.ts > 0 ? entry : null;
+  }
+  /** True while the /subfolder-counts request for this folder is in flight. */
+  public _folderCountsLoading(siteId: string, driveId: string, folderId: string = 'root'): boolean {
+    const hit = this._folderCountsCache.get(`${siteId}::${driveId}::${folderId}`);
+    return !!hit && hit.loading;
   }
   private _siteFolderChildPrefetched: Set<string> = new Set();
   // Folder ids already auto-drilled-through (see _getOrLoadSiteFolderChildren
@@ -3304,12 +3413,22 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     if (!siteId || !driveId) return Promise.resolve([]);
     const key = `${siteId}::${driveId}::${folderId}`;
     const cached = this._siteFolderItemsCache.get(key) as any;
-    if (cached && !cached.loading) return Promise.resolve(cached.items || []);
+    if (cached && !cached.loading) {
+      // A failed listing is not an answer ("the folder has no such child"):
+      // once its retry window has passed, load it again instead of handing
+      // every caller the empty items of the error entry.
+      const retryable = cached.error === true && (cached.retryAt
+        ? Date.now() >= cached.retryAt
+        : Date.now() - (cached.errorAt || 0) > 3000);
+      if (!retryable) return Promise.resolve(cached.items || []);
+    }
     if (cached && cached.loading && cached._promise) return cached._promise;
 
     const promise: Promise<any[]> = this._loadSiteFolderChildren(siteId, driveId, folderId, signal).then(res => {
-      const loadedEntry: { items: any[]; loading: boolean; parentPath: string; error: boolean; retryAt?: number } = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
+      const loadedEntry: { items: any[]; loading: boolean; parentPath: string; error: boolean; retryAt?: number; errorAt?: number } = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
       if (res.throttled) loadedEntry.retryAt = Math.max(this._graphThrottledUntil, Date.now() + 1000);
+      if (loadedEntry.error) loadedEntry.errorAt = Date.now();
+      this._folderListingRetryDelayMs(key, loadedEntry.error && !res.throttled);
       this._siteFolderItemsCache.set(key, loadedEntry);
       this._scheduleForceUpdate();
       return loadedEntry.items;
@@ -3519,9 +3638,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     // _cancelSiteSubtreePrefetch for the full story).
     this._cancelSiteSubtreePrefetch();
 
-    const entry: { items: any[]; loading: boolean } = { items: [], loading: true };
+    const entry: { items: any[]; loading: boolean; _promise?: Promise<any[]> } = { items: [], loading: true };
     this._siteFolderItemsCache.set(key, entry);
-    this._loadSiteFolderChildren(siteId, driveId, folderId, signal).then(res => {
+    const loadPromise = this._loadSiteFolderChildren(siteId, driveId, folderId, signal).then(res => {
       if (signal?.aborted) {
         // Superseded (e.g. the user switched to a different site before this
         // resolved) — drop the placeholder instead of caching it as either
@@ -3531,11 +3650,21 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         this._siteFolderItemsCache.delete(key);
         return;
       }
-      const loadedEntry: { items: any[]; loading: boolean; parentPath: string; error: boolean; retryAt?: number } = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
+      const loadedEntry: { items: any[]; loading: boolean; parentPath: string; error: boolean; retryAt?: number; errorAt?: number } = { items: res.items || [], loading: false, parentPath: res.parentPath || '', error: res.error === true };
       if (res.throttled) {
         loadedEntry.retryAt = Math.max(this._graphThrottledUntil, Date.now() + 1000);
         window.setTimeout(() => this._scheduleForceUpdate(), Math.max(0, loadedEntry.retryAt - Date.now()) + 250);
+      } else if (loadedEntry.error) {
+        // Timed out / network blip / 5xx: retry by itself a few times.
+        const retryIn = this._folderListingRetryDelayMs(key, true);
+        if (retryIn > 0) {
+          loadedEntry.retryAt = Date.now() + retryIn;
+          window.setTimeout(() => this._scheduleForceUpdate(), retryIn + 250);
+        }
+      } else {
+        this._folderListingRetryDelayMs(key, false);
       }
+      if (loadedEntry.error) loadedEntry.errorAt = Date.now();
       this._siteFolderItemsCache.set(key, loadedEntry);
       if (res.folderId && res.folderId !== folderId) {
         const resolvedKey = `${siteId}::${driveId}::${res.folderId}`;
@@ -3567,10 +3696,15 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       if (signal?.aborted) {
         this._siteFolderItemsCache.delete(key);
       } else {
-        this._siteFolderItemsCache.set(key, { items: [], loading: false, parentPath: '', error: true });
+        this._siteFolderItemsCache.set(key, { items: [], loading: false, parentPath: '', error: true, errorAt: Date.now() });
       }
       this._scheduleForceUpdate();
     });
+    // Lets _loadAndCacheSiteFolderChildren (used by the async path resolvers)
+    // join this request instead of starting a second one and overwriting the
+    // entry — the second one failing used to replace a good listing with an
+    // error entry.
+    entry._promise = loadPromise.then(() => ((this._siteFolderItemsCache.get(key)?.items) || []));
     return entry;
   }
 

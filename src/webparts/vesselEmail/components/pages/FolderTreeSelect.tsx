@@ -17,13 +17,17 @@ interface FolderTreeSelectProps {
   /** Currently selected folder name, or 'all'. Matches the plain-<select>
    *  contract this replaces — docSubfolderOtherFilter's value shape. */
   value: string;
+  /** Exact path (names from the root) of the selected node, when known. Lets
+   *  two folders sharing a name (Drawings > Electrical vs Manuals > Electrical)
+   *  be told apart — without it, selection falls back to matching by name. */
+  selectedPath?: string[];
   /** `name` is the selected node's own name (matches the plain-<select>
    *  contract — this is what gets stored as the filter value). `path` is the
    *  full chain of names from the tree's roots down to and including this
    *  node, for callers that need to navigate to it (a name alone doesn't say
    *  where in the tree it lives when the same name could appear at more than
    *  one level). */
-  onChange: (name: string, path: string[]) => void;
+  onChange: (name: string, path: string[], id?: string) => void;
   /** Optional lazy loader. When given, a folder whose children aren't in
    *  `tree` yet still shows the expand arrow (if `canLoadChildren` allows);
    *  opening it fetches that folder's direct sub-folders on demand, so every
@@ -163,8 +167,8 @@ export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactEleme
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, tree, lazyChildren]);
 
-  const select = (name: string, path: string[]): void => {
-    onChange(name, path);
+  const select = (name: string, path: string[], id?: string): void => {
+    onChange(name, path, id);
     setOpen(false);
   };
 
@@ -185,7 +189,8 @@ export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactEleme
       // Arrow shows for known children, or (not yet loaded) any live folder
       // that could have some — it disappears again if the load finds none.
       const hasChildren = kids.length > 0 || loading || (lazyEligible(node) && !(key in lazyChildren));
-      const isSelected = value !== 'all' && value.trim().toLowerCase() === node.name.trim().toLowerCase();
+      const isSelected = value !== 'all' && value.trim().toLowerCase() === node.name.trim().toLowerCase()
+        && (!props.selectedPath || props.selectedPath.map(n => n.trim().toLowerCase()).join('/') === ownPath.map(n => n.trim().toLowerCase()).join('/'));
       const selfMatches = !normSearch || node.name.toLowerCase().includes(normSearch);
       return (
         <div key={key} style={{ position: 'relative' }}>
@@ -207,7 +212,7 @@ export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactEleme
               position: 'relative',
             }}
             onMouseDown={e => e.preventDefault()}
-            onClick={() => select(node.name, ownPath)}
+            onClick={() => select(node.name, ownPath, node.id)}
             title={node.name}
           >
             {/* Branch connector instead of an expand arrow — nesting is always shown. */}

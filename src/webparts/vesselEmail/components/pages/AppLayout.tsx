@@ -816,7 +816,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
         )}
 
         {/* ── Main Content ── */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 32), background: isNight ? '#211812' : clay.bg }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 32), background: isNight ? '#211812' : clay.bg, ['--vdms-content-pad' as any]: `${isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 32)}px` }}>
           {content}
         </div>
 

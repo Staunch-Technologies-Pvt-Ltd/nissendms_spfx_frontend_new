@@ -69,6 +69,9 @@ export interface DashboardSiteSummary {
    * placeholders here, not an actual empty count. The backend fills this in
    * with a background scan within moments; no user action needed. */
   stats_pending?: boolean;
+  /** Backend attached a live running total (files/folders read so far) while
+   * the full scan of this site is still in progress. */
+  counting?: boolean;
   /** Live vessel count for this site — root-level (or one-level-nested)
    * folders whose name matches a Term Store vessel term, computed as part
    * of the same scan as files/folders (see backend
@@ -139,7 +142,7 @@ interface DocFilters {
 const DEFAULT_FILTERS: DocFilters = {
   q: '', vessel: 'all', fileType: 'all', person: 'all',
   dateField: 'modified', preset: 'all', day: '', month: '', from: '', to: '',
-  groupBy: 'none', sort: 'newest', pageSize: 20,
+  groupBy: 'none', sort: 'newest', pageSize: 10,
 };
 
 // Kept across visits to Home in the same page load, so leaving Home and
@@ -960,6 +963,7 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ position: 'sticky', top: 'calc(-1 * var(--vdms-content-pad, 32px))', zIndex: 20, background: isNight ? '#211812' : clay.bg, margin: 'calc(-1 * var(--vdms-content-pad, 32px)) calc(-1 * var(--vdms-content-pad, 32px)) 0', padding: 'var(--vdms-content-pad, 32px) var(--vdms-content-pad, 32px) 8px', display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* SharePoint Site Filter — scopes every figure and list below. */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         {dashboardStats?.last_refreshed_epoch && (
@@ -992,12 +996,13 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
 
       {/* Counters */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
-        {statCard('Total Files', totalFiles, '📄')}
+        {statCard('Total Files', totalFiles, '📄', siteRows.some(s => s.stats_pending) ? <div style={{ fontSize: 11, color: '#0a66d0', fontWeight: 700, marginTop: 2 }}>⏳ still counting — total is updating live</div> : undefined)}
         {statCard('Total Folders', totalFolders, '📁')}
         {statCard('Total Sites', totalSites, '🌐')}
         {statCard('Total Vessels', totalVessels, '⚓',
           <button onClick={() => host._goToView('vessels')} style={{ background: 'none', border: 'none', color: clay.accentDark, fontSize: 11, fontWeight: 600, padding: 0, marginTop: 8, cursor: 'pointer' }}>Manage vessels →</button>
         )}
+      </div>
       </div>
       {/* Sites */}
       <div style={{ background: cardSurface, borderRadius: 16, border: `1px solid ${cardBorder}`, padding: 22, boxShadow: clay.shadowRaised }}>
@@ -1053,10 +1058,10 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
                       )}
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: site.error ? '#b91c1c' : undefined }}>
-                      {site.error ? <span title={site.error}>Error</span> : site.stats_pending ? <span style={{ color: 'var(--vdms-text-muted)' }}>…</span> : formatNumber(site.files)}
+                      {site.error ? <span title={site.error}>Error</span> : site.stats_pending ? (site.counting ? <span style={{ color: 'var(--vdms-text-muted)' }}>{formatNumber(site.files)}+</span> : <span style={{ color: 'var(--vdms-text-muted)' }}>…</span>) : formatNumber(site.files)}
                     </td>
                     <td style={{ ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: site.error ? '#b91c1c' : undefined }}>
-                      {site.error ? <span title={site.error}>Error</span> : site.stats_pending ? <span style={{ color: 'var(--vdms-text-muted)' }}>…</span> : formatNumber(site.folders)}
+                      {site.error ? <span title={site.error}>Error</span> : site.stats_pending ? (site.counting ? <span style={{ color: 'var(--vdms-text-muted)' }}>{formatNumber(site.folders)}+</span> : <span style={{ color: 'var(--vdms-text-muted)' }}>…</span>) : formatNumber(site.folders)}
                     </td>
                     <td style={{ ...tdStyle, color: 'var(--vdms-text-muted)', fontSize: 12 }}>{site.error ? '—' : site.stats_pending ? 'Just added' : formatDateTime(site.last_modified_epoch)}</td>
                     <td style={{ ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
