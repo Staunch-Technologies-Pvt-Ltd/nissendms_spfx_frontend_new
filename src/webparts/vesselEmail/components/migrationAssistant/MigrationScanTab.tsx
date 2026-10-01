@@ -301,8 +301,8 @@ export function MigrationScanTab({ api, isNight, actingEmail }: { api: Migration
                 {i > 0 && <Icon iconName="ChevronRight" style={{ fontSize: 10, color: t.textSubtle }} />}
                 <span style={{
                   borderRadius: 999, padding: '3px 10px', fontWeight: 600,
-                  background: isCurrent ? `#DD915922` : 'transparent',
-                  color: isCurrent ? '#DD9159' : isDone ? successColor : t.textSubtle,
+                  background: isCurrent ? 'var(--clay-accent-soft)' : 'transparent',
+                  color: isCurrent ? 'var(--clay-accent)' : isDone ? successColor : t.textSubtle,
                 }}>{s.label}</span>
               </span>
             );
@@ -409,8 +409,8 @@ export function MigrationScanTab({ api, isNight, actingEmail }: { api: Migration
               <div style={{ fontSize: 11, color: t.textSubtle, marginTop: 2 }}>Documents will be filed into this vessel's existing folders.</div>
             </div>
             {!vesselLoading && destinationRoot && (
-              <div style={{ ...rowStyle, background: '#DD915912' }}>
-                <Icon iconName="Sparkle" style={{ color: '#DD9159' }} />
+              <div style={{ ...rowStyle, background: 'var(--clay-accent-soft)' }}>
+                <Icon iconName="Sparkle" style={{ color: 'var(--clay-accent)' }} />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: t.text }}>Auto-detect vessel</div>
                   <div style={{ fontSize: 11, color: t.textSubtle }}>Each file is routed to the vessel it actually belongs to.</div>
@@ -439,7 +439,7 @@ export function MigrationScanTab({ api, isNight, actingEmail }: { api: Migration
 
         {step === 'scanning' && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 60, border: `1px solid ${t.border}`, borderRadius: 14, background: t.surface }}>
-            <Icon iconName="Sync" style={{ fontSize: 24, color: '#DD9159' }} />
+            <Icon iconName="Sync" style={{ fontSize: 24, color: 'var(--clay-accent)' }} />
             <div style={{ fontSize: 13, color: t.textMuted }}>
               {job && job.total_found > 0 ? `Classifying documents (${job.processed} of ${job.total_found})…` : 'Scanning for documents…'}
             </div>
@@ -451,7 +451,7 @@ export function MigrationScanTab({ api, isNight, actingEmail }: { api: Migration
             <div style={{ borderRadius: 14, border: `1px solid ${t.border}`, background: t.surface, padding: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: t.text }}>
                 {items.length} document(s) found in {[...job.subfolders, ...job.files].join(', ') || job.source_folder} — destination:{' '}
-                <span style={{ color: '#DD9159' }}>{job.auto_detect_vessel ? `auto-detect (${job.vessel_name})` : job.vessel_name}</span>
+                <span style={{ color: 'var(--clay-accent)' }}>{job.auto_detect_vessel ? `auto-detect (${job.vessel_name})` : job.vessel_name}</span>
               </div>
               <div style={{ fontSize: 11, color: t.textSubtle, marginTop: 4 }}>Review each row's category below. Nothing moves until "Confirm Move."</div>
             </div>

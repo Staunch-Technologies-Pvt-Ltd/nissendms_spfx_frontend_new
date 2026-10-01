@@ -179,35 +179,60 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       ...(allVesselNamesForSearch || []).map(n => n.trim().toLowerCase()),
     ])).filter(Boolean);
 
+    // Perf: the query is parsed/folded once per distinct string (not once per
+    // row), and pure-ASCII haystacks skip the NFD normalize + regex (identity
+    // for ASCII). This runs for every loaded row / cached folder item on each
+    // render, so it was a main cause of the search box freezing the page.
+    type ParsedSearchQuery = { raw: string[]; clauses: string[][]; single: string[]; clauseStrings: string[] };
+    if (!(host as any)._searchQueryParseCache) (host as any)._searchQueryParseCache = new Map<string, ParsedSearchQuery | null>();
+    const _searchQueryParseCache: Map<string, ParsedSearchQuery | null> = (host as any)._searchQueryParseCache;
+    const _nonAscii = /[^\u0000-\u007f]/;
+    const parseSearchQuery = (query: string) => {
+      const key = query || '';
+      const hit = _searchQueryParseCache.get(key);
+      if (hit !== undefined) return hit;
+      const trimmedQuery = foldDiacritics(key.trim().toLowerCase());
+      let parsed: ParsedSearchQuery | null = null;
+      if (trimmedQuery) {
+        const rawClauses = trimmedQuery.split(/[+,;]+/).map(c => c.trim()).filter(Boolean);
+        parsed = {
+          raw: rawClauses,
+          clauseStrings: rawClauses,
+          clauses: rawClauses.map(c => c.split(/\s+/).filter(Boolean)),
+          single: trimmedQuery.split(/\s+/).filter(Boolean),
+        };
+      }
+      if (_searchQueryParseCache.size > 50) _searchQueryParseCache.clear();
+      _searchQueryParseCache.set(key, parsed);
+      return parsed;
+    };
     const matchesSearchTokens = (query: string, ...fields: Array<string | undefined | null>): boolean => {
-      const trimmedQuery = foldDiacritics((query || '').trim().toLowerCase());
-      if (!trimmedQuery) return true;
-      const haystack = foldDiacritics(fields.filter(Boolean).join(' \u0001 ').toLowerCase());
-      const andOfWords = (clause: string): boolean => {
-        const tokens = clause.split(/\s+/).filter(Boolean);
-        return tokens.length > 0 && tokens.every(token => haystack.includes(token));
-      };
-      const rawClauses = trimmedQuery.split(/[+,;]+/).map(c => c.trim()).filter(Boolean);
+      const parsed = parseSearchQuery(query);
+      if (!parsed) return true;
+      let joined = '';
+      for (let i = 0; i < fields.length; i++) {
+        const f = fields[i];
+        if (!f) continue;
+        joined = joined ? `${joined} \u0001 ${f}` : f;
+      }
+      joined = joined.toLowerCase();
+      const haystack = _nonAscii.test(joined) ? foldDiacritics(joined) : joined;
+      const andOfWords = (tokens: string[]): boolean => tokens.length > 0 && tokens.every(token => haystack.includes(token));
+      const rawClauses = parsed.raw;
       if (rawClauses.length <= 1) {
-        const tokens = trimmedQuery.split(/\s+/).filter(Boolean);
-        return tokens.every(token => haystack.includes(token));
+        return parsed.single.every(token => haystack.includes(token));
       }
-      const vesselClauses = rawClauses.filter(c =>
-        knownVesselNamesLower.some(name => name === c || name.includes(c) || c.includes(name))
-      );
-      if (vesselClauses.length > 0) {
-        if (!vesselClauses.some(andOfWords)) return false;
-        const otherClauses = rawClauses.filter(c => !vesselClauses.includes(c));
-        return otherClauses.every(andOfWords);
+      const vesselIdx: number[] = [];
+      rawClauses.forEach((c, i) => {
+        if (knownVesselNamesLower.some(name => name === c || name.includes(c) || c.includes(name))) vesselIdx.push(i);
+      });
+      if (vesselIdx.length > 0) {
+        if (!vesselIdx.some(i => andOfWords(parsed.clauses[i]))) return false;
+        return parsed.clauses.every((tokens, i) => vesselIdx.indexOf(i) >= 0 || andOfWords(tokens));
       }
-      // No clause recognized as a known vessel name — e.g. "Bow Fighter +
-      // Bow Fraternity" when the vessel list hasn't loaded yet, or "Bow
-      // Fighter + monthly report.pdf" mixing a vessel with a filename.
-      // +/,/; still means OR here: requiring every clause to match (AND)
-      // meant a query naming two different things never matched any single
-      // row, which is exactly the "no results" bug this was meant to fix.
-      // Each clause is still an AND of its own words.
-      return rawClauses.some(andOfWords);
+      // No clause recognized as a known vessel name: +/,/; still means OR
+      // (each clause is an AND of its own words).
+      return parsed.clauses.some(andOfWords);
     };
 
     const getFirstClassSite = (keyHint: string, fallbackIdx: number) => {
@@ -1361,7 +1386,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       };
     };
 
-    const parseSharePointRowMetadataCache = new Map<string, ReturnType<typeof parseSharePointRowMetadataUncached>>();
+    // Persisted across renders (guarded by a signature of everything the parser
+    // reads from render state) — the cache used to be rebuilt on every render,
+    // so each keystroke re-parsed every row's folder path from scratch.
+    const parseMetaSig = [
+      allFleetVesselNames.length, (vessels || []).length, liveTermStoreVesselNames.length,
+      JSON.stringify(host.state.documentVesselAliases || {}), JSON.stringify(host.state.documentDepartmentAliases || {}),
+      (host.state.documentSites || []).map(x => `${x.site_key}|${x.sp_site_name}`).join(','),
+      allFleetVesselNames.join('|'),
+    ].join('#');
+    const _persistedParseMeta = (host as any)._parseMetaPersist as { sig: string; cache: Map<string, ReturnType<typeof parseSharePointRowMetadataUncached>>; labels: WeakMap<object, any> } | undefined;
+    const _parseMetaPersist = _persistedParseMeta && _persistedParseMeta.sig === parseMetaSig
+      ? _persistedParseMeta
+      : { sig: parseMetaSig, cache: new Map<string, ReturnType<typeof parseSharePointRowMetadataUncached>>(), labels: new WeakMap<object, any>() };
+    (host as any)._parseMetaPersist = _parseMetaPersist;
+    const parseSharePointRowMetadataCache = _parseMetaPersist.cache;
+    if (parseSharePointRowMetadataCache.size > 60000) parseSharePointRowMetadataCache.clear();
     const parseSharePointRowMetadata = (
       rowPath: string,
       fileName?: string | null,
@@ -1664,7 +1704,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     };
     // Called several times per row per render (dropdown options, filtering,
     // grouping); memoize per row object for this render.
-    const listViewLabelsCache = new WeakMap<object, ListViewLabels>();
+    const listViewLabelsCache: WeakMap<object, ListViewLabels> = _parseMetaPersist.labels;
     const getListViewLabels = (row: Pick<FlatRow, 'vesselName' | 'group' | 'category' | 'subCategory' | 'subFolderPath'> & { fileName?: string | null }): ListViewLabels => {
       const cachedLabels = listViewLabelsCache.get(row);
       if (cachedLabels) return cachedLabels;
@@ -4336,8 +4376,18 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         if (last) vesselTaxNames.add(last);
       });
     }
-    const vesselTaxScopeKey = Array.from(vesselTaxNames).sort().join('|');
-    const taxonomyScoped = libraryWideScope || !!vesselTaxonomyKey;
+    // A live main folder is picked (with or without a vessel): the same
+    // taxonomy is read from the part of each library path below THAT main
+    // folder, so its Group / Category / Sub-category dropdowns list everything
+    // inside it. Without this a main folder picked under "All vessels" was
+    // neither library-wide nor vessel-scoped, so the Sub-category list only had
+    // already-loaded rows to go on and the dropdown stayed disabled.
+    const mainFolderTaxonomyKey = (docCategoryFilter !== 'all' &&
+      mainFolderOptions.some(n => n.trim().toLowerCase() === docCategoryFilter.trim().toLowerCase()))
+      ? docCategoryFilter.trim().toLowerCase() : '';
+    const scopedTaxonomyKey = vesselTaxonomyKey || mainFolderTaxonomyKey;
+    const vesselTaxScopeKey = Array.from(vesselTaxNames).sort().join('|') + '#' + mainFolderTaxonomyKey;
+    const taxonomyScoped = libraryWideScope || !!scopedTaxonomyKey;
     const libWalkPaths: string[][] = (() => {
       const out: string[][] = [];
       if (!libraryWideScope) return out;
@@ -4403,6 +4453,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       };
       src.forEach(f => {
         let p = String(f.path || f.name || '').split('/').map(x => x.trim()).filter(Boolean);
+        if (mainFolderTaxonomyKey) {
+          // Main folder scope: keep only folders inside the selected main
+          // folder and read the taxonomy from the part below it.
+          const mi = p.findIndex(seg => seg.toLowerCase() === mainFolderTaxonomyKey);
+          if (mi < 0) return;
+          p = p.slice(mi + 1);
+        }
         if (vesselTaxonomyKey) {
           // Vessel scope: keep only folders inside this vessel's own folder and
           // read the taxonomy from the part below it.
@@ -4507,8 +4564,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       // still be selectable — picking one searches the whole library.
       const atLibraryWide = vesselFilter === 'all' && docCategoryFilter === 'all';
       if (atLibraryWide) { hasDrawings = true; hasManuals = true; hasToBeClassified = true; }
-      // Vessel selected: every group that exists inside THIS vessel's folders.
-      if (vesselTaxonomyKey) {
+      // Vessel / main folder selected: every group that exists inside it.
+      if (scopedTaxonomyKey) {
         libTaxonomy.groups.forEach(gl => {
           if (gl === 'Drawings') hasDrawings = true;
           else if (gl === 'Manuals') hasManuals = true;
@@ -4546,9 +4603,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         if (isCurrentGroup && docLeafCategoryFilter !== 'all' && !kids.has(docLeafCategoryFilter.trim().toLowerCase())) kids.set(docLeafCategoryFilter.trim().toLowerCase(), docLeafCategoryFilter);
         return Array.from(kids.values()).sort((a, b) => a.localeCompare(b));
       }
-      // Vessel selected: every category folder of this vessel for the group
-      // ('all' = merged across groups), independent of what is loaded.
-      if (vesselTaxonomyKey) {
+      // Vessel / main folder selected: every category folder inside it for the
+      // group ('all' = merged across groups), independent of what is loaded.
+      if (scopedTaxonomyKey) {
         const fromTax = (normalizedGroup === 'all' ? ['drawings', 'manuals'] : [normalizedGroup])
           .reduce((acc: string[], gk) => acc.concat(libTaxonomy.cats.get(gk) || []), [])
           .filter((v, i, arr) => arr.findIndex(x => x.toLowerCase() === v.toLowerCase()) === i);
@@ -4681,9 +4738,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     const subCategoryOptionGroups: Array<{ group: string; category: string; subs: string[] }> = (() => {
       if (!taxonomyScoped || docLeafCategoryFilter !== 'all') return [];
       const out: Array<{ group: string; category: string; subs: string[] }> = [];
-      if (vesselTaxonomyKey) {
-        // Vessel-specific: every Group > Category that has sub-category folders
-        // inside THIS vessel (not limited to categories already loaded).
+      if (scopedTaxonomyKey) {
+        // Vessel / main-folder specific: every Group > Category that has
+        // sub-category folders inside it (not limited to categories already loaded).
         const order = ['drawings', 'manuals', TBC_GROUP_LABEL.toLowerCase()];
         const wantGroup = (docGroupLevelFilter || 'all').trim().toLowerCase();
         libTaxonomy.subs.forEach((m, key) => {
@@ -5977,18 +6034,99 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
     return (
       <div
+        className="dms-docs-root"
         onDragOver={e => e.preventDefault()}
         onDrop={handleDocumentsPageDrop}
         style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
       >
         <style>{`
-          @keyframes dmsNavPulse {
-            0%, 100% { box-shadow: 0 4px 10px rgba(14, 165, 233, 0.18); }
-            50% { box-shadow: 0 6px 18px rgba(168, 85, 247, 0.34); }
+          /* Solid surfaces for the Documents module (folder view, sub-folders,
+             file tables, filters). The global glass tokens are 50–92% alpha, so
+             the sea backdrop showed through behind text. Overriding them on this
+             root only keeps every other module's glass look unchanged. */
+          [data-vessel-theme="light"] .dms-docs-root, .dms-docs-root {
+            --vdms-surface: #ffffff;
+            --vdms-surface-alt: #e8f3fc;
+            --vdms-glass: #ffffff;
+            --vdms-glass-strong: #ffffff;
+            --vdms-field: #ffffff;
+            --vdms-border: rgba(16,84,138,0.34);
+            --vdms-line: rgba(16,84,138,0.30);
+            --vdms-line-strong: rgba(16,84,138,0.50);
           }
-          .dms-nav-arrow:not(:disabled) { animation: dmsNavPulse 2.8s ease-in-out infinite; }
-          .dms-nav-arrow:not(:disabled):hover { transform: translateY(-2px) scale(1.08); filter: saturate(1.2); }
+          [data-vessel-theme="night"] .dms-docs-root {
+            --vdms-surface: #0b2943;
+            --vdms-surface-alt: #103554;
+            --vdms-glass: #0a2640;
+            --vdms-glass-strong: #0a2640;
+            --vdms-field: #06223a;
+            --vdms-border: rgba(140,210,240,0.36);
+            --vdms-line: rgba(140,210,240,0.32);
+            --vdms-line-strong: rgba(140,210,240,0.52);
+          }
+          .dms-docs-root div[style*="var(--vdms-surface)"],
+          .dms-docs-root .dms-docs-nav, .dms-docs-root .dms-filter-bar { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+
+          /* Title row: everything on one centre line; toggle never clips. */
+          .dms-docs-head { align-items: center !important; }
+          .dms-docs-head .dms-site-picker select { height: 36px; box-sizing: border-box; min-width: 200px !important; padding: 0 36px 0 16px !important; border-radius: 999px !important; border: 2px solid var(--vdms-line-strong) !important; background-color: var(--vdms-field) !important; font-weight: 600; font-size: 13px; appearance: none; -webkit-appearance: none; cursor: pointer;
+            background-repeat: no-repeat; background-position: right 13px center; background-size: 12px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 4.2 6 8l4-3.8' fill='none' stroke='%230a7ea8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+          .dms-view-toggle { border-width: 2px !important; padding: 3px !important; white-space: nowrap; }
+          .dms-view-toggle button { height: 30px; padding: 0 14px !important; white-space: nowrap; font-weight: 700 !important; display: inline-flex; align-items: center; }
+
+          /* Filter row: compact — search shares the line with the dropdowns
+             and every control grows evenly to fill it, so the bar stays short
+             and the results get the space. */
+          .dms-filter-row { display: flex !important; flex-wrap: wrap; gap: 8px 10px !important; align-items: center !important; }
+          .dms-filter-row > .dms-filter-search { flex: 2 1 260px !important; min-width: 220px !important; }
+          .dms-filter-row > .dms-filter-loading { flex: 1 0 100%; justify-content: flex-start; }
+          .dms-filter-row > div:empty { display: none !important; }
+          .dms-filter-row > div:not(.dms-filter-search):not(.dms-filter-loading) { display: block !important; flex: 1 1 150px; min-width: 140px; max-width: 260px; }
+          .dms-filter-row > div > button { width: 100%; display: flex !important; align-items: center; justify-content: space-between; text-align: left; }
+          .dms-filter-row select { flex: 1 1 150px; width: auto !important; min-width: 140px !important; max-width: 260px !important; }
+
+          /* Tighter pinned header. */
+          .dms-docs-sticky { gap: 8px !important; padding-bottom: 8px !important; }
+          .dms-docs-nav { min-height: 40px !important; padding: 4px 12px !important; gap: 6px !important; }
+          .dms-docs-nav .dms-nav-arrow { width: 30px !important; height: 30px !important; font-size: 17px !important; }
+          .dms-docs-head h2 { font-size: 18px !important; }
+          .dms-docs-head p { margin-top: 2px !important; }
+
+          /* Back / forward arrows — app accent, no hard-coded purple/pink. */
+          .dms-nav-arrow:not(:disabled) { background: var(--clay-accent-gradient, linear-gradient(135deg, #1fa9cf, #1463b8)) !important; border-color: transparent !important; color: #fff !important; box-shadow: 0 6px 16px var(--clay-accent-glow, rgba(10,126,168,0.4)); }
+          .dms-nav-arrow:not(:disabled):hover { transform: translateY(-1px); background: var(--clay-accent-gradient-hover, linear-gradient(135deg, #0a7ea8, #0f4f96)) !important; }
           .dms-nav-arrow:not(:disabled):active { transform: translateY(0) scale(0.96); }
+
+          /* Breadcrumb "nav bar": a glass pill that matches the app top bar. */
+          .dms-docs-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 48px; padding: 7px 14px; box-sizing: border-box;
+            background: var(--vdms-glass-strong); border: 2px solid var(--vdms-line-strong); border-radius: 16px; box-shadow: var(--clay-shadow-raised); }
+          .dms-docs-nav .dms-crumb-sep { color: var(--vdms-text-faint); font-size: 14px; }
+          .dms-docs-nav .dms-crumb-link { padding: 4px 10px; border-radius: 999px; color: var(--clay-accent, #0a7ea8); font-weight: 600; transition: background .15s ease, color .15s ease; }
+          .dms-docs-nav .dms-crumb-link:hover { background: var(--clay-accent-soft, #cfe8f7); color: var(--clay-accent-dark, #0b5f8a); }
+          .dms-docs-nav .dms-crumb-current { padding: 4px 12px; border-radius: 999px; color: var(--vdms-text); font-weight: 700; background: var(--vdms-focus-soft); }
+
+          /* Filter bar — modern, app-coloured fields. Inline styles on the
+             controls are overridden here so every dropdown looks the same. */
+          .dms-filter-bar { background: var(--vdms-glass-strong) !important; border: 2px solid var(--vdms-line-strong) !important; border-radius: 18px !important; padding: 8px 10px !important; box-shadow: var(--clay-shadow-raised); }
+          .dms-filter-bar select, .dms-filter-bar .dms-filter-search input, .dms-filter-bar > div > div > button {
+            height: 36px; box-sizing: border-box; border-radius: 999px !important; border: 2px solid var(--vdms-line-strong) !important;
+            background-color: var(--vdms-field) !important; color: var(--vdms-text) !important; font-size: 13px !important; font-weight: 600;
+            transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+          }
+          html .vessel-dms-app .dms-filter-bar select { appearance: none; -webkit-appearance: none; padding: 0 30px 0 14px !important; cursor: pointer; text-overflow: ellipsis;
+            background-repeat: no-repeat !important; background-position: right 13px center !important; background-size: 12px !important;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 4.2 6 8l4-3.8' fill='none' stroke='%230a7ea8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important; }
+          html [data-vessel-theme="night"] .vessel-dms-app .dms-filter-bar select, html .vessel-dms-app[data-vessel-theme="night"] .dms-filter-bar select { background-color: var(--vdms-field) !important;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 4.2 6 8l4-3.8' fill='none' stroke='%2334d5ea' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important; }
+          .dms-filter-bar select:hover:not(:disabled), .dms-filter-bar .dms-filter-search input:hover, .dms-filter-bar > div > div > button:hover:not(:disabled) { border-color: var(--clay-accent, #0a7ea8) !important; background-color: var(--vdms-glass-strong) !important; }
+          .dms-filter-bar select:disabled { opacity: .7; cursor: not-allowed !important; background-color: var(--vdms-surface-alt) !important; }
+          .dms-filter-bar .dms-filter-search input { padding: 0 14px 0 38px !important; width: 100%; }
+          .dms-filter-bar select:focus, .dms-filter-bar .dms-filter-search input:focus { outline: none; border-color: var(--clay-accent, #0a7ea8) !important; box-shadow: 0 0 0 3px var(--vdms-focus-soft); }
+          .dms-filter-bar .dms-filter-search input::placeholder { color: var(--vdms-text-faint); }
+          .dms-filter-bar select option, .dms-filter-bar select optgroup { background: var(--vdms-glass-strong); color: var(--vdms-text); }
+          .dms-filter-bar > div > div > button { padding: 0 14px !important; }
+          .dms-filter-bar .dms-filter-export { border-radius: 999px !important; border: 2px solid var(--vdms-line-strong) !important; font-weight: 700 !important; background: var(--clay-accent-soft, #cfe8f7) !important; color: var(--clay-accent-dark, #0b5f8a) !important; }
         `}</style>
         {/* Sticky header: breadcrumb + module header + filter toolbar stay pinned
             while the file table scrolls underneath. */}
@@ -5996,9 +6134,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             pins at the scroller's padding edge, leaving that strip open above the header so
             scrolled rows show through. Pull the header up by the padding and re-add it as
             paddingTop so the resting layout is unchanged and nothing shows above it. */}
-        <div style={{ position: 'sticky', top: 'calc(-1 * var(--vdms-content-pad, 0px))', marginTop: 'calc(-1 * var(--vdms-content-pad, 0px))', zIndex: 30, background: clay.bg, display: 'flex', flexDirection: 'column', gap: 16, paddingTop: 'var(--vdms-content-pad, 0px)', paddingBottom: 8, boxShadow: '0 6px 8px -6px rgba(0,0,0,0.18)' }}>
+        <div className="dms-docs-sticky" style={{ position: 'sticky', top: 'calc(-1 * var(--vdms-content-pad, 0px))', marginTop: 'calc(-1 * var(--vdms-content-pad, 0px))', marginLeft: 'calc(-1 * var(--vdms-content-pad, 0px))', marginRight: 'calc(-1 * var(--vdms-content-pad, 0px))', zIndex: 30, background: clay.bg, display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 'var(--vdms-content-pad, 0px)', paddingLeft: 'var(--vdms-content-pad, 0px)', paddingRight: 'var(--vdms-content-pad, 0px)', paddingBottom: 12, borderBottom: '1px solid var(--vdms-line)', boxShadow: '0 8px 14px -10px rgba(20,80,130,0.35)' }}>
         {/* Breadcrumb Navigation Trail */}
-        <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <div className="dms-docs-nav" style={{ fontSize: 13, color: 'var(--vdms-text-muted)' }}>
           {/* Back / Forward navigation buttons */}
           <button
             onClick={goBack}
@@ -6007,8 +6145,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             title="Go back (Left Arrow)"
             className="dms-nav-arrow"
             style={{
-              width: 34, height: 34, borderRadius: 10, border: canGoBack ? '1px solid #38bdf8' : '1px solid var(--vdms-border)',
-              background: canGoBack ? 'linear-gradient(135deg, #0ea5e9, #2563eb)' : 'var(--vdms-border-soft)',
+              width: 34, height: 34, borderRadius: '50%', border: '1px solid var(--vdms-border)',
+              background: canGoBack ? clay.accentGradient : 'var(--vdms-border-soft)',
               color: canGoBack ? '#fff' : 'var(--vdms-border)',
               cursor: canGoBack ? 'pointer' : 'not-allowed',
               fontSize: 20, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -6023,8 +6161,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             title="Go forward (Right Arrow)"
             className="dms-nav-arrow"
             style={{
-              width: 34, height: 34, borderRadius: 10, border: canGoForward ? '1px solid #c084fc' : '1px solid var(--vdms-border)',
-              background: canGoForward ? 'linear-gradient(135deg, #8b5cf6, #ec4899)' : 'var(--vdms-border-soft)',
+              width: 34, height: 34, borderRadius: '50%', border: '1px solid var(--vdms-border)',
+              background: canGoForward ? clay.accentGradient : 'var(--vdms-border-soft)',
               color: canGoForward ? '#fff' : 'var(--vdms-border)',
               cursor: canGoForward ? 'pointer' : 'not-allowed',
               fontSize: 20, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -6039,8 +6177,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             const isLast = idx === folderPathStack.length - 1;
             return (
               <React.Fragment key={item.id + idx}>
-                <span>›</span>
+                <span className="dms-crumb-sep">›</span>
                 <span
+                  className={isLast ? 'dms-crumb-current' : 'dms-crumb-link'}
                   onClick={() => {
                     if (atKaizenRoot && idx === 0) {
                       const newStack = folderPathStack.slice(0, 1);
@@ -6117,7 +6256,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       triggerFolderRefresh(newStack);
                     }
                   }}
-                  style={{ cursor: isLast ? 'default' : 'pointer', color: isLast ? 'var(--vdms-text)' : '#0284c7', fontWeight: isLast ? 600 : 400 }}
+                  style={{ cursor: isLast ? 'default' : 'pointer' }}
                 >
                   {item.name}
                 </span>
@@ -6129,7 +6268,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         {/* Module Header — the Folder/List toggle is pinned as the last,
             non-shrinking child so it sits at the same top-right spot in both
             views; the variable-width action buttons wrap to its left. */}
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <div className="dms-docs-head" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ flex: '0 1 auto', minWidth: 160 }}>
             <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--vdms-text)', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 20 }}>📁</span>
@@ -6161,7 +6300,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           </div>
 
           {(host.state.documentSites || []).length > 1 && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--vdms-text)', fontWeight: 600 }}>
+            <label className="dms-site-picker" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--vdms-text)', fontWeight: 600, flexShrink: 0 }}>
               SharePoint site
               <select
                 aria-label="Select SharePoint site"
@@ -6212,10 +6351,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     host._openAddFolderDialog(vesselCtx);
                   }}
                   style={{
-                    background: canCreateFolder ? '#0284c7' : 'var(--vdms-border-soft)',
+                    background: canCreateFolder ? clay.accentGradient : 'var(--vdms-border-soft)',
                     color: canCreateFolder ? '#fff' : 'var(--vdms-text-faint)',
-                    border: 'none', borderRadius: 8,
-                    padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: canCreateFolder ? 'pointer' : 'not-allowed',
+                    border: 'none', borderRadius: 999,
+                    boxShadow: canCreateFolder ? clay.shadowButton : 'none',
+                    padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: canCreateFolder ? 'pointer' : 'not-allowed',
                     display: 'inline-flex', alignItems: 'center', gap: 6,
                   }}
                   title={canCreateFolder ? 'Create a new folder here' : 'Open a folder first to create a folder inside it'}
@@ -6257,10 +6397,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     void host._archiveSelectedDocuments(selectedFiles);
                   }}
                   style={{
-                    background: isActive ? '#d97706' : 'var(--vdms-border-soft)',
+                    background: isActive ? clay.accentGradient : 'var(--vdms-border-soft)',
                     color: isActive ? '#fff' : 'var(--vdms-text-faint)',
-                    border: 'none', borderRadius: 8,
-                    padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: isActive ? 'pointer' : 'not-allowed',
+                    border: 'none', borderRadius: 999,
+                    boxShadow: isActive ? clay.shadowButton : 'none',
+                    padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: isActive ? 'pointer' : 'not-allowed',
                     display: 'inline-flex', alignItems: 'center', gap: 6,
                   }}
                   title={usesArchivePicker ? 'Choose folders or files to archive' : undefined}
@@ -6460,9 +6601,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
                   {/* 2. Upload Entire Folder */}
                   <label style={{
-                    background: '#059669', color: '#fff', border: 'none', borderRadius: 8,
+                    background: '#0284c7', color: '#fff', border: 'none', borderRadius: 8,
                     padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                    display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 4px rgba(5,150,105,0.2)',
+                    display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 4px rgba(2,132,199,0.2)',
                     transition: 'opacity 0.15s, transform 0.15s',
                   }}>
                     <input
@@ -6517,11 +6658,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           </div>
 
           {/* Folder view / List view Pill Toggle — fixed position */}
-          <div style={{ display: 'inline-flex', flexShrink: 0, background: 'var(--vdms-surface)', border: '1px solid var(--vdms-border)', borderRadius: 8, padding: 3, gap: 2 }}>
+          <div className="dms-view-toggle" style={{ display: 'inline-flex', flexShrink: 0, background: 'var(--vdms-glass-strong)', border: '1px solid var(--vdms-line-strong)', borderRadius: 999, padding: 3, gap: 2 }}>
             <button
               onClick={openFolderViewFromListContext}
               style={{
-                padding: '5px 12px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                padding: '6px 14px', borderRadius: 999, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
                 background: docViewMode === 'folder' ? 'var(--vdms-toggle-active-bg)' : 'transparent',
                 color: docViewMode === 'folder' ? 'var(--vdms-toggle-active-text)' : 'var(--vdms-text-muted)',
               }}
@@ -6531,7 +6672,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             <button
               onClick={openListViewFromFolderContext}
               style={{
-                padding: '5px 12px', borderRadius: 6, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                padding: '6px 14px', borderRadius: 999, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
                 background: docViewMode === 'list' ? 'var(--vdms-toggle-active-bg)' : 'transparent',
                 color: docViewMode === 'list' ? 'var(--vdms-toggle-active-text)' : 'var(--vdms-text-muted)',
               }}
@@ -6542,7 +6683,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         </div>
 
         {/* ── Filter Toolbar ── */}
-        <div style={{ background: 'var(--vdms-surface)', borderRadius: 10, padding: '10px 12px', border: '1px solid var(--vdms-border)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className="dms-filter-bar" style={{ background: 'var(--vdms-surface)', borderRadius: 10, padding: '10px 12px', border: '1px solid var(--vdms-border)', display: 'flex', flexDirection: 'column', gap: 8 }}>
           {docViewMode === 'list' && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingBottom: 6, borderBottom: '1px solid var(--vdms-border-soft)' }}>
               <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>
@@ -6555,6 +6696,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               </span>
               <button
                 type="button"
+                className="dms-filter-export"
                 onClick={() => host._exportVesselsExcel()}
                 disabled={host.state.vesselsExcelExportBusy}
                 title="Download a full vessel + folder summary (.xlsx) — independent of the filters above"
@@ -6571,9 +6713,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             </div>
           )}
 
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-            <div style={{ position: 'relative', flex: '1 1 180px', minWidth: 160 }}>
-              <span style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--vdms-text-faint)', fontSize: 12, zIndex: 1 }}>🔍</span>
+          <div className="dms-filter-row" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+            <div className="dms-filter-search" style={{ position: 'relative', flex: '1 1 260px', minWidth: 200 }}>
+              <span style={{ position: 'absolute', left: 15, top: '50%', transform: 'translateY(-50%)', color: 'var(--clay-accent, #0a7ea8)', fontSize: 13, zIndex: 1, pointerEvents: 'none' }}>🔍</span>
               {/* Debounced: typing feeds this page's expensive per-render
                   recompute (groupCatActive's recursive folder walk / fleet-wide
                   row scan below), which used to run once per keystroke and made
@@ -6583,7 +6725,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   stops. See DebouncedSearchInput.tsx's doc comment. */}
               <DebouncedSearchInput
                 value={textFilter}
-                placeholder="Search vessel, file name (partial ok), folder, group, category, path..."
+                placeholder="Search vessel, file, folder, category…"
                 title="Matches any format/file type. You can combine terms — e.g. a vessel name plus a partial file name — separated by spaces; each word can match a different field."
                 style={{ width: '100%', padding: '6px 26px 6px 28px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, outline: 'none', boxSizing: 'border-box' }}
                 onChange={nextValue => {
@@ -6839,7 +6981,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             <select
               aria-label="Document type filter"
               value={groupOptions.length === 0 ? 'all' : docGroupLevelFilter}
-              disabled={groupOptions.length === 0 && !(vesselTaxonomyKey && libTaxonomyState !== 'ready')}
+              disabled={groupOptions.length === 0 && !(scopedTaxonomyKey && libTaxonomyState !== 'ready')}
               title={groupOptions.length === 0 ? 'No classified groups found in these folders' : undefined}
               onChange={e => {
                 const val = e.target.value;
@@ -6885,10 +7027,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               }}
               style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 160, cursor: groupOptions.length === 0 ? 'not-allowed' : 'pointer', opacity: groupOptions.length === 0 ? 0.6 : 1 }}
             >
-              <option value="all">{groupOptions.length === 0 ? (vesselTaxonomyKey && libTaxonomyState !== 'ready' ? 'Loading groups…' : 'No groups found') : 'All groups'}</option>
+              <option value="all">{groupOptions.length === 0 ? (scopedTaxonomyKey && libTaxonomyState !== 'ready' ? 'Loading groups…' : 'No groups found') : 'All groups'}</option>
               {groupOptions.map(g => <option key={g} value={g}>{g}</option>)}
             </select>
-            {(categoryOptions.length > 0 || categoryOptionGroups.length > 0 || libraryWideScope || (!!vesselTaxonomyKey && libTaxonomyState !== 'ready')) ? (
+            {(categoryOptions.length > 0 || categoryOptionGroups.length > 0 || libraryWideScope || (!!scopedTaxonomyKey && libTaxonomyState !== 'ready')) ? (
               <select
                 aria-label="Category filter"
                 value={(() => {
@@ -7075,7 +7217,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 flags mean anything outside the vessels scope, so the whole
                 banner is gated on it. */}
             {(docScopeType === 'vessels' && (documentFilesLoading || vesselLoadingName || documentVesselsLoadingMore)) && (
-              <div style={{
+              <div className="dms-filter-loading" style={{
                 display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px',
                 borderRadius: 8, background: '#eff6ff', border: '1px solid #bfdbfe',
                 fontSize: 11, color: '#1d4ed8', fontWeight: 600,
@@ -7701,6 +7843,31 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     if (id) groupCatMatchRelPath.set(id, relFolderNames);
                   };
 
+                  // Memo: this whole stage (every indexed/cached file × path/vessel/text
+                  // checks) used to re-run on EVERY render — each keystroke, poll and
+                  // forced update — which froze the tab ("page isn't responding")
+                  // while typing or backspacing in the search box. The result only
+                  // depends on the inputs in the key below, so reuse it until one changes.
+                  let gcCacheSig = '';
+                  if (tree.status !== 'done') {
+                    let tot = 0; let loadingN = 0;
+                    host._siteFolderItemsCache.forEach((en: any) => { tot += (en.items ? en.items.length : 0); if (en.loading) loadingN++; });
+                    gcCacheSig = `${host._siteFolderItemsCache.size}:${tot}:${loadingN}`;
+                  }
+                  const gcMemoKey = [
+                    treeKey, tree.status, tree.status === 'done' ? `${tree.at}:${tree.items.length}` : gcCacheSig,
+                    textFilter, docGroupLevelFilter, docLeafCategoryFilter, docSubCategoryFilter,
+                    vesselFilter, insideSelectedVessel ? 1 : 0, baseNames.join('>'), vesselCandidateSig.length, (host as any)._parseMetaPersist?.sig?.length,
+                  ].join('|');
+                  const gcMemo = (host as any)._groupCatStageMemo as { key: string; files: any[]; rel: Map<string, string[]>; seen: Set<string>; truncated: boolean; searching: boolean; failed: boolean } | undefined;
+                  if (gcMemo && gcMemo.key === gcMemoKey) {
+                    gcMemo.files.forEach(f => groupCatMatchedFiles.push(f));
+                    gcMemo.rel.forEach((v, k) => groupCatMatchRelPath.set(k, v));
+                    gcMemo.seen.forEach(id => seenIds.add(id));
+                    groupCatTruncated = gcMemo.truncated;
+                    groupCatSearching = gcMemo.searching;
+                    groupCatFailed = gcMemo.failed;
+                  } else {
                   if (tree.status === 'done') {
                     // Recursive walk: `path` is relative to the current folder
                     // and ends with the item's own name.
@@ -7725,7 +7892,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     // cache (folders the user has opened or that were prefetched).
                     const queue: { id: string; names: string[] }[] = [{ id: currentFolderId, names: [] }];
                     let visited = 0;
+                    const bfsDeadline = Date.now() + 120;
                     while (queue.length > 0 && visited < 2000) {
+                      // Time budget: never hold the UI thread for more than ~120 ms;
+                      // the next render (polling / forced update) continues with a
+                      // larger cache.
+                      if (Date.now() > bfsDeadline) { groupCatTruncated = true; break; }
                       const node = queue.shift()!;
                       visited++;
                       const entry = host._siteFolderItemsCache.get(`${effectiveSiteId}::${rawDriveId}::${node.id}`);
@@ -7746,6 +7918,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         considerFile(it, node.names);
                       });
                     }
+                  }
+
+                  (host as any)._groupCatStageMemo = {
+                    key: gcMemoKey, files: groupCatMatchedFiles.slice(), rel: new Map(groupCatMatchRelPath), seen: new Set(seenIds),
+                    truncated: groupCatTruncated, searching: groupCatSearching, failed: groupCatFailed,
+                  };
                   }
 
                   // Merge in results from the backend's full-text document

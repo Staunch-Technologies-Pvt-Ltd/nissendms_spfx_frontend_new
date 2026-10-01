@@ -768,9 +768,9 @@ export function renderFolderView(
 
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', marginTop: 6 }}>
           <label style={{
-            background: clay.accentGradient, color: '#fff', border: 'none', borderRadius: clay.radiusButton,
-            padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: clay.shadowButton,
+            background: '#0284c7', color: '#fff', border: 'none', borderRadius: 8,
+            padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 4px rgba(2,132,199,0.2)',
           }}>
             <input
               type="file"
@@ -789,9 +789,9 @@ export function renderFolderView(
           </label>
 
           <label style={{
-            background: clay.surfaceRaised, color: clay.accentDark, border: `1px solid ${clay.accentSoft}`, borderRadius: clay.radiusButton,
-            padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-            display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: clay.shadowRaised,
+            background: '#0284c7', color: '#fff', border: 'none', borderRadius: 8,
+            padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 4px rgba(2,132,199,0.2)',
           }}>
             <input
               type="file"

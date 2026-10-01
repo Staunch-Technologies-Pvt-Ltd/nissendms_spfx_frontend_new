@@ -70,8 +70,8 @@ export function MigrationAssistantModule({ apiBaseUrl, sessionId, actingEmail, i
             onClick={() => setTab(tb.id)}
             style={{
               display: 'flex', alignItems: 'center', gap: 6, border: 'none', background: 'transparent',
-              borderBottom: tab === tb.id ? '2px solid #DD9159' : '2px solid transparent',
-              color: tab === tb.id ? '#DD9159' : t.textMuted, fontWeight: tab === tb.id ? 700 : 500,
+              borderBottom: tab === tb.id ? '2px solid var(--clay-accent)' : '2px solid transparent',
+              color: tab === tb.id ? 'var(--clay-accent)' : t.textMuted, fontWeight: tab === tb.id ? 700 : 500,
               fontSize: 13, padding: '10px 12px', cursor: 'pointer',
             }}
           >

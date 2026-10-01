@@ -1,19 +1,8 @@
-// Phase 6 — "Ocean Clay" visual language (chosen 2026-09-21 from the three
-// claymorphism options presented on the design canvas: Soft Pastel Clay /
-// Warm Sand Clay / Ocean Clay). Teal/navy palette themed to the vessel
-// domain, applied as a soft "puffy" claymorphism style: dual-tone shadows
-// (a dark cast shadow + a light highlight) and generous corner radii,
-// rather than flat cards/buttons.
-//
-// This is a first pass covering the shared, highest-visual-impact pieces
-// (Folder View's tile cards, the new Add Folder dialog, primary vessel
-// actions). It is NOT yet applied line-by-line across every one of
-// VesselsPage.tsx / DocumentsPage.tsx / VesselFormModal.tsx's inline
-// styles — those files are 1,000-4,500+ lines each of hand-written inline
-// styles with no shared Button/Card/Badge component to retheme centrally,
-// so a full pass is a larger follow-up. Import these tokens wherever the
-// next pass extends the look, so the palette stays consistent instead of
-// re-deriving colors per file.
+// Phase 7 — "Maritime" visual language (sea blue + cloudy sky, glass
+// surfaces). Replaces the Phase 6 "Ocean Clay" defaults. DESIGN ONLY: every
+// export, key and function signature below is unchanged, so nothing that
+// imports `clay` needs to change. Ocean Clay is kept as a selectable preset
+// in Settings → Color Management ("Ocean Clay (Legacy)").
 //
 // React 17 / Fluent UI 8 / SPFx constraint: plain TS constants + inline
 // style objects only — no CSS-in-JS library, no Tailwind, no build changes.
@@ -30,57 +19,55 @@ import type { IPartialTheme } from '@fluentui/react';
 // Raw light-mode values. Used for Fluent UI theme palettes (which need real
 // colours) and as the fallback inside every var() below.
 export const clayLight = {
-  bg: '#f8f1ea',
-  surface: '#fff9f5',
-  surfaceRaised: '#f7e6d8',
-  surfaceHover: '#f2e2d5',
+  bg: '#dcefff',
+  surface: '#f4faff',
+  surfaceRaised: '#e6f3fd',
+  surfaceHover: '#d6ebfa',
 
-  text: '#342417',
-  textMuted: '#8a6552',
+  text: '#08243a',
+  textMuted: '#4a6a82',
 
-  accent: '#DD9159',
-  accentHover: '#C77A3E',
-  accentDark: '#B96E35',
-  accentDeep: '#995B2D',
-  accentSoft: '#f7d8bf',
-  accentSoftHover: '#f0cab1',
+  accent: '#0a7ea8',
+  accentHover: '#1463b8',
+  accentDark: '#0b5f8a',
+  accentDeep: '#0a4a73',
+  accentSoft: '#cfe8f7',
+  accentSoftHover: '#bcdff3',
 
-  accentGradient: 'linear-gradient(150deg, #E7A66D, #DD9159)',
-  accentGradientHover: 'linear-gradient(150deg, #D38D56, #C77A3E)',
-  iconBgGradient: 'linear-gradient(150deg, #f9dcc0, #efb57a)',
+  accentGradient: 'linear-gradient(135deg, #1fa9cf, #1463b8)',
+  accentGradientHover: 'linear-gradient(135deg, #0a7ea8, #0f4f96)',
+  iconBgGradient: 'linear-gradient(150deg, #e3f4fd, #bfe4f7)',
 
-  // Card / tile: soft dual-tone "puffy" shadow — dark cast + light highlight.
-  shadowRaised: '8px 8px 18px rgba(221,145,89,0.22), -8px -8px 16px rgba(255,255,255,0.88)',
-  shadowRaisedHover: '10px 10px 22px rgba(221,145,89,0.28), -10px -10px 20px rgba(255,255,255,0.92)',
+  // Card / tile: soft glass lift.
+  shadowRaised: '0 12px 32px rgba(20,80,130,0.14), inset 0 1px 0 rgba(255,255,255,0.7)',
+  shadowRaisedHover: '0 18px 42px rgba(20,80,130,0.2), inset 0 1px 0 rgba(255,255,255,0.8)',
 
-  // Primary button: gradient fill + outer cast shadow + inset highlight/shadow for a puffy 3D look.
-  shadowButton: '0 10px 22px rgba(221,145,89,0.35), inset 0 2px 3px rgba(255,255,255,0.45), inset 0 -3px 6px rgba(150,89,42,0.28)',
+  // Primary button: gradient fill + accent glow + top highlight.
+  shadowButton: '0 10px 26px rgba(10,126,168,0.32), inset 0 1px 0 rgba(255,255,255,0.35)',
 
-  // Icon badge: inset highlight (top) + inset shadow (bottom).
-  shadowIcon: 'inset 0 2px 3px rgba(255,255,255,0.7), inset 0 -3px 5px rgba(185,110,53,0.22)',
+  // Icon badge.
+  shadowIcon: 'inset 0 1px 0 rgba(255,255,255,0.75), inset 0 0 0 1px rgba(10,126,168,0.12)',
 
   // Status pills.
-  pillActiveBg: '#cdeedb',
-  pillActiveText: '#245a3d',
-  pillActiveShadow: 'inset 0 1px 2px rgba(255,255,255,0.6), inset 0 -2px 3px rgba(36,90,61,0.18)',
-  pillWarnBg: '#e3d9c2',
-  pillWarnText: '#7a6420',
-  pillWarnShadow: 'inset 0 1px 2px rgba(255,255,255,0.6), inset 0 -2px 3px rgba(122,100,32,0.18)',
-  pillDangerBg: '#ecccc8',
-  pillDangerText: '#8a3226',
-  pillDangerShadow: 'inset 0 1px 2px rgba(255,255,255,0.6), inset 0 -2px 3px rgba(138,50,38,0.18)',
+  pillActiveBg: '#d3f4e6',
+  pillActiveText: '#0b6b49',
+  pillActiveShadow: 'none',
+  pillWarnBg: '#fdf0d2',
+  pillWarnText: '#8a5a00',
+  pillWarnShadow: 'none',
+  pillDangerBg: '#fde0e4',
+  pillDangerText: '#b3243c',
+  pillDangerShadow: 'none',
 
   radiusCard: 24,
   radiusTile: 22,
-  radiusButton: 20,
+  radiusButton: 16,
   radiusIcon: 14,
 } as const;
 
 // Theme-aware tokens. Each value is a CSS custom property that flips between
-// light and night via the [data-vessel-theme] blocks in AppLayout.tsx, with the
-// light value as fallback (so content portaled outside the app root, e.g.
-// Fluent Layers, still renders). Accent/background/text tokens are also the
-// ones Settings → Color Management rewrites at runtime (applyColorTheme, below).
+// light and night via the [data-vessel-theme] blocks in AppLayout.tsx /
+// futuristicTheme.ts, with the light value as fallback.
 const v = (name: string, fallback: string): string => `var(--clay-${name}, ${fallback})`;
 
 export const clay = {
@@ -96,11 +83,7 @@ export const clay = {
   accentDeep: v('accent-deep', clayLight.accentDeep),
   accentSoft: v('accent-soft', clayLight.accentSoft),
   accentSoftHover: v('accent-soft-hover', clayLight.accentSoftHover),
-  // Pre-mixed accent-tinted shadow color for glows that used to be built by
-  // string-concatenating an alpha suffix onto a raw hex accent (e.g.
-  // `${clay.accent}88`) — that trick breaks now that clay.accent is a
-  // var() reference, so call sites use this token instead.
-  accentGlow: v('accent-glow', 'rgba(221,145,89,0.53)'),
+  accentGlow: v('accent-glow', 'rgba(10,126,168,0.4)'),
   accentGradient: v('accent-gradient', clayLight.accentGradient),
   accentGradientHover: v('accent-gradient-hover', clayLight.accentGradientHover),
   iconBgGradient: v('icon-bg', clayLight.iconBgGradient),
@@ -127,10 +110,6 @@ export const clay = {
 // Settings → Color Management
 // ─────────────────────────────────────────────────────────────────────────
 
-/** The 4 colors an admin can set, per mode. Everything else the theme needs
- * (surfaces, soft accent tints, shadows, Fluent's palette) is derived from
- * these via the helpers below, so the settings UI stays to 4 pickers per
- * mode instead of asking someone to hand-tune 20 hex values. */
 export interface ClayColorSet {
   bg: string;
   text: string;
@@ -146,15 +125,18 @@ export interface ClayColorTheme {
 // Must stay in sync with DEFAULT_COLORS in backend/app/color_settings_api.py.
 export const DEFAULT_CLAY_COLORS: ClayColorTheme = {
   light: { bg: clayLight.bg, text: clayLight.text, accent: clayLight.accent, hover: clayLight.accentHover },
-  night: { bg: '#211812', text: '#f8eee6', accent: clayLight.accent, hover: clayLight.accentHover },
+  night: { bg: '#031423', text: '#eaf6fd', accent: '#34d5ea', hover: '#2a8fe0' },
 };
 
-/** Ready-made palettes offered next to the custom pickers in Color
- * Management, in addition to the shipped Ocean Clay default. Purely a
- * starting point — every value stays editable afterwards. Must stay in
- * sync with PRESETS in backend/app/color_settings_api.py. */
+/** Must stay in sync with PRESETS in backend/app/color_settings_api.py. */
 export const CLAY_COLOR_PRESETS: { id: string; label: string; colors: ClayColorTheme }[] = [
-  { id: 'ocean-clay', label: 'Ocean Clay (Default)', colors: DEFAULT_CLAY_COLORS },
+  { id: 'maritime', label: 'Maritime (Default)', colors: DEFAULT_CLAY_COLORS },
+  {
+    id: 'ocean-clay', label: 'Ocean Clay (Legacy)', colors: {
+      light: { bg: '#f8f1ea', text: '#342417', accent: '#DD9159', hover: '#C77A3E' },
+      night: { bg: '#211812', text: '#f8eee6', accent: '#DD9159', hover: '#C77A3E' },
+    },
+  },
   {
     id: 'slate-blue', label: 'Slate Blue', colors: {
       light: { bg: '#eef2f8', text: '#1e293b', accent: '#3b6fd6', hover: '#2f59b0' },
@@ -211,29 +193,21 @@ export function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-/** Derives every other token the claymorphism look needs from the 4 colors
- * an admin actually sets. Approximate by design — matched to the original
- * Ocean Clay ratios closely enough to look coherent for any accent choice,
- * not pixel-identical to the hand-picked defaults. */
+/** Derives every other token from the 4 colors an admin actually sets. */
 function deriveTokens(c: ClayColorSet, isNight: boolean) {
-  const accentSoft = isNight ? mixHex(c.accent, '#000000', 0.62) : mixHex(c.accent, '#ffffff', 0.78);
-  const accentSoftHover = isNight ? mixHex(c.accent, '#000000', 0.54) : mixHex(c.accent, '#ffffff', 0.70);
+  const accentSoft = isNight ? mixHex(c.accent, '#000000', 0.62) : mixHex(c.accent, '#ffffff', 0.8);
+  const accentSoftHover = isNight ? mixHex(c.accent, '#000000', 0.54) : mixHex(c.accent, '#ffffff', 0.72);
   const accentDark = darkenHex(c.hover, 0.08);
   const accentDeep = darkenHex(c.hover, 0.22);
-  const surface = lightenHex(c.bg, 0.06);
-  const surfaceRaised = isNight ? lightenHex(c.bg, 0.12) : mixHex(c.bg, c.accent, 0.06);
-  const surfaceHover = isNight ? lightenHex(c.bg, 0.18) : mixHex(c.bg, c.accent, 0.10);
-  const textMuted = mixHex(c.text, c.bg, 0.45);
+  const surface = isNight ? lightenHex(c.bg, 0.06) : lightenHex(c.bg, 0.6);
+  const surfaceRaised = isNight ? lightenHex(c.bg, 0.12) : mixHex(lightenHex(c.bg, 0.4), c.accent, 0.04);
+  const surfaceHover = isNight ? lightenHex(c.bg, 0.18) : mixHex(c.bg, c.accent, 0.1);
+  const textMuted = mixHex(c.text, c.bg, 0.4);
   return { accentSoft, accentSoftHover, accentDark, accentDeep, surface, surfaceRaised, surfaceHover, textMuted };
 }
 
 /** Rewrites the `--clay-*` custom properties for both [data-vessel-theme]
- * blocks so the whole app (everything importing `clay` from this file)
- * retheme instantly — used both for the saved app-wide colors (loaded once
- * on mount) and for Color Management's live preview while editing, before
- * Save is clicked. `!important` so this always wins over the static
- * defaults in AppLayout.tsx's injectFullScreenStyles, regardless of which
- * <style> tag landed in <head> first. */
+ * blocks so the whole app retheme instantly (saved colors + live preview). */
 export function applyColorTheme(theme: ClayColorTheme): void {
   if (typeof document === 'undefined') return;
   const id = 'vessel-dms-color-theme';
@@ -259,11 +233,11 @@ export function applyColorTheme(theme: ClayColorTheme): void {
       --clay-accent-deep: ${d.accentDeep} !important;
       --clay-accent-soft: ${d.accentSoft} !important;
       --clay-accent-soft-hover: ${d.accentSoftHover} !important;
-      --clay-accent-gradient: linear-gradient(150deg, ${lightenHex(c.accent, 0.12)}, ${c.accent}) !important;
-      --clay-accent-gradient-hover: linear-gradient(150deg, ${c.accent}, ${c.hover}) !important;
+      --clay-accent-gradient: linear-gradient(135deg, ${lightenHex(c.accent, 0.12)}, ${c.hover}) !important;
+      --clay-accent-gradient-hover: linear-gradient(135deg, ${c.accent}, ${darkenHex(c.hover, 0.12)}) !important;
       --clay-icon-bg: linear-gradient(150deg, ${d.accentSoft}, ${d.accentSoftHover}) !important;
-      --clay-accent-glow: ${hexToRgba(c.accent, 0.53)} !important;
-      --clay-shadow-button: 0 10px 22px ${hexToRgba(c.accent, 0.35)}, inset 0 2px 3px rgba(255,255,255,0.45), inset 0 -3px 6px ${hexToRgba(d.accentDeep, 0.28)} !important;
+      --clay-accent-glow: ${hexToRgba(c.accent, 0.4)} !important;
+      --clay-shadow-button: 0 10px 26px ${hexToRgba(c.accent, 0.32)}, inset 0 1px 0 rgba(255,255,255,0.35) !important;
     `;
   };
 
@@ -273,10 +247,7 @@ export function applyColorTheme(theme: ClayColorTheme): void {
   `;
 }
 
-/** Builds the Fluent UI theme (dropdowns, spinners, the handful of stock
- * Fluent controls still in use) from the same 4 admin-set colors, instead
- * of the old hand-picked static palette. Approximate derivation — see
- * deriveTokens() note above. */
+/** Builds the Fluent UI theme from the same 4 admin-set colors. */
 export function buildDeepHarborTheme(colors: ClayColorSet, isNight: boolean): IPartialTheme {
   const { accent, hover, bg, text } = colors;
   const neutralBase = isNight ? lightenHex(bg, 0.10) : mixHex(bg, accent, 0.08);
@@ -309,6 +280,7 @@ export function buildDeepHarborTheme(colors: ClayColorSet, isNight: boolean): IP
       variantBorder: isNight ? mixHex(accent, '#000000', 0.55) : lightenHex(accent, 0.78),
       variantBorderHovered: accent,
     },
+    defaultFontStyle: { fontFamily: "'Manrope', 'Segoe UI Variable', 'Segoe UI', sans-serif" },
     fonts: {
       medium: { fontSize: '15px' },
       mediumPlus: { fontSize: '16px' },
@@ -318,9 +290,5 @@ export function buildDeepHarborTheme(colors: ClayColorSet, isNight: boolean): IP
   };
 }
 
-// Static exports kept for any call site that hasn't moved to
-// buildDeepHarborTheme(host.state.colorTheme.<mode>, isNight) yet — equal to
-// buildDeepHarborTheme(DEFAULT_CLAY_COLORS.<mode>, ...), i.e. the original
-// Ocean Clay look.
 export const deepHarborTheme: IPartialTheme = buildDeepHarborTheme(DEFAULT_CLAY_COLORS.light, false);
 export const deepHarborNightTheme: IPartialTheme = buildDeepHarborTheme(DEFAULT_CLAY_COLORS.night, true);

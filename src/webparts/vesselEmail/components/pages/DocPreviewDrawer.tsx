@@ -30,7 +30,7 @@ export function renderDocPreviewDrawer(host: VesselEmail): React.ReactElement | 
           top: 0,
           right: 0,
           bottom: 0,
-          width: 380,
+          width: 'min(380px, 100vw)',
           maxWidth: '90vw',
           background: '#ffffff',
           boxShadow: '-6px 0 24px rgba(0, 0, 0, 0.18)',
@@ -179,5 +179,5 @@ export function renderDocPreviewDrawer(host: VesselEmail): React.ReactElement | 
           </button>
         </div>
       </div>
-    );
+    );
 }

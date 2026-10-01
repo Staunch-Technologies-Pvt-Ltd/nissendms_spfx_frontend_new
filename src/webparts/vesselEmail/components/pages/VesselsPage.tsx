@@ -21,6 +21,7 @@ import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../ve
 import { KAIZEN_KNOWLEDGE_BANK_TREE, MAIN_FOLDERS } from '../vesselFolderTemplate';
 import { isMobileWidth } from '../responsive';
 import { clay } from '../clayTheme';
+import { vdmsFont } from '../futuristicTheme';
 
 
 function getSpoVesselFolderUrl(
@@ -2422,20 +2423,22 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                   className="vessel-card"
                   onClick={() => host.setState({ selectedVessel: isSelected ? null : vessel })}
                   style={{
-                    background: clay.surface,
-                    borderRadius: clay.radiusCard,
-                    border: 'none',
+                    background: 'var(--vdms-glass, rgba(255,255,255,0.6))',
+                    backdropFilter: 'blur(18px) saturate(1.3)',
+                    WebkitBackdropFilter: 'blur(18px) saturate(1.3)',
+                    borderRadius: 24,
+                    border: '1px solid var(--vdms-line, rgba(16,84,138,0.13))',
                     boxShadow: isSelected
-                      ? `0 0 0 3px ${clay.accent}, ${clay.shadowRaisedHover}`
-                      : clay.shadowRaised,
+                      ? `0 0 0 3px ${clay.accent}, var(--vdms-shadow, ${clay.shadowRaisedHover})`
+                      : 'var(--vdms-shadow, 0 24px 60px rgba(20,80,130,0.18))',
                     overflow: 'hidden',
                     cursor: 'pointer',
-                    transition: 'all 0.18s ease',
+                    transition: 'transform 0.3s cubic-bezier(.2,.8,.2,1), box-shadow 0.3s ease',
                     display: 'flex',
                     flexDirection: 'column',
                   }}
-                  onMouseEnter={e => { if (!isSelected) { e.currentTarget.style.boxShadow = clay.shadowRaisedHover; e.currentTarget.style.transform = 'translateY(-1px)'; } }}
-                  onMouseLeave={e => { if (!isSelected) { e.currentTarget.style.boxShadow = clay.shadowRaised; e.currentTarget.style.transform = 'translateY(0)'; } }}
+                  onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-4px)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
                 >
                   {/* Card image header — professional tone-on-tone banner
                       generated in vesselImagePool.ts (deep gradient + faint
@@ -2475,15 +2478,15 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                     {/* Vessel name + type, set on a legibility scrim */}
                     <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '20px 16px 12px' }}>
                       <p style={{
-                        margin: 0, fontSize: 17, fontWeight: 700, color: '#fff', letterSpacing: '0.1px',
+                        margin: 0, fontFamily: vdmsFont.display, fontSize: 17, fontWeight: 800, color: '#fff', letterSpacing: '-0.02em',
                         textShadow: '0 1px 6px rgba(0,0,0,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                       }}>
                         {vessel.name}
                       </p>
                       {(vessel.vessel_type || vessel.imo) && (
                         <p style={{
-                          margin: '3px 0 0', fontSize: 11.5, fontWeight: 600, color: 'rgba(255,255,255,0.78)',
-                          letterSpacing: '0.4px', textTransform: 'uppercase',
+                          margin: '3px 0 0', fontFamily: vdmsFont.mono, fontSize: 11.5, fontWeight: 600, color: 'rgba(255,255,255,0.85)',
+                          letterSpacing: '0.1em', textTransform: 'uppercase',
                           textShadow: '0 1px 4px rgba(0,0,0,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                         }}>
                           {[vessel.vessel_type, vessel.imo ? `IMO ${vessel.imo}` : null].filter(Boolean).join(' · ')}
@@ -2500,8 +2503,8 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                       const imoVal = isSharePointOnly ? (draft?.imo ?? vessel.imo ?? '') : (vessel.imo || '—');
                       const hullVal = isSharePointOnly ? (draft?.hull_number ?? vessel.hull_number ?? '') : (vessel.hull_number || '—');
                       const editableInputStyle: React.CSSProperties = {
-                        width: '100%', marginTop: 2, padding: '4px 6px', fontSize: 13, fontWeight: 600, color: clay.text,
-                        border: `1px solid ${clay.accentSoft}`, borderRadius: 6, boxSizing: 'border-box', background: '#fff',
+                        width: '100%', marginTop: 2, padding: '6px 10px', fontSize: 13, fontWeight: 600, color: clay.text,
+                        border: '1px solid var(--vdms-line-strong, rgba(16,84,138,0.26))', borderRadius: 10, boxSizing: 'border-box', background: 'var(--vdms-field, rgba(255,255,255,0.72))',
                       };
 
                       // Regular ("dms"-source) vessel cards: any of these four
@@ -2583,7 +2586,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                       return (
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px' }}>
                           <div>
-                            <span style={{ fontSize: 10, color: clay.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>IMO</span>
+                            <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>IMO</span>
                             {isSharePointOnly ? (
                               <input
                                 type="text"
@@ -2600,7 +2603,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                             )}
                           </div>
                           <div>
-                            <span style={{ fontSize: 10, color: clay.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Type</span>
+                            <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>Type</span>
                             {!isSharePointOnly ? (
                               renderEditableField('vessel_type', 'Select type')
                             ) : (
@@ -2608,7 +2611,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                             )}
                           </div>
                           <div>
-                            <span style={{ fontSize: 10, color: clay.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Shipyard</span>
+                            <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>Shipyard</span>
                             {!isSharePointOnly ? (
                               renderEditableField('shipyard', 'Shipyard')
                             ) : (
@@ -2616,7 +2619,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                             )}
                           </div>
                           <div>
-                            <span style={{ fontSize: 10, color: clay.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Hull No.</span>
+                            <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>Hull No.</span>
                             {isSharePointOnly ? (
                               <input
                                 type="text"
@@ -2634,8 +2637,8 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                       );
                     })()}
 
-                    <div style={{ background: clay.bg, borderRadius: 12, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 4, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.2), inset -2px -2px 4px rgba(255,255,255,0.85)' }}>
-                      <span style={{ fontSize: 10, color: clay.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>SharePoint Site</span>
+                    <div style={{ background: 'var(--vdms-field, rgba(255,255,255,0.72))', borderRadius: 14, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 4, border: '1px solid var(--vdms-line, rgba(16,84,138,0.13))' }}>
+                      <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>SharePoint Site</span>
                       <span style={{ fontSize: 12, color: clay.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {(() => {
                           const sites = host.state.documentSites || [];
@@ -2668,9 +2671,9 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                         instead of silently dropping the row — most existing
                         gaps are backfilled server-side from the Folder table
                         at read time (see list_vessels in real_backend.py). */}
-                    <div style={{ background: clay.bg, borderRadius: 12, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 4, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.2), inset -2px -2px 4px rgba(255,255,255,0.85)' }}>
-                      <span style={{ fontSize: 10, color: clay.textMuted, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Created Path</span>
-                      <span style={{ fontSize: 11, color: clay.text, fontFamily: 'monospace', wordBreak: 'break-word' }}>{vessel.vessel_folder_path || '—'}</span>
+                    <div style={{ background: 'var(--vdms-field, rgba(255,255,255,0.72))', borderRadius: 14, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 4, border: '1px solid var(--vdms-line, rgba(16,84,138,0.13))' }}>
+                      <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>Created Path</span>
+                      <span style={{ fontSize: 11, color: clay.text, fontFamily: vdmsFont.mono, wordBreak: 'break-word' }}>{vessel.vessel_folder_path || '—'}</span>
                     </div>
 
                     {isSharePointOnly && (() => {
@@ -2805,9 +2808,9 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                         }}
                         title={isSharePointOnly ? 'Confirm this vessel above to view its documents' : undefined}
                         style={{
-                          flex: 1, background: isSharePointOnly ? clay.surface : clay.accentGradient,
+                          flex: 1, background: isSharePointOnly ? 'var(--vdms-field, rgba(255,255,255,0.72))' : clay.accentGradient,
                           color: isSharePointOnly ? clay.textMuted : '#fff',
-                          border: 'none', borderRadius: clay.radiusIcon, padding: '8px 10px',
+                          border: isSharePointOnly ? '1px solid var(--vdms-line-strong, rgba(16,84,138,0.26))' : 'none', borderRadius: 14, padding: '10px 12px',
                           fontSize: 12, fontWeight: 700, cursor: isSharePointOnly ? 'not-allowed' : 'pointer',
                           opacity: isSharePointOnly ? 0.7 : 1,
                           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
@@ -2824,9 +2827,9 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                         title="Open in SharePoint"
                         style={{
                           width: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          border: 'none', borderRadius: clay.radiusIcon, background: clay.surface,
+                          border: '1px solid var(--vdms-line-strong, rgba(16,84,138,0.26))', borderRadius: 14, background: 'var(--vdms-field, rgba(255,255,255,0.72))',
                           color: clay.accentDark, fontSize: 14, textDecoration: 'none',
-                          boxShadow: clay.shadowRaised,
+                          boxShadow: 'none',
                         }}
                       >
                         ↗

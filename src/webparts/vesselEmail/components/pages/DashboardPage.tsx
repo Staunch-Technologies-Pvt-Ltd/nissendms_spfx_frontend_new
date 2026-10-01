@@ -2,6 +2,8 @@ import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import { clay } from '../clayTheme';
 import type { VesselRecord } from '../types/rows';
+import type { AlertItem } from '../types/ui';
+import { dashboardHeroShipImage } from '../dashboardHeroShip';
 
 // Home Vessels panel: rows per page (see the "Pagination footer" below).
 const VESSELS_PAGE_SIZE = 10;
@@ -423,10 +425,10 @@ function DashboardDocumentsPanel(props: {
   };
 
   return (
-    <div style={{ background: surface, borderRadius: 16, border: `1px solid ${border}`, padding: 22, boxShadow: clay.shadowRaised }}>
+    <div style={{ background: surface, borderRadius: 22, border: `1px solid ${border}`, padding: 22, boxShadow: clay.shadowRaised, backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: text }}>Documents</h3>
+          <h3 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: text }}>Documents</h3>
           <span style={{ fontSize: 11, fontWeight: 700, color: clay.accentDark, background: clay.accentSoft, borderRadius: 12, padding: '1px 8px' }}>
             {loading && !data ? '…' : `${formatNumber(total)} ${activeFilterCount > 0 ? 'matching' : 'files'}`}
           </span>
@@ -757,10 +759,10 @@ function DashboardVesselsPanel(props: {
   };
 
   return (
-    <div style={{ background: surface, borderRadius: 16, border: `1px solid ${border}`, padding: 22, boxShadow: clay.shadowRaised }}>
+    <div style={{ background: surface, borderRadius: 22, border: `1px solid ${border}`, padding: 22, boxShadow: clay.shadowRaised, backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: text }}>Vessels</h3>
+          <h3 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: text }}>Vessels</h3>
           <span style={{ fontSize: 11, fontWeight: 700, color: clay.accentDark, background: clay.accentSoft, borderRadius: 12, padding: '1px 8px' }}>
             {loading ? '…' : `${formatNumber(filtered.length)} ${q ? 'matching' : 'vessels'}`}
           </span>
@@ -884,6 +886,192 @@ function DashboardVesselsPanel(props: {
   );
 }
 
+// ── Hero calendar ────────────────────────────────────────────────────────────
+// Month calendar for the welcome banner: today is highlighted, and hovering (or
+// tapping) a date lists the alerts raised and the documents uploaded that day.
+// Uploads come from the same /api/dashboard/documents endpoint as the Documents
+// panel (created date, scoped by the Home site switcher), fetched per month.
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const FULL_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+function humanize(value: string): string {
+  const t = String(value || '').replace(/_/g, ' ').trim();
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : 'Alert';
+}
+
+function HeroCalendar(props: { host: VesselEmail; siteKey: string; nonce: number; statsEpoch?: number | null }): React.ReactElement {
+  const { host, siteKey, nonce, statsEpoch } = props;
+  const today = new Date();
+  const todayKey = dayKey(today.getTime());
+  const [view, setView] = React.useState<{ y: number; m: number }>({ y: today.getFullYear(), m: today.getMonth() });
+  const [docsByDay, setDocsByDay] = React.useState<Record<string, RealDashboardDoc[]>>({});
+  const [docsLoading, setDocsLoading] = React.useState<boolean>(false);
+  const [hover, setHover] = React.useState<{ key: string; top: number } | null>(null);
+  const [pinned, setPinned] = React.useState<{ key: string; top: number } | null>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const base = host._base();
+    if (!base) return undefined;
+    const from = new Date(view.y, view.m, 1).getTime();
+    const to = new Date(view.y, view.m + 1, 1).getTime();
+    const collected: RealDashboardDoc[] = [];
+    const loadPage = (pageNo: number): Promise<void> => {
+      const params = new URLSearchParams();
+      if (siteKey && siteKey !== 'all') params.set('site_key', siteKey);
+      params.set('date_field', 'created');
+      params.set('from_ms', String(from));
+      params.set('to_ms', String(to));
+      params.set('tz_offset_min', String(new Date().getTimezoneOffset()));
+      params.set('sort', 'created_newest');
+      params.set('page', String(pageNo));
+      params.set('page_size', '200');
+      return host._fetchJson(`${base}/api/dashboard/documents?${params.toString()}`).then((res: any) => {
+        if (cancelled) return undefined;
+        const items: RealDashboardDoc[] = Array.isArray(res?.items) ? res.items : [];
+        items.forEach(d => collected.push(d));
+        return pageNo < (res?.total_pages || 1) && pageNo < 5 ? loadPage(pageNo + 1) : undefined;
+      });
+    };
+    setDocsLoading(true);
+    loadPage(1)
+      .then(() => {
+        if (cancelled) return;
+        const grouped: Record<string, RealDashboardDoc[]> = {};
+        collected.forEach(d => {
+          const epoch = d.createdEpoch || d.modifiedEpoch;
+          if (!epoch) return;
+          const k = dayKey(epoch);
+          (grouped[k] = grouped[k] || []).push(d);
+        });
+        setDocsByDay(grouped);
+      })
+      .catch(() => { if (!cancelled) setDocsByDay({}); })
+      .then(() => { if (!cancelled) setDocsLoading(false); });
+    return () => { cancelled = true; };
+  }, [view.y, view.m, siteKey, nonce, statsEpoch]);
+
+  const alertsByDay: Record<string, AlertItem[]> = {};
+  (host.state.alertsList || []).forEach(a => {
+    const t = a.created_at ? new Date(a.created_at).getTime() : NaN;
+    if (!isFinite(t)) return;
+    const k = dayKey(t);
+    (alertsByDay[k] = alertsByDay[k] || []).push(a);
+  });
+
+  const first = new Date(view.y, view.m, 1);
+  const daysInMonth = new Date(view.y, view.m + 1, 0).getDate();
+  const lead = (first.getDay() + 6) % 7; // Monday-first
+  const cellCount = Math.ceil((lead + daysInMonth) / 7) * 7;
+  const cells: Date[] = [];
+  for (let i = 0; i < cellCount; i++) cells.push(new Date(view.y, view.m, 1 - lead + i));
+
+  const shift = (delta: number): void => {
+    setHover(null); setPinned(null);
+    setView(v => { const d = new Date(v.y, v.m + delta, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
+  };
+  const goToday = (): void => { setHover(null); setPinned(null); setView({ y: today.getFullYear(), m: today.getMonth() }); };
+
+  const active = hover || pinned;
+  const activeDocs = active ? (docsByDay[active.key] || []) : [];
+  const activeAlerts = active ? (alertsByDay[active.key] || []) : [];
+  const activeDate = active ? parseLocalDate(active.key) : null;
+  const DOT_DOC = clay.accent;
+  const DOT_ALERT = '#f59e0b';
+  const navBtn: React.CSSProperties = { width: 30, height: 30, borderRadius: 10, border: '1px solid var(--vdms-line)', background: 'var(--vdms-field)', color: 'var(--vdms-text)', fontSize: 16, fontWeight: 700, lineHeight: 1, cursor: 'pointer', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' };
+  const sectionLabel: React.CSSProperties = { fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--vdms-text-muted)', margin: '10px 0 4px', display: 'flex', alignItems: 'center', gap: 6 };
+  const rowStyle: React.CSSProperties = { fontSize: 12.5, fontWeight: 600, color: 'var(--vdms-text)', padding: '3px 0', display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 };
+  const ellipsis: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 };
+  const popTop = (el: HTMLElement): number => el.offsetTop + el.offsetHeight + 6;
+
+  return (
+    <div style={{ position: 'relative', width: '100%', borderRadius: 22, padding: '14px 14px 12px', background: 'var(--vdms-glass-strong)', border: '1px solid var(--vdms-line-strong)', boxShadow: '0 14px 34px rgba(0,30,70,0.18)', boxSizing: 'border-box' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <button type="button" aria-label="Previous month" onClick={() => shift(-1)} style={navBtn}>‹</button>
+        <div style={{ flex: 1, textAlign: 'center', fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif", fontSize: 15, fontWeight: 800, color: 'var(--vdms-text)', letterSpacing: '-0.01em' }}>
+          {FULL_MONTHS[view.m]} {view.y}
+        </div>
+        <button type="button" onClick={goToday} style={{ ...navBtn, width: 'auto', padding: '0 10px', fontSize: 12, fontWeight: 700 }}>Today</button>
+        <button type="button" aria-label="Next month" onClick={() => shift(1)} style={navBtn}>›</button>
+      </div>
+
+      <div style={{ position: 'relative' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, marginBottom: 2 }}>
+          {WEEKDAYS.map(w => <div key={w} style={{ textAlign: 'center', fontSize: 10.5, fontWeight: 800, letterSpacing: '0.06em', color: 'var(--vdms-text-muted)', padding: '2px 0' }}>{w.toUpperCase()}</div>)}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
+          {cells.map(d => {
+            const k = dayKey(d.getTime());
+            const inMonth = d.getMonth() === view.m;
+            const isToday = k === todayKey;
+            const nDocs = (docsByDay[k] || []).length;
+            const nAlerts = (alertsByDay[k] || []).length;
+            const isActive = !!active && active.key === k;
+            return (
+              <div
+                key={k}
+                tabIndex={0}
+                aria-label={`${d.toDateString()}${nDocs ? `, ${nDocs} documents uploaded` : ''}${nAlerts ? `, ${nAlerts} alerts` : ''}${isToday ? ', today' : ''}`}
+                onMouseEnter={e => setHover({ key: k, top: popTop(e.currentTarget) })}
+                onMouseLeave={() => setHover(null)}
+                onFocus={e => setHover({ key: k, top: popTop(e.currentTarget) })}
+                onBlur={() => setHover(null)}
+                onClick={e => { const top = popTop(e.currentTarget); setPinned(p => (p && p.key === k ? null : { key: k, top })); }}
+                style={{
+                  height: 38, borderRadius: 11, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, cursor: 'pointer', userSelect: 'none', outline: 'none',
+                  background: isToday ? clay.accentGradient : isActive ? 'var(--vdms-field)' : 'transparent',
+                  boxShadow: isToday ? clay.shadowButton : isActive ? 'inset 0 0 0 1.5px var(--vdms-focus)' : 'none',
+                  color: isToday ? '#fff' : 'var(--vdms-text)', opacity: inMonth ? 1 : 0.42,
+                }}
+              >
+                <span style={{ fontSize: 13, fontWeight: isToday ? 800 : 700, lineHeight: 1 }}>{d.getDate()}</span>
+                <span style={{ display: 'flex', gap: 3, height: 5 }}>
+                  {nDocs > 0 && <span style={{ width: 5, height: 5, borderRadius: '50%', background: isToday ? '#fff' : DOT_DOC }} />}
+                  {nAlerts > 0 && <span style={{ width: 5, height: 5, borderRadius: '50%', background: isToday ? '#ffe3a3' : DOT_ALERT }} />}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {active && activeDate && (
+          <div style={{ position: 'absolute', left: 0, right: 0, top: active.top, zIndex: 60, pointerEvents: 'none', borderRadius: 16, padding: '12px 14px 12px', background: 'var(--vdms-glass-strong)', border: '1px solid var(--vdms-line-strong)', boxShadow: '0 18px 44px rgba(0,20,50,0.35)', backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' }}>
+            <div style={{ fontSize: 13.5, fontWeight: 800, color: 'var(--vdms-text)' }}>
+              {activeDate.toLocaleDateString(undefined, { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' })}
+              {active.key === todayKey && <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 800, color: '#fff', background: clay.accentGradient, borderRadius: 999, padding: '2px 8px' }}>TODAY</span>}
+            </div>
+            <div style={sectionLabel}><span style={{ width: 7, height: 7, borderRadius: '50%', background: DOT_ALERT }} />Alerts · {activeAlerts.length}</div>
+            {activeAlerts.length === 0 && <div style={{ ...rowStyle, color: 'var(--vdms-text-muted)' }}>No alerts on this day</div>}
+            {activeAlerts.slice(0, 3).map(a => (
+              <div key={a.id} style={rowStyle}>
+                <span style={{ flexShrink: 0 }}>🔔</span>
+                <span style={ellipsis}>{a.folder_name || humanize(a.alert_type)}</span>
+                <span style={{ marginLeft: 'auto', flexShrink: 0, fontSize: 11, color: 'var(--vdms-text-muted)', fontWeight: 700 }}>{humanize(a.alert_type)}</span>
+              </div>
+            ))}
+            {activeAlerts.length > 3 && <div style={{ ...rowStyle, color: 'var(--vdms-text-muted)' }}>+{activeAlerts.length - 3} more</div>}
+            <div style={sectionLabel}><span style={{ width: 7, height: 7, borderRadius: '50%', background: DOT_DOC }} />Documents uploaded · {activeDocs.length}</div>
+            {activeDocs.length === 0 && <div style={{ ...rowStyle, color: 'var(--vdms-text-muted)' }}>{docsLoading ? 'Loading…' : 'No documents uploaded on this day'}</div>}
+            {activeDocs.slice(0, 4).map(doc => (
+              <div key={doc.id} style={rowStyle}>
+                <span style={{ flexShrink: 0 }}>{getFileIcon(doc.name).icon}</span>
+                <span style={ellipsis} title={doc.name}>{doc.name}</span>
+                {doc.vessel && <span style={{ marginLeft: 'auto', flexShrink: 0, maxWidth: 90, fontSize: 11, color: 'var(--vdms-text-muted)', fontWeight: 700, ...ellipsis }}>{doc.vessel}</span>}
+              </div>
+            ))}
+            {activeDocs.length > 4 && <div style={{ ...rowStyle, color: 'var(--vdms-text-muted)' }}>+{activeDocs.length - 4} more</div>}
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', gap: 14, justifyContent: 'center', marginTop: 8, fontSize: 11, fontWeight: 700, color: 'var(--vdms-text-muted)' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: DOT_DOC }} />Documents</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: DOT_ALERT }} />Alerts</span>
+      </div>
+    </div>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 /**
  * All documents currently loaded for the dashboard (full list when the
@@ -899,11 +1087,17 @@ export function extractRealDocuments(host: VesselEmail): RealDashboardDoc[] {
 
 export function renderDashboard(host: VesselEmail): React.ReactElement {
   const { vessels, loading, dashboardStats } = host.state;
-  const isNight = host.state.themeMode === 'night';
-  const cardSurface = isNight ? '#302219' : clay.surface;
-  const cardBorder = isNight ? '#614331' : '#ead7c6';
-  const primaryText = isNight ? '#f8eee6' : clay.text;
-  const mutedText = isNight ? '#c7a58d' : clay.textMuted;
+  const cardSurface = 'var(--vdms-glass)';
+  const cardBorder = 'var(--vdms-line)';
+  const primaryText = 'var(--vdms-text)';
+  const mutedText = 'var(--vdms-text-muted)';
+  const glassCard: React.CSSProperties = { backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' };
+  const now = new Date();
+  const hour = now.getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const firstName = String(host.props.userDisplayName || '').trim().split(/\s+/)[0] || 'there';
+  const unreadAlerts = host._unreadAlertCount();
+  const dateLabel = now.toLocaleDateString(undefined, { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' }).replace(/,/g, ' ·');
   const palette: Palette = { surface: cardSurface, border: cardBorder, text: primaryText, muted: mutedText };
   const statsLoading = !dashboardStats;
   const siteFilter = host.state.dashboardSiteFilter || 'all';
@@ -949,21 +1143,36 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
   };
 
   const statCard = (label: string, value: number | undefined, icon: string, sub?: React.ReactNode): React.ReactElement => (
-    <div style={{ background: cardSurface, borderRadius: 16, padding: 20, border: `1px solid ${cardBorder}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: clay.shadowRaised }}>
+    <div style={{ ...glassCard, background: cardSurface, borderRadius: 22, padding: 22, border: `1px solid ${cardBorder}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: clay.shadowRaised }}>
       <div>
-        <div style={{ fontSize: 28, fontWeight: 800, color: primaryText, minHeight: 34 }}>
+        <div style={{ fontSize: 34, fontWeight: 700, fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif", letterSpacing: '-0.03em', color: primaryText, minHeight: 42 }}>
           {statsLoading || (loading && value === undefined) ? <span style={{ color: mutedText, fontSize: 22 }}>…</span> : formatNumber(value)}
         </div>
         <div style={{ fontSize: 13, color: mutedText, fontWeight: 600, marginTop: 2 }}>{label}</div>
         {sub}
       </div>
-      <div style={{ width: 44, height: 44, borderRadius: '50%', background: clay.accentSoft, color: clay.accentDark, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{icon}</div>
+      <div style={{ width: 44, height: 44, borderRadius: 14, background: clay.accentSoft, color: clay.accentDark, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{icon}</div>
     </div>
   );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <div style={{ position: 'sticky', top: 'calc(-1 * var(--vdms-content-pad, 32px))', zIndex: 20, background: isNight ? '#211812' : clay.bg, margin: 'calc(-1 * var(--vdms-content-pad, 32px)) calc(-1 * var(--vdms-content-pad, 32px)) 0', padding: 'var(--vdms-content-pad, 32px) var(--vdms-content-pad, 32px) 8px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Hero banner: greeting (left) · ship (centre) · calendar (right). Actions reuse existing host navigation. */}
+      <div className="vdms-hero" style={{ position: 'relative', zIndex: 20, borderRadius: 28, border: `1px solid ${cardBorder}`, boxShadow: 'var(--vdms-shadow)', minHeight: 300, display: 'flex', flexWrap: 'wrap', alignItems: 'stretch', background: 'linear-gradient(100deg, var(--vdms-glass-strong), var(--vdms-glass))', backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' }}>
+        <div style={{ position: 'relative', flex: '1 1 270px', minWidth: 0, padding: 'clamp(20px, 2.6vw, 36px)', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+          <div style={{ fontFamily: "'JetBrains Mono', Consolas, monospace", fontSize: 12, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: clay.accent }}>{dateLabel}</div>
+          <h2 style={{ margin: '10px 0 8px', fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif", fontSize: 'clamp(26px, 2.8vw, 42px)', lineHeight: 1.08, fontWeight: 800, letterSpacing: '-0.03em', color: primaryText }}>{greeting}, {firstName}</h2>
+          <p style={{ margin: 0, fontSize: 16, lineHeight: 1.55, fontWeight: 600, color: 'var(--vdms-text-secondary)' }}>
+            {unreadAlerts > 0 ? `${unreadAlerts} new alert${unreadAlerts === 1 ? ' is' : 's are'} waiting for you.` : 'You are all caught up — no new alerts.'}
+          </p>
+        </div>
+        {/* Centre: the ship, edges feathered into the banner */}
+        <div aria-hidden="true" style={{ flex: '1.5 1 260px', minWidth: 0, minHeight: 220, margin: '14px 0', backgroundImage: `url("${dashboardHeroShipImage}")`, backgroundSize: 'cover', backgroundPosition: 'center 58%', backgroundRepeat: 'no-repeat', borderRadius: 22, WebkitMaskImage: 'linear-gradient(90deg, transparent 0%, #000 16%, #000 84%, transparent 100%)', maskImage: 'linear-gradient(90deg, transparent 0%, #000 16%, #000 84%, transparent 100%)' }} />
+        <div style={{ flex: '0 0 360px', maxWidth: '100%', padding: '16px 18px 16px 4px', boxSizing: 'border-box', display: 'flex', alignItems: 'center' }}>
+          <HeroCalendar host={host} siteKey={siteFilter} nonce={refreshNonce} statsEpoch={dashboardStats?.last_refreshed_epoch} />
+        </div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* SharePoint Site Filter — scopes every figure and list below. */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         {dashboardStats?.last_refreshed_epoch && (
@@ -1005,9 +1214,9 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
       </div>
       </div>
       {/* Sites */}
-      <div style={{ background: cardSurface, borderRadius: 16, border: `1px solid ${cardBorder}`, padding: 22, boxShadow: clay.shadowRaised }}>
+      <div style={{ ...glassCard, background: cardSurface, borderRadius: 22, border: `1px solid ${cardBorder}`, padding: 22, boxShadow: clay.shadowRaised }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: primaryText }}>SharePoint Sites</h3>
+          <h3 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: primaryText }}>SharePoint Sites</h3>
           {siteFilter !== 'all' && (
             <button type="button" onClick={() => host._handleDashboardSiteChange('all')} style={{ background: 'none', border: 'none', color: clay.accentDark, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Show all sites</button>
           )}

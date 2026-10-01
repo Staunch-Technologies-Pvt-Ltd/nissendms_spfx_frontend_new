@@ -12241,17 +12241,19 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     if (sessionExpired) {
       const isNight = this.state.themeMode === 'night';
       return (
-        <div style={{
+        <div className="vessel-dms-auth" data-vessel-theme={this.state.themeMode} style={{
+          position: 'fixed', inset: 0, zIndex: 99999, isolation: 'isolate',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          minHeight: '100vh', background: isNight ? '#211812' : clay.bg, fontFamily: "'Segoe UI', sans-serif", padding: 24,
+          background: clay.bg, fontFamily: "'Manrope', 'Segoe UI Variable', 'Segoe UI', sans-serif", padding: 24,
         }}>
           <div style={{
-            background: isNight ? '#302219' : clay.surface, borderRadius: 24, padding: '44px 48px', maxWidth: 460,
-            textAlign: 'center', boxShadow: clay.shadowRaised, border: `1px solid ${isNight ? '#614331' : clay.accentSoft}`,
+            background: isNight ? 'rgba(7,28,47,0.9)' : 'rgba(255,255,255,0.92)', backdropFilter: 'blur(26px) saturate(1.5)', WebkitBackdropFilter: 'blur(26px) saturate(1.5)',
+            borderRadius: 28, padding: '44px 48px', maxWidth: 460,
+            textAlign: 'center', boxShadow: 'var(--vdms-shadow)', border: '1px solid var(--vdms-line)',
           }}>
             <div style={{ width: 64, height: 64, margin: '0 auto 18px', borderRadius: 20, background: clay.accentGradient, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30, boxShadow: clay.shadowButton }}>🔒</div>
-            <h2 style={{ margin: '0 0 10px', fontSize: 24, fontWeight: 800, color: isNight ? '#f8eee6' : clay.text }}>Session Expired</h2>
-            <p style={{ margin: '0 0 26px', fontSize: 15, color: isNight ? '#c7a58d' : clay.textMuted, lineHeight: 1.6 }}>
+            <h2 style={{ margin: '0 0 10px', fontSize: 24, fontWeight: 800, color: 'var(--vdms-text)', fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif" }}>Session Expired</h2>
+            <p style={{ margin: '0 0 26px', fontSize: 15, color: 'var(--vdms-text-secondary)', lineHeight: 1.6 }}>
               Your session has expired or is no longer valid. Please sign out and sign back in to continue.
             </p>
             <button

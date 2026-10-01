@@ -19,6 +19,9 @@ import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../ve
 import { isMobileWidth, isTabletOrBelow } from '../responsive';
 import { ThemeProvider } from '@fluentui/react';
 import { clay, buildDeepHarborTheme } from '../clayTheme';
+import { injectFuturisticTheme } from '../futuristicTheme';
+import { ShipTransitions } from './ShipScenes';
+import { injectRefreshTheme } from '../refreshTheme';
 
 // Phase 6 — Ocean Clay: previously each module had its own vivid top-bar
 // accent (matching Sidebar.tsx's rainbow NAV_ACCENTS). Per explicit decision
@@ -63,8 +66,7 @@ function injectFullScreenStyles(): void {
        references instead of being duplicated with isNight ternaries. These
        custom properties are the single place that actually flips between
        light and night, scoped to the [data-vessel-theme] attribute set on
-       the app root below. Night values reuse the existing warm-brown
-       "Ocean Clay" night palette (see deepHarborNightTheme / the night
+       the app root below. Night values use the Maritime deep-sea palette (see deepHarborNightTheme / the night
        input styles further down) so nothing clashes. */
     [data-vessel-theme="light"] {
       --vdms-surface: #ffffff;
@@ -78,19 +80,19 @@ function injectFullScreenStyles(): void {
       --vdms-toggle-active-bg: #0f172a;
       --vdms-toggle-active-text: #ffffff;
       /* clay.* tokens (clayTheme.ts) */
-      --clay-bg: #f8f1ea;
-      --clay-surface: #fff9f5;
-      --clay-surface-raised: #f7e6d8;
-      --clay-surface-hover: #f2e2d5;
-      --clay-text: #342417;
-      --clay-text-muted: #8a6552;
-      --clay-accent-soft: #f7d8bf;
-      --clay-accent-soft-hover: #f0cab1;
-      --clay-icon-bg: linear-gradient(150deg, #f9dcc0, #efb57a);
-      --clay-shadow-raised: 8px 8px 18px rgba(221,145,89,0.22), -8px -8px 16px rgba(255,255,255,0.88);
-      --clay-shadow-raised-hover: 10px 10px 22px rgba(221,145,89,0.28), -10px -10px 20px rgba(255,255,255,0.92);
-      --clay-shadow-button: 0 10px 22px rgba(221,145,89,0.35), inset 0 2px 3px rgba(255,255,255,0.45), inset 0 -3px 6px rgba(150,89,42,0.28);
-      --clay-shadow-icon: inset 0 2px 3px rgba(255,255,255,0.7), inset 0 -3px 5px rgba(185,110,53,0.22);
+      --clay-bg: #dcefff;
+      --clay-surface: #f1f9ff;
+      --clay-surface-raised: #e1f0fc;
+      --clay-surface-hover: #c7e4f6;
+      --clay-text: #08243a;
+      --clay-text-muted: #5d7589;
+      --clay-accent-soft: #cee5ee;
+      --clay-accent-soft-hover: #badbe7;
+      --clay-icon-bg: linear-gradient(150deg, #e3f4fd, #bfe4f7);
+      --clay-shadow-raised: 0 12px 32px rgba(20,80,130,0.14), inset 0 1px 0 rgba(255,255,255,0.7);
+      --clay-shadow-raised-hover: 0 18px 42px rgba(20,80,130,0.2), inset 0 1px 0 rgba(255,255,255,0.8);
+      --clay-shadow-button: 0 10px 26px rgba(10,126,168,0.32), inset 0 1px 0 rgba(255,255,255,0.35);
+      --clay-shadow-icon: inset 0 1px 0 rgba(255,255,255,0.75), inset 0 0 0 1px rgba(10,126,168,0.12);
       --clay-pill-active-bg: #cdeedb;
       --clay-pill-active-text: #245a3d;
       --clay-pill-active-shadow: inset 0 1px 2px rgba(255,255,255,0.6), inset 0 -2px 3px rgba(36,90,61,0.18);
@@ -102,26 +104,26 @@ function injectFullScreenStyles(): void {
       --clay-pill-danger-shadow: inset 0 1px 2px rgba(255,255,255,0.6), inset 0 -2px 3px rgba(138,50,38,0.18);
     }
     [data-vessel-theme="night"] {
-      --vdms-surface: #2b211b;
-      --vdms-surface-alt: #3a291f;
-      --vdms-border: #493225;
-      --vdms-border-soft: #3a291f;
-      --vdms-text: #f8eee6;
-      --vdms-text-secondary: #d8c4b3;
-      --vdms-text-muted: #c7a58d;
-      --vdms-text-faint: #a8886f;
-      --vdms-toggle-active-bg: #DD9159;
-      --vdms-toggle-active-text: #211812;
+      --vdms-surface: rgba(9,34,56,0.82);
+      --vdms-surface-alt: rgba(12,44,70,0.85);
+      --vdms-border: rgba(140,210,240,0.18);
+      --vdms-border-soft: rgba(140,210,240,0.1);
+      --vdms-text: #eaf6fd;
+      --vdms-text-secondary: #b2cadb;
+      --vdms-text-muted: #9ab4c6;
+      --vdms-text-faint: #7f9bb0;
+      --vdms-toggle-active-bg: #34d5ea;
+      --vdms-toggle-active-text: #02202b;
       /* clay.* tokens (clayTheme.ts) — night values */
-      --clay-bg: #211812;
-      --clay-surface: #2b211b;
-      --clay-surface-raised: #3a291f;
-      --clay-surface-hover: #45311f;
-      --clay-text: #f8eee6;
-      --clay-text-muted: #c7a58d;
-      --clay-accent-soft: #5a3a24;
-      --clay-accent-soft-hover: #6a4429;
-      --clay-icon-bg: linear-gradient(150deg, #5a3a24, #7a4a2a);
+      --clay-bg: #031423;
+      --clay-surface: #122230;
+      --clay-surface-raised: #21303d;
+      --clay-surface-hover: #303e4b;
+      --clay-text: #eaf6fd;
+      --clay-text-muted: #8e9ca6;
+      --clay-accent-soft: #145159;
+      --clay-accent-soft-hover: #18626c;
+      --clay-icon-bg: linear-gradient(150deg, #145159, #18626c);
       --clay-shadow-raised: 6px 6px 14px rgba(0,0,0,0.45), -4px -4px 10px rgba(255,255,255,0.03);
       --clay-shadow-raised-hover: 8px 8px 18px rgba(0,0,0,0.55), -5px -5px 12px rgba(255,255,255,0.04);
       --clay-shadow-button: 0 8px 18px rgba(0,0,0,0.45), inset 0 1px 2px rgba(255,255,255,0.18), inset 0 -3px 6px rgba(0,0,0,0.3);
@@ -163,14 +165,14 @@ function injectFullScreenStyles(): void {
     [data-vessel-theme="night"] input,
     [data-vessel-theme="night"] select,
     [data-vessel-theme="night"] textarea {
-      background: #2b211b !important;
-      color: #f8eee6 !important;
-      border-color: #795238 !important;
+      background: rgba(3,20,35,0.6) !important;
+      color: #eaf6fd !important;
+      border-color: rgba(140,210,240,0.28) !important;
       color-scheme: dark;
     }
     [data-vessel-theme="night"] input::placeholder,
     [data-vessel-theme="night"] textarea::placeholder {
-      color: #b99a84 !important;
+      color: #7f9bb0 !important;
     }
 
     /* Shared interaction feedback for buttons and custom clickable surfaces. */
@@ -184,9 +186,9 @@ function injectFullScreenStyles(): void {
     .vessel-dms-app [role="button"]:hover {
       filter: brightness(0.94) saturate(1.08) !important;
       transform: translateY(-1px) !important;
-      outline: 2px solid rgba(221,145,89,0.72) !important;
+      outline: 2px solid rgba(10,126,168,0.7) !important;
       outline-offset: 2px;
-      box-shadow: 0 0 0 4px rgba(221,145,89,0.18) !important;
+      box-shadow: 0 0 0 4px rgba(10,126,168,0.16) !important;
     }
     .vessel-dms-app button:active:not(:disabled),
     .vessel-dms-app a:active,
@@ -197,7 +199,7 @@ function injectFullScreenStyles(): void {
     .vessel-dms-app button:focus-visible,
     .vessel-dms-app a:focus-visible,
     .vessel-dms-app [role="button"]:focus-visible {
-      outline: 3px solid rgba(221,145,89,0.55);
+      outline: 3px solid rgba(10,126,168,0.55);
       outline-offset: 2px;
     }
   `;
@@ -299,6 +301,8 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
   const phone = isMobileWidth(viewportWidth);
 
   injectFullScreenStyles();
+  injectFuturisticTheme();
+  injectRefreshTheme();
 
   // Settings → Color Management (color_settings_api.py) recolors the app at
   // runtime; the clay.* tokens above already pick that up via CSS custom
@@ -318,15 +322,17 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
       position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 99999,
     }} data-vessel-theme={host.state.themeMode}>
       <DeletionToastLayer host={host} />
+      <ShipTransitions host={host} />
       {!isWorkspaceFullScreen && host._renderSidebar()}
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
 
         {/* ── Top Bar ── */}
-        <div style={{
+        <div className="vessel-dms-topbar" style={{
           height: 76, flexShrink: 0,
-          background: isNight ? clay.accentDeep : (VIEW_ACCENTS[host.state.view] || clay.accent),
-          boxShadow: `0 4px 24px ${clay.accentGlow}`,
+          background: 'var(--vdms-glass)',
+          borderBottom: `3px solid ${VIEW_ACCENTS[host.state.view] || clay.accent}`,
+          boxShadow: 'var(--vdms-shadow)',
           transition: 'background 0.4s ease, box-shadow 0.4s ease',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: phone ? '0 12px' : tabletOrBelow ? '0 18px' : '0 36px',
@@ -342,9 +348,9 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                   width: 42,
                   height: 42,
                   borderRadius: 10,
-                  border: '1px solid rgba(255,255,255,0.5)',
-                  background: 'rgba(255,255,255,0.15)',
-                  color: '#fff',
+                  border: '1px solid var(--vdms-line-strong)',
+                  background: 'var(--vdms-field)',
+                  color: 'var(--vdms-text)',
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -352,16 +358,16 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                   flexShrink: 0,
                   transition: 'all 0.15s ease',
                 }}
-                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.26)'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'var(--vdms-glass-strong)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'var(--vdms-field)'; }}
                 aria-label="Open navigation"
               >
                 <Icon iconName="GlobalNavButton" style={{ fontSize: 18 }} />
               </button>
             )}
-            {!phone && <span style={{ color: 'rgba(255,255,255,0.75)', fontSize: 16, fontWeight: 600, letterSpacing: '0.2px' }}>Vessel DMS</span>}
-            <Icon iconName="ChevronRight" style={{ fontSize: 14, color: 'rgba(255,255,255,0.55)' }} />
-            <span style={{ color: '#ffffff', fontSize: phone ? 18 : 24, fontWeight: 900, letterSpacing: '-0.5px', textShadow: '0 2px 12px rgba(0,0,0,0.25)' }}>
+            {!phone && <span className="vdms-crumb" style={{ color: 'var(--vdms-glass-strong)', fontSize: 16, fontWeight: 600, letterSpacing: '0.2px' }}>Vessel DMS</span>}
+            <Icon iconName="ChevronRight" className="vdms-crumb" style={{ fontSize: 14, color: 'var(--vdms-glass-strong)' }} />
+            <span style={{ color: 'var(--vdms-text)', fontSize: phone ? 18 : 26, fontWeight: 700, letterSpacing: '-0.02em', fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif" }}>
               {viewLabel}
             </span>
             <button
@@ -371,8 +377,8 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
               aria-label={`Refresh ${viewLabel}`}
               style={{
                 width: 34, height: 34, marginLeft: 4, borderRadius: '50%',
-                border: '1px solid rgba(255,255,255,0.62)',
-                background: 'rgba(255,255,255,0.2)', color: '#fff',
+                border: '1px solid var(--vdms-line-strong)',
+                background: 'var(--vdms-field)', color: 'var(--vdms-text)',
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                 cursor: 'pointer', flexShrink: 0,
               }}
@@ -391,9 +397,9 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                 aria-label={isWorkspaceFullScreen ? 'Exit full-screen workspace' : 'Open full-screen workspace'}
                 style={{
                   width: 42, height: 42, borderRadius: 12,
-                  border: '1px solid rgba(255,255,255,0.4)',
-                  background: isWorkspaceFullScreen ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.15)',
-                  color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  border: '1px solid var(--vdms-line-strong)',
+                  background: isWorkspaceFullScreen ? 'var(--vdms-glass-strong)' : 'var(--vdms-field)',
+                  color: 'var(--vdms-text)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                   cursor: 'pointer', boxShadow: '0 3px 10px rgba(0,0,0,0.15)',
                 }}
               >
@@ -413,15 +419,15 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                 onClick={e => { e.stopPropagation(); host._toggleAlertBell(); }}
                 style={{
                   width: 44, height: 44, borderRadius: '50%', border: 'none',
-                  background: host.state.alertOpen ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.18)',
-                  color: '#fff',
+                  background: host.state.alertOpen ? 'var(--vdms-glass-strong)' : 'var(--vdms-field)',
+                  color: 'var(--vdms-text)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   cursor: 'pointer', position: 'relative',
                   transition: 'background 0.15s ease',
                   boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
                 }}
-                onMouseEnter={e => { if (!host.state.alertOpen) e.currentTarget.style.background = 'rgba(255,255,255,0.25)'; }}
-                onMouseLeave={e => { if (!host.state.alertOpen) e.currentTarget.style.background = 'rgba(255,255,255,0.15)'; }}
+                onMouseEnter={e => { if (!host.state.alertOpen) e.currentTarget.style.background = 'var(--vdms-glass-strong)'; }}
+                onMouseLeave={e => { if (!host.state.alertOpen) e.currentTarget.style.background = 'var(--vdms-field)'; }}
                 aria-label="Alerts"
               >
                 <Icon iconName="Ringer" style={{ fontSize: 20 }} />
@@ -431,7 +437,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                     minWidth: 18, height: 18, borderRadius: 9,
                     background: '#ef4444', color: '#fff', fontSize: 10, fontWeight: 700,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    padding: '0 4px', border: `2px solid ${clay.accentDark}`,
+                    padding: '0 4px', border: '2px solid var(--vdms-glass-strong)',
                   }}>
                     {host._unreadAlertCount() > 99 ? '99+' : host._unreadAlertCount()}
                   </span>
@@ -785,16 +791,16 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <button type="button" onClick={() => host._goToView('profile')} title="Open profile" aria-label="Open profile" style={{
                 width: 44, height: 44, borderRadius: '50%',
-                background: 'rgba(255,255,255,0.25)',
-                border: '2.5px solid rgba(255,255,255,0.7)',
-                color: '#fff', fontSize: 18, fontWeight: 900,
+                background: 'var(--vdms-glass-strong)',
+                border: '2.5px solid var(--vdms-line-strong)',
+                color: 'var(--vdms-text)', fontSize: 18, fontWeight: 900,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 flexShrink: 0, boxShadow: '0 4px 14px rgba(0,0,0,0.25)',
                 cursor: 'pointer',
               }}>
                 {userDisplayName.charAt(0).toUpperCase()}
               </button>
-              <span style={{ fontSize: 16, fontWeight: 800, color: '#fff', letterSpacing: '0.2px', textShadow: '0 1px 6px rgba(0,0,0,0.2)' }}>{userDisplayName}</span>
+              <span style={{ fontSize: 16, fontWeight: 800, color: 'var(--vdms-text)', letterSpacing: '0.2px' }}>{userDisplayName}</span>
             </div>
           </div>
         </div>
@@ -816,7 +822,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
         )}
 
         {/* ── Main Content ── */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 32), background: isNight ? '#211812' : clay.bg, ['--vdms-content-pad' as any]: `${isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 32)}px` }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 32), background: 'transparent', ['--vdms-content-pad' as any]: `${isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 32)}px` }}>
           {content}
         </div>
 

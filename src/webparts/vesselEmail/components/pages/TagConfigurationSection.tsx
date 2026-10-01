@@ -31,7 +31,9 @@ interface DiffEntry { action: 'new' | 'unchanged' | 'reactivate' | 'deactivate' 
 interface DiffResult { mode: Mode; counts: Record<string, number>; confirmation: string; entries: DiffEntry[]; }
 interface CopyDiffResult extends DiffResult { source_label?: string; target_label?: string; }
 interface Snapshot { id: number; created_at: string | null; changed_by: string | null; mode: string; level: string | null; summary: Record<string, unknown>; }
-interface SyncResult { level?: string; column: { displayName?: string } | null; type: string | null; current: string[]; target: string[]; add: string[]; remove: string[]; applied: boolean; error: string | null; }
+interface SyncResult { level?: string; column: { displayName?: string } | null; type: string | null; current: string[]; target: string[]; add: string[]; remove: string[]; applied: boolean; error: string | null;
+  /** Domain level only: Domains that are (or would be) created as term sets in the Vessel DMS Term Store group. */
+  term_store?: { add: string[]; added: string[]; error: string | null }; }
 interface RetagResult { level?: string; old_value: string; new_value: string | null; checked: number; updated: number; errors: string[]; }
 const SYNCABLE_LEVELS: Level[] = ['domain', 'group', 'category'];
 interface ImportRow { Level: string; 'Parent Path': string; Name: string; Code?: string; Description?: string; 'Sort Order'?: number | null; Status?: string; }
@@ -184,6 +186,7 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
   // Only Domain, Group and Category have a real SharePoint column to sync
   // (Main Folder has no column; Sub Category is never written to SharePoint).
   const syncableLevel: Level | null = level && SYNCABLE_LEVELS.includes(level) ? level : null;
+  const hasSyncWork = !!sync && (!!sync.add.length || !!sync.remove.length || !!sync.term_store?.add.length);
   const mode: Mode = level && cfg ? (cfg.modes[level] || 'add') : 'add';
   const domains = items.filter(i => i.level === 'domain');
 
@@ -580,9 +583,17 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
               {!!sync.remove.length && <div>To remove from choices (existing documents keep their value): {sync.remove.join(', ')}</div>}
               {!sync.error && !sync.add.length && !sync.remove.length && sync.type !== 'text' && <div style={{ color: C.green }}>In sync with the Active {LABEL[syncableLevel]}.</div>}
               {sync.applied && <div style={{ color: C.green }}>Updated.</div>}
+              {sync.term_store && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {sync.term_store.error && <div style={{ color: C.red }}>Term Store: {sync.term_store.error}</div>}
+                  {!!sync.term_store.added.length && <div style={{ color: C.green }}>Term Store: created {sync.term_store.added.join(', ')}.</div>}
+                  {!sync.term_store.added.length && !!sync.term_store.add.length && <div>Term Store — term sets to create in "Vessel DMS": {sync.term_store.add.join(', ')}</div>}
+                  {!sync.term_store.error && !sync.term_store.add.length && !sync.term_store.added.length && <div style={{ color: C.green }}>Term Store has a term set for every Active Domain.</div>}
+                </div>
+              )}
               <div>
-                <button style={btn('primary', !isAdmin || !!busy || (!sync.add.length && !sync.remove.length))}
-                  disabled={!isAdmin || !!busy || (!sync.add.length && !sync.remove.length)}
+                <button style={btn('primary', !isAdmin || !!busy || !hasSyncWork)}
+                  disabled={!isAdmin || !!busy || !hasSyncWork}
                   onClick={() => { runSync(true).catch(() => undefined); }}>Sync now</button>
               </div>
 

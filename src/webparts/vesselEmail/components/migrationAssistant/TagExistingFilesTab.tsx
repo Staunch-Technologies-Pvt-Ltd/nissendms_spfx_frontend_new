@@ -84,7 +84,7 @@ export function TagExistingFilesTab({ api, isNight }: { api: MigrationApi; isNig
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div style={{ padding: '14px 4px' }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: t.text, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Icon iconName="Tag" style={{ color: '#DD9159' }} />Tag Existing Files
+          <Icon iconName="Tag" style={{ color: 'var(--clay-accent)' }} />Tag Existing Files
         </div>
         <div style={{ fontSize: 12, color: t.textMuted, marginTop: 2 }}>
           Derives Group, Category and Vessel only from a file's current folder path — no move, no content extraction. Only writes Managed Metadata columns.

@@ -285,7 +285,7 @@ export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactEleme
         <div
           style={{
             position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 1000,
-            width: 360, maxHeight: 480, display: 'flex', flexDirection: 'column',
+            width: 'min(360px, 92vw)', maxHeight: 480, display: 'flex', flexDirection: 'column',
             background: 'var(--vdms-surface)', border: '1px solid var(--vdms-border)', borderRadius: 10,
             boxShadow: '0 8px 28px rgba(0,0,0,0.18)', overflow: 'hidden',
           }}

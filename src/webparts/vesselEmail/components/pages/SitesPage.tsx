@@ -2033,16 +2033,16 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
   };
 
   return (
-    <div style={{ padding: '28px 32px', background: clay.bg, minHeight: '100%' }}>
+    <div style={{ background: 'transparent', minHeight: '100%' }}>
       {/* Renders as a fixed floating button + popup at bottom-right; doesn't affect layout here */}
       <CopilotSearchPanel host={host} />
       {renderTaggingModal()}
       {renderConfirmOverwriteModal()}
       {renderConfirmScanModal()}
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', marginBottom: 24, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', background: clay.bg, borderRadius: clay.radiusCard, padding: '16px 22px', boxShadow: clay.shadowRaised }}>
         <div>
-          <h1 style={{ margin: 0, color: clay.text, fontSize: 28 }}>Sites</h1>
-          <p style={{ color: clay.textMuted, margin: '6px 0 0' }}>Browse libraries and tag documents across your tenant.</p>
+          <h1 style={{ margin: 0, color: clay.text, fontSize: 28, fontWeight: 800 }}>Sites</h1>
+          <p style={{ color: clay.text, fontWeight: 600, margin: '6px 0 0' }}>Browse libraries and tag documents across your tenant.</p>
         </div>
         {sites.length > 1 && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: clay.text, fontWeight: 600 }}>
@@ -2091,20 +2091,20 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 16 }}>
           {sitesLoading && <div style={{ color: clay.textMuted }}>Loading sites...</div>}
           {selectedSites.map(site => (
-            <div key={site.id} style={{ background: clay.surface, border: 'none', borderRadius: clay.radiusCard, padding: 18, boxShadow: clay.shadowRaised }}>
+            <div key={site.id} style={{ background: clay.surface, border: 'none', borderRadius: clay.radiusCard, padding: 18, boxShadow: clay.shadowRaised, fontWeight: 600 }}>
               <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                 <div style={{ width: 42, height: 42, background: clay.iconBgGradient, color: clay.accentDark, display: 'grid', placeItems: 'center', borderRadius: clay.radiusIcon, fontWeight: 700, boxShadow: clay.shadowIcon }}>SP</div>
                 <div style={{ minWidth: 0 }}>
-                  <h2 style={{ margin: 0, fontSize: 16, color: clay.text, overflowWrap: 'anywhere' }}>{getSiteName(site)}</h2>
-                  <small style={{ color: clay.textMuted, display: 'block', overflowWrap: 'anywhere' }}>{site.web_url || site.id}</small>
+                  <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: clay.text, overflowWrap: 'anywhere' }}>{getSiteName(site)}</h2>
+                  <small style={{ color: clay.text, fontWeight: 600, display: 'block', overflowWrap: 'anywhere' }}>{site.web_url || site.id}</small>
                 </div>
               </div>
-              <p style={{ color: clay.textMuted, fontSize: 13, minHeight: 34 }}>{site.description || 'SharePoint site'}</p>
+              <p style={{ color: clay.text, fontWeight: 600, fontSize: 13, minHeight: 34 }}>{site.description || 'SharePoint site'}</p>
               <button
                 onClick={() => void loadDrives(site)}
                 onMouseEnter={e => { e.currentTarget.style.background = clay.accentSoftHover; e.currentTarget.style.boxShadow = clay.shadowRaisedHover; }}
                 onMouseLeave={e => { e.currentTarget.style.background = clay.accentSoft; e.currentTarget.style.boxShadow = 'none'; }}
-                style={{ padding: '9px 12px', border: 'none', color: clay.accentDark, background: clay.accentSoft, borderRadius: 7, cursor: 'pointer', transition: 'all 0.18s ease', boxShadow: 'none' }}
+                style={{ padding: '9px 12px', border: 'none', color: clay.accentDark, background: clay.accentSoft, borderRadius: 7, cursor: 'pointer', transition: 'all 0.18s ease', boxShadow: 'none', fontWeight: 700 }}
               >
                 {expanded === site.id ? 'Hide libraries' : 'Show libraries'}
               </button>
@@ -2127,7 +2127,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                         <button
                           key={drive.id}
                           onClick={() => chooseDrive(site, drive)}
-                          style={{ textAlign: 'left', padding: 10, border: 'none', background: clay.bg, borderRadius: 6, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+                          style={{ textAlign: 'left', padding: 10, border: 'none', background: clay.bg, color: clay.text, fontWeight: 700, borderRadius: 6, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
                         >
                           <span>
                             {drive.is_system ? '🗂️' : '📚'} {drive.name}
@@ -2167,7 +2167,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
             ← All sites
           </button>
 
-          <h2 style={{ color: clay.text, margin: '0 0 10px' }}>
+          <h2 style={{ color: clay.text, margin: '0 0 10px', fontWeight: 800 }}>
             {context.site.display_name} / {context.drive.name}
           </h2>
 

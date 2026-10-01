@@ -219,7 +219,7 @@ export function SiteToSiteTab({ api, isNight }: { api: MigrationApi; isNight: bo
         )}
         {step === 'scanning' && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 60 }}>
-            <Icon iconName="Sync" style={{ fontSize: 22, color: '#DD9159' }} />
+            <Icon iconName="Sync" style={{ fontSize: 22, color: 'var(--clay-accent)' }} />
             <div style={{ fontSize: 13, color: t.textMuted }}>Discovering the selected folders and files…{job ? ` ${job.processed} found so far.` : ''}</div>
           </div>
         )}
@@ -316,8 +316,8 @@ function SitePicker({ title, picker, sites, sitesLoading, isNight, onPickSite, o
 }): React.ReactElement {
   const t = tokens(isNight);
   const chip = (active: boolean): React.CSSProperties => ({
-    borderRadius: 8, border: `1px solid ${active ? '#DD9159' : t.border}`, background: active ? '#DD915922' : 'transparent',
-    color: active ? '#DD9159' : t.text, padding: '6px 12px', fontSize: 12, cursor: 'pointer',
+    borderRadius: 8, border: `1px solid ${active ? 'var(--clay-accent)' : t.border}`, background: active ? 'var(--clay-accent-soft)' : 'transparent',
+    color: active ? 'var(--clay-accent)' : t.text, padding: '6px 12px', fontSize: 12, cursor: 'pointer',
   });
   return (
     <div style={{ maxWidth: 640 }}>

@@ -57,24 +57,26 @@ function SettingsPageView({ host }: { host: VesselEmail }): React.ReactElement {
     }, [settingsTab, hiddenSettingsTabs]);
 
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 18, width: '100%', minHeight: '100%', boxSizing: 'border-box', padding: '8px 18px 0 0' }}>
-        <div style={{ paddingLeft: 2 }}>
-          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#0f172a' }}>Settings</h2>
-          <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>Configure application settings and preferences.</p>
+      <div className="vdms-settings" style={{ display: 'flex', flexDirection: 'column', gap: 20, width: '100%', minHeight: '100%', boxSizing: 'border-box', padding: '8px 0 0 0' }}>
+        <div style={{ paddingLeft: 4 }}>
+          <h2 style={{ margin: 0, fontFamily: "'Sora', 'Segoe UI Variable', sans-serif", fontSize: 30, fontWeight: 800, letterSpacing: '-0.03em', color: 'var(--vdms-text, #08243a)' }}>Settings</h2>
+          <p style={{ margin: '6px 0 0', fontSize: 17, color: 'var(--vdms-text-secondary, #34536a)' }}>Configure application settings and preferences.</p>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '220px minmax(0, 1fr)', gap: 0, width: '100%', maxWidth: 1280, minHeight: 660, background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', overflow: 'hidden', boxSizing: 'border-box', alignSelf: 'stretch' }}>
+        <div className="vdms-settings-shell" style={{ display: 'grid', gridTemplateColumns: 'minmax(230px, 280px) minmax(0, 1fr)', gap: 0, width: '100%', minHeight: 'calc(100vh - 250px)', background: 'var(--vdms-glass, rgba(255,255,255,0.62))', backdropFilter: 'blur(20px) saturate(1.3)', WebkitBackdropFilter: 'blur(20px) saturate(1.3)', borderRadius: 28, border: '1px solid var(--vdms-line, rgba(16,84,138,0.14))', boxShadow: 'var(--vdms-shadow)', overflow: 'hidden', boxSizing: 'border-box', alignSelf: 'stretch' }}>
           {/* Settings Left Nav */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, borderRight: '1px solid #f1f5f9', background: '#f8fafc', padding: '18px 14px', boxSizing: 'border-box' }}>
+          <div className="vdms-settings-nav" style={{ display: 'flex', flexDirection: 'column', gap: 6, borderRight: '1px solid var(--vdms-line, rgba(16,84,138,0.14))', background: 'var(--vdms-surface-alt, rgba(236,247,255,0.9))', padding: '22px 16px', boxSizing: 'border-box' }}>
             {visibleTabs.map(tab => (
               <button
                 key={tab}
                 onClick={() => host.setState({ settingsTab: tab as any })}
                 style={{
-                  border: 'none', background: settingsTab === tab ? '#e8f1ff' : 'transparent',
-                  color: settingsTab === tab ? '#0a66d0' : '#475569', fontWeight: settingsTab === tab ? 700 : 500,
-                  fontSize: 13, padding: '8px 12px', borderRadius: 6, textAlign: 'left', cursor: 'pointer',
-                  boxShadow: settingsTab === tab ? 'inset 0 0 0 1px rgba(10,102,208,0.08)' : 'none'
+                  border: 'none',
+                  background: settingsTab === tab ? 'linear-gradient(135deg, #2b9ae0, #0284c7)' : 'transparent',
+                  color: settingsTab === tab ? '#ffffff' : 'var(--vdms-text, #08243a)', fontWeight: settingsTab === tab ? 800 : 600,
+                  fontSize: 16, padding: '13px 16px', borderRadius: 14, textAlign: 'left', cursor: 'pointer',
+                  fontFamily: "'Manrope', 'Segoe UI Variable', sans-serif",
+                  boxShadow: settingsTab === tab ? '0 10px 22px rgba(2,132,199,0.38), inset 0 1px 0 rgba(255,255,255,0.4), inset 0 -3px 0 rgba(0,0,0,0.14)' : 'none'
                 }}
               >
                 {tab}
@@ -83,8 +85,8 @@ function SettingsPageView({ host }: { host: VesselEmail }): React.ReactElement {
           </div>
 
           {/* Settings Content Area */}
-          <div style={{ width: '100%', minWidth: 0, padding: '18px 22px 22px', boxSizing: 'border-box' }}>
-            <h3 style={{ margin: '0 0 16px', fontSize: 15, fontWeight: 700, color: '#0f172a' }}>{settingsTab}</h3>
+          <div className="vdms-settings-body" style={{ width: '100%', minWidth: 0, padding: '26px 32px 32px', boxSizing: 'border-box' }}>
+            <h3 style={{ margin: '0 0 20px', fontFamily: "'Sora', 'Segoe UI Variable', sans-serif", fontSize: 24, fontWeight: 800, letterSpacing: '-0.025em', color: 'var(--vdms-text, #08243a)' }}>{settingsTab}</h3>
 
             {settingsTab === 'Site Management' && (
               <SiteIntegrationInfo host={host} />
