@@ -113,13 +113,26 @@ export function VesselRootsControl({ host, siteKey, onSaved }: { host: VesselEma
         <span style={{ fontSize: 12, color: 'var(--vdms-text)' }} title="Where the Vessels page and Dashboard look for this site's vessel folders">{summary}</span>
         {saved?.is_admin && !open && (
           <button type="button" onClick={startEdit} style={{ ...dmsBtn('ghost'), height: 26, padding: '0 8px', fontSize: 12 }}>
-            <Icon iconName="Edit" aria-hidden="true" style={{ fontSize: 11 }} /> Choose
+            <Icon iconName="Edit" aria-hidden="true" style={{ fontSize: 11 }} /> Change
           </button>
         )}
       </div>
 
       {open && (
-        <div style={{ marginTop: 8, padding: 10, borderRadius: 10, border: '1px solid var(--vdms-line)', background: 'var(--vdms-surface)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        // The editor opens as a dialog so it never pushes the page content
+        // (vessel cards, site rows) out of view.
+        <div role="dialog" aria-modal="true" aria-label={`Vessel folders for ${siteKey}`}
+          onClick={(e) => { if (e.target === e.currentTarget && !saving) setOpen(false); }}
+          style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(8,18,32,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+        <div style={{ width: 'min(680px, 100%)', maxHeight: '86vh', overflowY: 'auto', padding: 18, borderRadius: 14, border: '1px solid var(--vdms-line)', background: 'var(--vdms-surface)', boxShadow: '0 20px 50px rgba(8,18,32,0.28)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Icon iconName="Boat" aria-hidden="true" style={{ fontSize: 16, color: clay.accent }} />
+            <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--vdms-text)' }}>Vessel folders</span>
+            <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>· {siteKey}</span>
+            <button type="button" aria-label="Close" onClick={() => setOpen(false)} style={{ marginLeft: 'auto', border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--vdms-text-muted)' }}>
+              <Icon iconName="Cancel" style={{ fontSize: 13 }} />
+            </button>
+          </div>
           <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>
             Where are this site’s vessel folders? Every folder inside the folders you pick is treated as a vessel —
             the Vessels page suggests them and the Dashboard counts them. Nothing else in the library is considered.
@@ -169,6 +182,7 @@ export function VesselRootsControl({ host, siteKey, onSaved }: { host: VesselEma
             <button type="button" onClick={() => setOpen(false)} style={dmsBtn('ghost')}>Cancel</button>
             <button type="button" onClick={() => void save()} disabled={saving} style={dmsBtn('primary', !saving)}>{saving ? 'Saving…' : 'Save'}</button>
           </div>
+        </div>
         </div>
       )}
     </div>

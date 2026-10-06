@@ -2307,15 +2307,15 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
             can be fixed on the spot. Saving re-scans the site, then the list
             reloads. */}
         {host.state.vesselSiteFilter && host.state.vesselSiteFilter !== 'all' && (
-          <div style={{ marginBottom: 14, background: 'var(--vdms-surface)', border: '1px solid var(--vdms-line)', borderRadius: 12, padding: '8px 6px' }}>
+          <div style={{ marginBottom: 12 }}>
             <VesselRootsControl
               key={host.state.vesselSiteFilter}
               host={host}
               siteKey={host.state.vesselSiteFilter}
               onSaved={() => {
                 clearVesselSummaryCache();
-                // The site is re-scanned in the background; reload once it has had time to finish.
-                window.setTimeout(() => { host._goToView('vessels').catch(() => undefined); }, 8000);
+                // The list reads the chosen folders live — reload right away.
+                host._goToView('vessels').catch(() => undefined);
               }}
             />
           </div>
