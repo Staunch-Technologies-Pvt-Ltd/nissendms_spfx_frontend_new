@@ -21,6 +21,7 @@ import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../ve
 import { KAIZEN_KNOWLEDGE_BANK_TREE, MAIN_FOLDERS } from '../vesselFolderTemplate';
 import { isMobileWidth } from '../responsive';
 import { clay } from '../clayTheme';
+import { VesselDocumentPanel, clearVesselSummaryCache } from './VesselDocumentPanel';
 import { vdmsFont } from '../futuristicTheme';
 import {
   DmsPageHeader, dmsControlStyle, dmsBtn, dmsTone, DmsLoadingState, DmsEmptyState,
@@ -2195,11 +2196,11 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                 )}
               </span>
             )}
-            subtitle="Manage fleet vessels, provision SharePoint folders, and view documents."
+            subtitle="Each vessel's documents at a glance — how many, where they are, and what still needs sorting."
           >
             <button
-              onClick={() => host._goToView('vessels').catch(() => undefined)}
-              title="Reload vessel list from database"
+              onClick={() => { clearVesselSummaryCache(); host._goToView('vessels').catch(() => undefined); }}
+              title="Reload vessels and their document figures"
               aria-label="Refresh vessel list"
               onMouseEnter={e => { e.currentTarget.style.background = clay.surfaceHover; e.currentTarget.style.boxShadow = clay.shadowRaisedHover; }}
               onMouseLeave={e => { e.currentTarget.style.background = clay.surface; e.currentTarget.style.boxShadow = clay.shadowRaised; }}
@@ -2571,6 +2572,17 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                         );
                       };
 
+                      // The Vessels page is for document management: a
+                      // registered vessel's card shows its documents
+                      // (count, size, last update, Drawings / Manuals / To
+                      // Be Classified) instead of ship particulars, which
+                      // stay editable in the Edit Vessel form. Only the
+                      // "Found in SharePoint" cards keep the IMO / Hull No.
+                      // inputs, because Confirm Vessel needs an IMO.
+                      if (!isSharePointOnly) {
+                        const summarySite = String((vessel as any)._fetched_for_site || host.state.vesselSiteFilter || 'all');
+                        return <VesselDocumentPanel host={host} vesselName={vessel.name} siteKey={summarySite} />;
+                      }
                       return (
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px' }}>
                           <div>
@@ -2625,9 +2637,14 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                       );
                     })()}
 
+                    {/* Location: which site and where in it the vessel's folder is.
+                        The path is always shown (— when still unknown); most
+                        gaps are backfilled server-side from the Folder table
+                        at read time (see list_vessels in real_backend.py). */}
                     <div style={{ background: 'var(--vdms-field, rgba(255,255,255,0.72))', borderRadius: 14, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 4, border: '1px solid var(--vdms-line, rgba(16,84,138,0.13))' }}>
-                      <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>SharePoint Site</span>
-                      <span style={{ fontSize: 12, color: clay.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>Location</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: clay.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <Icon iconName="SharepointLogo" aria-hidden="true" style={{ fontSize: 13, color: clay.accent }} />
                         {(() => {
                           const sites = host.state.documentSites || [];
                           // Prefer the site this row was actually fetched
@@ -2652,16 +2669,10 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                           return match?.sp_site_name || match?.site_key || vessel.provisioned_site_key || 'Active site';
                         })()}
                       </span>
-                    </div>
-
-                    {/* Always shown (not just when set) so a vessel whose
-                        vessel_folder_path is still missing is visibly "—"
-                        instead of silently dropping the row — most existing
-                        gaps are backfilled server-side from the Folder table
-                        at read time (see list_vessels in real_backend.py). */}
-                    <div style={{ background: 'var(--vdms-field, rgba(255,255,255,0.72))', borderRadius: 14, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 4, border: '1px solid var(--vdms-line, rgba(16,84,138,0.13))' }}>
-                      <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>Created Path</span>
-                      <span style={{ fontSize: 11, color: clay.text, fontFamily: vdmsFont.mono, wordBreak: 'break-word' }}>{vessel.vessel_folder_path || '—'}</span>
+                      <span title={vessel.vessel_folder_path || undefined} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 11.5, color: 'var(--vdms-text-muted)', wordBreak: 'break-word' }}>
+                        <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 12, marginTop: 1 }} />
+                        {vessel.vessel_folder_path ? vessel.vessel_folder_path.split('/').filter(Boolean).join(' › ') : 'Folder location not recorded yet'}
+                      </span>
                     </div>
 
                     {isSharePointOnly && (() => {
