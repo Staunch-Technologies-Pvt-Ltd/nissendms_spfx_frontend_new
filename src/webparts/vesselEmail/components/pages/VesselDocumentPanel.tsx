@@ -83,8 +83,8 @@ export function VesselDocumentPanel({ host, vesselName, siteKey }: { host: Vesse
   }, [host, vesselName, siteKey]);
 
   const box: React.CSSProperties = {
-    background: 'var(--vdms-field, rgba(255,255,255,0.72))', borderRadius: 14, padding: '12px 14px',
-    border: '1px solid var(--vdms-line, rgba(16,84,138,0.13))', display: 'flex', flexDirection: 'column', gap: 10,
+    background: 'var(--vdms-field, rgba(255,255,255,0.72))', borderRadius: 12, padding: '10px 12px',
+    border: '1px solid var(--vdms-line, rgba(16,84,138,0.13))', display: 'flex', flexDirection: 'column', gap: 8,
   };
 
   if (state.loading || state.pending) {
@@ -136,7 +136,7 @@ export function VesselDocumentPanel({ host, vesselName, siteKey }: { host: Vesse
         </span>
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <span style={{ fontSize: 24, fontWeight: 800, color: 'var(--vdms-text)', letterSpacing: '-0.02em' }}>{row.total.toLocaleString()}</span>
+        <span style={{ fontSize: 20, fontWeight: 800, color: 'var(--vdms-text)', letterSpacing: '-0.02em' }}>{row.total.toLocaleString()}</span>
         <span style={{ fontSize: 12.5, color: 'var(--vdms-text-muted)' }}>documents · {formatBytes(row.size_bytes)}</span>
       </div>
       {/* Proportion bar */}

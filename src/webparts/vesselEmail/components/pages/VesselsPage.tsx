@@ -2034,7 +2034,7 @@ function renderVesselActionPicker(host: VesselEmail): React.ReactElement {
 
 export function renderVesselsPage(host: VesselEmail): React.ReactElement {
     const {
-      vessels, vesselsSearch, vesselStatusFilter, vesselTypeFilter,
+      vessels, vesselsSearch, vesselStatusFilter,
       modal, selectedVessel, folderProvisioningVesselId, folderCreationError,
       folderCreationResults, panelLoading, loading,
     } = host.state;
@@ -2101,7 +2101,6 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
 
     const filtered = vessels.filter(v => {
       if (vesselStatusFilter !== 'all' && (v.status || 'Active') !== vesselStatusFilter) return false;
-      if (vesselTypeFilter && vesselTypeFilter !== 'all' && (v.vessel_type || '') !== vesselTypeFilter) return false;
       if (host.state.vesselSiteFilter && host.state.vesselSiteFilter !== 'all') {
         const selectedSiteKey = host.state.vesselSiteFilter;
         // Rows fetched with /api/vessels?site_key=<site> were already scoped
@@ -2162,7 +2161,6 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
     }));
 
     // All unique vessel types for filter dropdown
-    const allTypes = Array.from(new Set(vessels.map(v => v.vessel_type).filter(Boolean))) as string[];
 
     const isLoading = panelLoading || (loading && vessels.length === 0);
 
@@ -2251,7 +2249,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
             <Icon iconName="Search" aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--vdms-text-faint)', fontSize: 14 }} />
             <input
               type="text"
-              placeholder="Search by name, IMO, type, shipyard…"
+              placeholder="Search vessels…"
               value={vesselsSearch}
               onChange={e => host.setState({ vesselsSearch: e.target.value })}
               style={{ ...dmsControlStyle(), width: '100%', padding: '10px 14px 10px 38px', boxSizing: 'border-box' }}
@@ -2266,14 +2264,6 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
             <option value="Active">Active</option>
             <option value="In Maintenance">In Maintenance</option>
             <option value="Inactive">Inactive</option>
-          </select>
-          <select
-            value={vesselTypeFilter || 'all'}
-            onChange={e => host.setState({ vesselTypeFilter: e.target.value })}
-            style={{ ...dmsControlStyle(), padding: '10px 14px', minWidth: 140 }}
-          >
-            <option value="all">All Types</option>
-            {allTypes.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
           <select
             value={host.state.vesselSiteFilter || 'all'}
@@ -2292,7 +2282,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
             <option value="all">All SharePoint Sites</option>
             {siteOptions.map(site => <option key={site.key} value={site.key}>{site.label}</option>)}
           </select>
-          {(vesselsSearch || vesselStatusFilter !== 'all' || (vesselTypeFilter && vesselTypeFilter !== 'all') || (host.state.vesselSiteFilter && host.state.vesselSiteFilter !== 'all')) && (
+          {(vesselsSearch || vesselStatusFilter !== 'all' || (host.state.vesselSiteFilter && host.state.vesselSiteFilter !== 'all')) && (
             <button
               onClick={() => {
                 const siteFilterWasScoped = !!host.state.vesselSiteFilter && host.state.vesselSiteFilter !== 'all';
@@ -2390,7 +2380,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
           </DmsEmptyState>
         ) : (
           /* ── Vessel Cards Grid ── */
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
             {filtered.map(vessel => {
               const isSelected = selectedVessel?.id === vessel.id;
               const status = vessel.status || 'Active';
@@ -2433,7 +2423,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                       generated in vesselImagePool.ts (deep gradient + faint
                       engraved texture + a minimal type glyph watermark), no
                       cartoon illustration overlay. */}
-                  <div style={{ position: 'relative', height: 140, overflow: 'hidden', background: '#101826' }}>
+                  <div style={{ position: 'relative', height: 96, overflow: 'hidden', background: '#101826' }}>
                     <img
                       className="vessel-card-image"
                       src={resolveImgUrl(imgSrc)}
@@ -2467,7 +2457,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                     {/* Vessel name + type, set on a legibility scrim */}
                     <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '20px 16px 12px' }}>
                       <p style={{
-                        margin: 0, fontFamily: vdmsFont.display, fontSize: 17, fontWeight: 800, color: DMS_ON_ACCENT, letterSpacing: '-0.02em',
+                        margin: 0, fontFamily: vdmsFont.display, fontSize: 15, fontWeight: 800, color: DMS_ON_ACCENT, letterSpacing: '-0.02em',
                         textShadow: '0 1px 6px rgba(0,0,0,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                       }}>
                         {vessel.name}
@@ -2485,7 +2475,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                   </div>
 
                   {/* Card body */}
-                  <div style={{ padding: '16px 18px', flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ padding: '12px 14px', flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {(() => {
                       const draftKey = host._discoveredVesselKey(vessel);
                       const draft = host.state.discoveredVesselDrafts[draftKey];
