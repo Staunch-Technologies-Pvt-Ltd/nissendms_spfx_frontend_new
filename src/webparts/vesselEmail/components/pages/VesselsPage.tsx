@@ -2496,156 +2496,16 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
 
                   {/* Card body */}
                   <div style={{ padding: '12px 14px', flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {(() => {
-                      const draftKey = host._discoveredVesselKey(vessel);
-                      const draft = host.state.discoveredVesselDrafts[draftKey];
-                      const imoVal = isSharePointOnly ? (draft?.imo ?? vessel.imo ?? '') : (vessel.imo || '—');
-                      const hullVal = isSharePointOnly ? (draft?.hull_number ?? vessel.hull_number ?? '') : (vessel.hull_number || '—');
-                      const editableInputStyle: React.CSSProperties = {
-                        width: '100%', marginTop: 2, padding: '6px 10px', fontSize: 13, fontWeight: 600, color: clay.text,
-                        border: '1px solid var(--vdms-line-strong, rgba(16,84,138,0.26))', borderRadius: 10, boxSizing: 'border-box', background: 'var(--vdms-field, rgba(255,255,255,0.72))',
-                      };
-
-                      // Regular ("dms"-source) vessel cards: any of these four
-                      // fields that's still empty gets a directly-editable
-                      // control here. Blurring (or, for Type, selecting) it
-                      // opens a confirmation dialog (host._requestSaveVesselField
-                      // / renderVesselFieldConfirmDialog) rather than saving
-                      // straight away, and once the PATCH /api/vessels/{id}
-                      // (host._saveVesselField) succeeds the field has a saved
-                      // value and is rendered locked/read-only below — each of
-                      // these fields can be set exactly once from the card, not
-                      // edited back and forth. This is different from the
-                      // deferred discoveredVesselDrafts/"Confirm" flow the
-                      // "Found in SharePoint" cards use above.
-                      const fieldDraft = host.state.vesselFieldDrafts[vessel.id] || {};
-                      const renderEditableField = (
-                        field: 'imo' | 'hull_number' | 'shipyard' | 'vessel_type',
-                        placeholder: string,
-                      ): React.ReactElement => {
-                        const fieldKey = `${vessel.id}:${field}`;
-                        const saving = !!host.state.vesselFieldSaving[fieldKey];
-                        const error = host.state.vesselFieldError[fieldKey];
-                        const savedVal = (vessel as any)[field] || '';
-
-                        // Already saved once — lock it. No more edits from the
-                        // card; a correction has to go through the full "Edit
-                        // Vessel" form instead of this one-shot inline field.
-                        if (savedVal) {
-                          return (
-                            <p style={{
-                              margin: '2px 0 0', fontSize: 13, fontWeight: 600, color: clay.text,
-                              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                            }}>
-                              {savedVal}
-                            </p>
-                          );
-                        }
-
-                        // Fall back to '' when there's no in-progress edit yet
-                        // (the field is empty, or the field is not empty but
-                        // isn't rendered as an input at all — see above).
-                        const draftVal = fieldDraft[field] ?? '';
-                        return (
-                          <>
-                            {field === 'vessel_type' ? (
-                              <select
-                                value={draftVal}
-                                disabled={saving}
-                                onClick={e => e.stopPropagation()}
-                                onChange={e => {
-                                  const val = e.target.value;
-                                  host._updateVesselFieldDraft(vessel, field, val);
-                                  if (val) host._requestSaveVesselField(vessel, field, val);
-                                }}
-                                style={editableInputStyle}
-                              >
-                                <option value="">{placeholder}</option>
-                                {VESSEL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                              </select>
-                            ) : (
-                              <input
-                                type="text"
-                                value={draftVal}
-                                placeholder={placeholder}
-                                disabled={saving}
-                                onClick={e => e.stopPropagation()}
-                                onChange={e => host._updateVesselFieldDraft(vessel, field, e.target.value)}
-                                onBlur={e => host._requestSaveVesselField(vessel, field, e.target.value)}
-                                style={editableInputStyle}
-                              />
-                            )}
-                            {error && (
-                              <p style={{ margin: '2px 0 0', fontSize: 10, color: dmsTone('danger').fg }}>{error}</p>
-                            )}
-                          </>
-                        );
-                      };
-
-                      // The Vessels page is for document management: a
-                      // registered vessel's card shows its documents
-                      // (count, size, last update, Drawings / Manuals / To
-                      // Be Classified) instead of ship particulars, which
-                      // stay editable in the Edit Vessel form. Only the
-                      // "Found in SharePoint" cards keep the IMO / Hull No.
-                      // inputs, because Confirm Vessel needs an IMO.
-                      if (!isSharePointOnly) {
-                        const summarySite = String((vessel as any)._fetched_for_site || host.state.vesselSiteFilter || 'all');
-                        return <VesselDocumentPanel host={host} vesselName={vessel.name} siteKey={summarySite} />;
-                      }
-                      return (
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px' }}>
-                          <div>
-                            <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>IMO</span>
-                            {isSharePointOnly ? (
-                              <input
-                                type="text"
-                                value={imoVal}
-                                placeholder="7-digit IMO"
-                                onClick={e => e.stopPropagation()}
-                                onChange={e => host._updateDiscoveredVesselDraft(vessel, 'imo', e.target.value)}
-                                style={editableInputStyle}
-                              />
-                            ) : (
-                              // Editable only while empty, and only once — see
-                              // renderEditableField above.
-                              renderEditableField('imo', '7-digit IMO')
-                            )}
-                          </div>
-                          <div>
-                            <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>Type</span>
-                            {!isSharePointOnly ? (
-                              renderEditableField('vessel_type', 'Select type')
-                            ) : (
-                              <p style={{ margin: '2px 0 0', fontSize: 13, color: clay.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{vessel.vessel_type || '—'}</p>
-                            )}
-                          </div>
-                          <div>
-                            <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>Shipyard</span>
-                            {!isSharePointOnly ? (
-                              renderEditableField('shipyard', 'Shipyard')
-                            ) : (
-                              <p style={{ margin: '2px 0 0', fontSize: 13, color: clay.text, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{vessel.shipyard || '—'}</p>
-                            )}
-                          </div>
-                          <div>
-                            <span style={{ fontFamily: vdmsFont.mono, fontSize: 10, color: 'var(--vdms-text-3, #52708a)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em' }}>Hull No.</span>
-                            {isSharePointOnly ? (
-                              <input
-                                type="text"
-                                value={hullVal}
-                                placeholder="Hull number"
-                                onClick={e => e.stopPropagation()}
-                                onChange={e => host._updateDiscoveredVesselDraft(vessel, 'hull_number', e.target.value)}
-                                style={editableInputStyle}
-                              />
-                            ) : (
-                              renderEditableField('hull_number', 'Hull number')
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })()}
+                    {/* The Vessels page is for viewing documents: every card —
+                        registered or "Found in SharePoint" — shows the vessel's
+                        documents (Drawings / Manuals / To Be Classified, last
+                        update) instead of ship particulars, which stay
+                        editable in the Edit Vessel form. */}
+                    <VesselDocumentPanel
+                      host={host}
+                      vesselName={vessel.name}
+                      siteKey={String((vessel as any)._fetched_for_site || host.state.vesselSiteFilter || vessel.provisioned_site_key || 'all')}
+                    />
 
                     {/* Location: which site and where in it the vessel's folder is.
                         The path is always shown (— when still unknown); most
@@ -2685,50 +2545,23 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                       </span>
                     </div>
 
-                    {isSharePointOnly && (() => {
-                      const confirmKey = host._discoveredVesselKey(vessel);
-                      const isConfirming = host.state.confirmingVesselKey === confirmKey;
-                      const confirmError = host.state.discoveredVesselConfirmError[confirmKey];
-                      return (
-                        <>
-                          <button
-                            onClick={e => { e.stopPropagation(); host._confirmDiscoveredVessel(vessel).catch(() => undefined); }}
-                            disabled={isConfirming}
-                            title="Save the IMO/Hull No. above and register this SharePoint folder as a DMS vessel record (no new folder is created)"
-                            style={{ ...dmsBtn('primary', !isConfirming), marginTop: 2, width: '100%' }}
-                          >
-                            {isConfirming ? 'Confirming…' : <><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} /> Confirm Vessel</>}
-                          </button>
-                          {confirmError && (
-                            <p style={{ margin: '2px 0 0', fontSize: 11, color: dmsTone('danger').fg, fontWeight: 600 }}>
-                              <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 11 }} /> {confirmError}
-                            </p>
-                          )}
-                        </>
-                      );
-                    })()}
 
                     {/* Action buttons */}
                     <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                       <button
-                        disabled={isSharePointOnly}
                         onClick={async e => {
                           e.stopPropagation();
-                          // A "Found in SharePoint" row has no DB vessel_id yet and
-                          // its vessel_folder_path is just its bare folder name, not
-                          // a real Graph drive-item id — the placeholder-id-to-real-id
-                          // resolution below is best-effort name matching and can
-                          // land on the wrong folder or none at all, which is what
-                          // produced "Couldn't load this folder" for these cards.
-                          // Confirm the vessel first (button above) so it has a real
-                          // DB record before browsing its documents.
-                          if (isSharePointOnly) return;
+                          // "Found in SharePoint" rows are view-only: their
+                          // vessel_folder_path is the real "root/child" path
+                          // when the site's vessel folders are chosen (else
+                          // just the name, found at the root or one level down
+                          // by the folder walk below).
                           // No recorded folder path (e.g. a vessel discovered
                           // from SharePoint): ask the backend to find its folder
                           // by name in its own site and save it, so navigation
                           // opens the real folder instead of guessing that it
                           // sits at the library root.
-                          if (!vessel.vessel_folder_path && vessel.id) {
+                          if (!isSharePointOnly && !vessel.vessel_folder_path && vessel.id) {
                             try {
                               const r = await fetch(`${host._base()}/api/vessel-folder-template/locate/${encodeURIComponent(String(vessel.id))}`, { headers: host._headers() });
                               const loc = r.ok ? await r.json() : null;
