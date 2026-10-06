@@ -86,8 +86,13 @@ export class MigrationApi {
     return request(this.baseUrl, '/api/migration-assistant/health', this.actingEmail, this.sessionId);
   }
 
-  listSourceFolders(path?: string): Promise<{ path: string; folders: SourceFolder[]; files: SourceFile[] }> {
-    const qs = path ? `?path=${encodeURIComponent(path)}` : '';
+  /** Folders/files under `path` in the picked source library (`source`),
+   *  or in the configured default source when none is picked. */
+  listSourceFolders(path?: string, source?: { siteKey: string; driveId: string } | null): Promise<{ path: string; folders: SourceFolder[]; files: SourceFile[] }> {
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    if (source) { params.set('site_key', source.siteKey); params.set('drive_id', source.driveId); }
+    const qs = params.toString() ? `?${params.toString()}` : '';
     return request(this.baseUrl, `/api/migration-assistant/migration/source-folders${qs}`, this.actingEmail, this.sessionId);
   }
 
@@ -103,11 +108,15 @@ export class MigrationApi {
     sourceFolder: string,
     subfolders: string[],
     vesselPath: string,
-    files: string[] = []
+    files: string[] = [],
+    source?: { siteKey: string; driveId: string } | null
   ): Promise<MigrationScanJob> {
     return request(this.baseUrl, '/api/migration-assistant/migration/scan', this.actingEmail, this.sessionId, {
       method: 'POST',
-      body: JSON.stringify({ source_folder: sourceFolder, subfolders, vessel_path: vesselPath, files }),
+      body: JSON.stringify({
+        source_folder: sourceFolder, subfolders, vessel_path: vesselPath, files,
+        source_site_key: source?.siteKey ?? null, source_drive_id: source?.driveId ?? null,
+      }),
     });
   }
 

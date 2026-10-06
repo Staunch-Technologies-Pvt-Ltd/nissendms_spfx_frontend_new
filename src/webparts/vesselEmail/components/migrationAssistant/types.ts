@@ -44,6 +44,10 @@ export interface MigrationScanJob {
   id: string;
   status: 'running' | 'done' | 'failed';
   source_folder: string;
+  /** Picked source site key (null = the configured default source). */
+  source_site_key?: string | null;
+  source_site_label?: string;
+  source_drive_id?: string | null;
   subfolders: string[];
   files: string[];
   vessel_name: string;

@@ -7,7 +7,7 @@ import { Icon } from '@fluentui/react/lib/Icon';
 import { MigrationApi, errDetail } from './api';
 import { fileIconName, formatSize } from './fileUtils';
 import { pill, primaryBtn, secondaryBtn, tokens, error as errColor, success as successColor, warning as warnColor } from './styles';
-import type { ConfirmSummary, MigrationItem, MigrationScanJob, SourceFile, SourceFolder } from './types';
+import type { ConfirmSummary, MigrationItem, MigrationScanJob, S2SDrive, S2SSite, SourceFile, SourceFolder } from './types';
 
 type Step = 'source' | 'subfolders' | 'vessel' | 'scanning' | 'preview' | 'summary';
 
@@ -30,6 +30,15 @@ export function MigrationScanTab({ api, isNight, actingEmail }: { api: Migration
   const t = tokens(isNight);
   const [step, setStep] = React.useState<Step>('source');
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
+
+  // Source site + library, picked from the same list as Site-to-Site (the
+  // DMS's Site Management sites). Nothing picked = the configured default.
+  const [sites, setSites] = React.useState<S2SSite[]>([]);
+  const [sourceSite, setSourceSite] = React.useState<S2SSite | null>(null);
+  const [sourceDrives, setSourceDrives] = React.useState<S2SDrive[]>([]);
+  const [sourceDrive, setSourceDrive] = React.useState<S2SDrive | null>(null);
+  const [drivesLoading, setDrivesLoading] = React.useState(false);
+  const source = sourceSite && sourceDrive ? { siteKey: sourceSite.key, driveId: sourceDrive.id } : null;
 
   const [browsePath, setBrowsePath] = React.useState('');
   const [browseFolders, setBrowseFolders] = React.useState<SourceFolder[]>([]);
@@ -65,7 +74,7 @@ export function MigrationScanTab({ api, isNight, actingEmail }: { api: Migration
       setBrowseLoading(true);
       setErrorMsg(null);
       try {
-        const data = await api.listSourceFolders(path || undefined);
+        const data = await api.listSourceFolders(path || undefined, source);
         setBrowsePath(data.path);
         setBrowseFolders(data.folders);
         setBrowseFiles(data.files);
@@ -75,13 +84,40 @@ export function MigrationScanTab({ api, isNight, actingEmail }: { api: Migration
         setBrowseLoading(false);
       }
     },
-    [api]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [api, sourceSite, sourceDrive]
   );
 
   React.useEffect(() => {
-    if (step === 'source') void loadBrowse(browsePath);
+    api.listS2SSites().then(setSites).catch(() => setSites([]));
+  }, [api]);
+
+  React.useEffect(() => {
+    // A site picked without a library yet: wait for the library choice.
+    if (step === 'source' && (!sourceSite || sourceDrive)) void loadBrowse(browsePath);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, browsePath]);
+  }, [step, browsePath, sourceSite, sourceDrive]);
+
+  const pickSourceSite = async (site: S2SSite | null): Promise<void> => {
+    setSourceSite(site);
+    setSourceDrive(null);
+    setSourceDrives([]);
+    setBrowsePath('');
+    setBrowseFolders([]);
+    setBrowseFiles([]);
+    if (!site) return;
+    setDrivesLoading(true);
+    setErrorMsg(null);
+    try {
+      const drives = await api.listS2SSiteDrives(site.key);
+      setSourceDrives(drives);
+      if (drives.length === 1) setSourceDrive(drives[0]);
+    } catch (e) {
+      setErrorMsg(errDetail(e, 'Could not load the libraries of this site.'));
+    } finally {
+      setDrivesLoading(false);
+    }
+  };
 
   const crumbs = browsePath.split('/').filter(Boolean);
 
@@ -93,7 +129,7 @@ export function MigrationScanTab({ api, isNight, actingEmail }: { api: Migration
     setErrorMsg(null);
     setStep('subfolders');
     try {
-      const data = await api.listSourceFolders(folder.path);
+      const data = await api.listSourceFolders(folder.path, source);
       setSubfolderOptions(data.folders);
       setSubfolderFiles(data.files);
     } catch (e) {
@@ -174,7 +210,7 @@ export function MigrationScanTab({ api, isNight, actingEmail }: { api: Migration
     setStep('scanning');
     setErrorMsg(null);
     try {
-      const newJob = await api.startMigrationScan(sourceFolder.path, Array.from(checkedSubfolders), vessel.path, Array.from(checkedFiles));
+      const newJob = await api.startMigrationScan(sourceFolder.path, Array.from(checkedSubfolders), vessel.path, Array.from(checkedFiles), source);
       setJob(newJob);
       pollJob(newJob.id);
     } catch (e) {
@@ -318,6 +354,10 @@ export function MigrationScanTab({ api, isNight, actingEmail }: { api: Migration
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {step === 'source' && (
+          <SourcePicker sites={sites} site={sourceSite} drives={sourceDrives} drive={sourceDrive} loading={drivesLoading} isNight={isNight}
+            onPickSite={(s) => void pickSourceSite(s)} onPickDrive={(d) => { setSourceDrive(d); setBrowsePath(''); }} />
+        )}
+        {step === 'source' && (!sourceSite || sourceDrive) && (
           <div style={{ borderRadius: 14, border: `1px solid ${t.border}`, background: t.surface }}>
             <div style={{ padding: '12px 14px', borderBottom: `1px solid ${t.border}` }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -329,7 +369,9 @@ export function MigrationScanTab({ api, isNight, actingEmail }: { api: Migration
                 )}
               </div>
               <div style={{ marginTop: 4, fontSize: 11, color: t.textSubtle, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                <a onClick={() => setBrowsePath('')} style={{ cursor: 'pointer', color: t.textMuted }}>Documents</a>
+                <a onClick={() => setBrowsePath('')} style={{ cursor: 'pointer', color: t.textMuted }}>
+                  {sourceSite && sourceDrive ? `${sourceSite.label} / ${sourceDrive.name}` : 'Default source / Documents'}
+                </a>
                 {crumbs.map((c, i) => (
                   <span key={i} style={{ display: 'flex', gap: 4 }}>
                     <Icon iconName="ChevronRight" style={{ fontSize: 9 }} />
@@ -688,6 +730,44 @@ function FilePreviewDrawer({ api, item, jobId, isNight, actingEmail, onClose }: 
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Step 1, first: which site and library to take documents from. Sites are
+ *  the DMS's Site Management sites (same list as Site-to-Site). */
+function SourcePicker({ sites, site, drives, drive, loading, isNight, onPickSite, onPickDrive }: {
+  sites: S2SSite[]; site: S2SSite | null; drives: S2SDrive[]; drive: S2SDrive | null; loading: boolean; isNight: boolean;
+  onPickSite: (s: S2SSite | null) => void; onPickDrive: (d: S2SDrive) => void;
+}): React.ReactElement {
+  const t = tokens(isNight);
+  const chip = (active: boolean): React.CSSProperties => ({
+    borderRadius: 8, border: `1px solid ${active ? 'var(--clay-accent)' : t.border}`, background: active ? 'var(--clay-accent-soft)' : 'transparent',
+    color: active ? 'var(--clay-accent)' : t.text, padding: '6px 12px', fontSize: 12, cursor: 'pointer',
+  });
+  const label: React.CSSProperties = { fontSize: 11, fontWeight: 700, color: t.textMuted, textTransform: 'uppercase' };
+  return (
+    <div style={{ borderRadius: 14, border: `1px solid ${t.border}`, background: t.surface, padding: '12px 14px', marginBottom: 12 }}>
+      <div style={label}>Source site</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+        <button style={chip(site === null)} onClick={() => onPickSite(null)}>Default source</button>
+        {sites.map((s) => <button key={s.key} style={chip(site?.key === s.key)} onClick={() => onPickSite(s)}>{s.label}</button>)}
+      </div>
+      <div style={{ fontSize: 11, color: t.textSubtle, marginTop: 4 }}>
+        Sites come from Sites → Site Management; add a site there to take documents from it.
+      </div>
+      {site && (
+        <>
+          <div style={{ ...label, marginTop: 12 }}>Library</div>
+          {loading ? <div style={{ fontSize: 12, color: t.textMuted, marginTop: 6 }}>Loading…</div> : drives.length === 0 ? (
+            <div style={{ fontSize: 12, color: t.textMuted, marginTop: 6 }}>No document library found on this site.</div>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+              {drives.map((d) => <button key={d.id} style={chip(drive?.id === d.id)} onClick={() => onPickDrive(d)}>{d.name}</button>)}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
