@@ -6387,14 +6387,16 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
         {/* Module Header — left title column has a fixed, non-shrinking
             width so the right-side site selector / action row can never
-            compress it; the right side stacks the site selector above a
-            single-row action bar (own overflow scroll) so neither can ever
-            overlap the other. White rounded card (matching Settings → Site
+            compress it; the right side stacks the site selector above the
+            action bar, which wraps onto a second line when it doesn't fit
+            (a sideways-scrolling, right-aligned row cut its first buttons
+            off with no way to reach them). The whole right side drops below
+            the title on narrow screens. White rounded card (matching Settings → Site
             Management's card style) instead of sitting directly on the
             sticky wrapper's flat background, per the "Shared Documents"
             reference design. */}
         <div className="dms-docs-head" style={{
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'nowrap', gap: 16,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16,
           background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-line)',
           boxShadow: clay.shadowRaised, padding: '16px 18px', boxSizing: 'border-box',
         }}>
@@ -6431,7 +6433,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
            </div>
           </div>
 
-          <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+          <div style={{ flex: '1 1 460px', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
 
           {/* Top row — SharePoint site selector only. Never positioned
               absolutely, so it simply takes its own row above the action
@@ -6460,10 +6462,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             </label>
           )}
 
-          {/* Bottom row — every action button in one horizontal, non-wrapping
-              row (its own overflow scroll if the viewport is too narrow), so
-              it can never overlap the site selector above it. */}
-          <div style={{ minWidth: 0, maxWidth: '100%', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'nowrap', gap: 6, overflowX: 'auto' }}>
+          {/* Bottom row — the action buttons, right-aligned; they wrap onto
+              another line when the space runs out instead of being clipped. */}
+          <div style={{ minWidth: 0, maxWidth: '100%', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 6, rowGap: 8 }}>
 
             {/* New Folder Button — sits just before Archive. In the plain
                 SharePoint folder tree (Sites / Shared Documents / Documents)
@@ -6692,7 +6693,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               };
 
               return (
-                <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'nowrap' }}>
+                <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   {/* 1. Upload Multiple Files — the page's primary action
                       (CSS `order` keeps it right-most, next to the view toggle). */}
                   <label className="dms-btn dms-btn-primary" style={{ ...dmsBtn('primary'), order: 2 }}>
@@ -6895,15 +6896,26 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 onChange={(_, option) => applyVesselFilterSelection(String(option?.key ?? ''))}
                 dropdownWidth={0}
                 calloutProps={{ className: 'dms-filter-callout' }}
-                options={[
-                  ...(!mainFolderPage ? [{ key: 'all', text: 'All vessels' }] : [{ key: '', text: 'Select vessel' }]),
-                  ...(docScopeType === 'vessels' && mainFolderPage
-                    ? vesselFilterOptions.map(v => ({ key: v.name, text: v.name }))
-                    : docScopeType === 'sites'
-                      ? siteVesselOptions.map(v => ({ key: v.name, text: v.name }))
-                      : (docScopeType === 'shared_docs' || docScopeType === 'documents' ? libraryVesselOptions : distinctVesselsInScope)
-                        .map(vName => ({ key: vName, text: vName }))),
-                ]}
+                options={((): { key: string; text: string }[] => {
+                  const opts = [
+                    ...(!mainFolderPage ? [{ key: 'all', text: 'All vessels' }] : [{ key: '', text: 'Select vessel' }]),
+                    ...(docScopeType === 'vessels' && mainFolderPage
+                      ? vesselFilterOptions.map(v => ({ key: v.name, text: v.name }))
+                      : docScopeType === 'sites'
+                        ? siteVesselOptions.map(v => ({ key: v.name, text: v.name }))
+                        : (docScopeType === 'shared_docs' || docScopeType === 'documents' ? libraryVesselOptions : distinctVesselsInScope)
+                          .map(vName => ({ key: vName, text: vName }))),
+                  ];
+                  // The selected vessel must always be one of the choices —
+                  // e.g. arriving from the Vessels page's "View Documents" for
+                  // a vessel kept under a main folder ("Technical and Crewing
+                  // New/<Vessel>") that the site-root vessel list doesn't
+                  // include. Otherwise the box renders blank.
+                  if (vesselFilter && vesselFilter !== 'all' && !opts.some(o => o.key === vesselFilter)) {
+                    opts.splice(1, 0, { key: vesselFilter, text: vesselFilter });
+                  }
+                  return opts;
+                })()}
                 styles={styleProps => dmsCompactDropdownStyles(styleProps)}
               />
             )}
@@ -6964,7 +6976,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   }
                 }
               }}
-              style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
+              title={mainFolderSelectValue && mainFolderSelectValue !== 'all' ? String(mainFolderSelectValue) : undefined}
+              style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 240 }}
             >
               <option value="all">All main folders</option>
               {mainFolderOptions.map(folder => <option key={folder} value={folder} disabled={mainFolderOptionFaded(folder)}>{folder}</option>)}
