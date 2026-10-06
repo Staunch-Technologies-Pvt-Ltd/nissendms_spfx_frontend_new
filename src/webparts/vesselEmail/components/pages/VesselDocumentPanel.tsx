@@ -132,12 +132,8 @@ export function VesselDocumentPanel({ host, vesselName, siteKey }: { host: Vesse
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
         <span style={label}>Documents</span>
         <span style={{ fontSize: 11.5, color: 'var(--vdms-text-muted)' }} title={row.last_modified_by ? `Last change by ${row.last_modified_by}` : undefined}>
-          Updated {formatWhen(row.last_modified_epoch)}
+          Updated {formatWhen(row.last_modified_epoch)} · {formatBytes(row.size_bytes)}
         </span>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <span style={{ fontSize: 20, fontWeight: 800, color: 'var(--vdms-text)', letterSpacing: '-0.02em' }}>{row.total.toLocaleString()}</span>
-        <span style={{ fontSize: 12.5, color: 'var(--vdms-text-muted)' }}>documents · {formatBytes(row.size_bytes)}</span>
       </div>
       {/* Proportion bar */}
       <div style={{ display: 'flex', height: 6, borderRadius: 999, overflow: 'hidden', background: 'var(--vdms-surface-alt, #eef2f6)' }}>

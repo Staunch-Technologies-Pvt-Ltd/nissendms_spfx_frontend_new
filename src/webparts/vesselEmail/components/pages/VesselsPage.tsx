@@ -2703,6 +2703,26 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                           // Confirm the vessel first (button above) so it has a real
                           // DB record before browsing its documents.
                           if (isSharePointOnly) return;
+                          // No recorded folder path (e.g. a vessel discovered
+                          // from SharePoint): ask the backend to find its folder
+                          // by name in its own site and save it, so navigation
+                          // opens the real folder instead of guessing that it
+                          // sits at the library root.
+                          if (!vessel.vessel_folder_path && vessel.id) {
+                            try {
+                              const r = await fetch(`${host._base()}/api/vessel-folder-template/locate/${encodeURIComponent(String(vessel.id))}`, { headers: host._headers() });
+                              const loc = r.ok ? await r.json() : null;
+                              if (loc?.found && loc.folder_path) {
+                                Object.assign(vessel, {
+                                  vessel_folder_path: loc.folder_path,
+                                  provisioned_site_key: vessel.provisioned_site_key || loc.site_key,
+                                });
+                                host.setState({ vessels: [...host.state.vessels] });
+                              }
+                            } catch {
+                              // Fall back to the old best-effort navigation below.
+                            }
+                          }
                           const nav = resolveVesselDocumentNavigation(host, vessel);
                           const navSite = nav.folderPathStack.length >= 2
                             ? (host.state.documentSites || []).find(site =>
@@ -2748,15 +2768,19 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                             const resolveDriveId = resolvedDriveId;
                             try {
                               const stripPrefix = (s: string) => s.replace(/^(mv|m\/v|m\.v\.|mt|m\/t|m\.t\.)\s+/i, '');
+                              // Compare with runs of spaces collapsed: SharePoint folders such as
+                              // "Technical and Crewing  New" (two spaces) must match the cleaned
+                              // segment names built by resolveVesselDocumentNavigation.
+                              const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
                               const resolvedPath = folderPathStack.slice(0, 3);
                               let parentId = 'root';
                               for (let i = 3; i < folderPathStack.length; i++) {
-                                const segName = folderPathStack[i].name.trim().toLowerCase();
+                                const segName = norm(folderPathStack[i].name);
                                 // eslint-disable-next-line no-await-in-loop
                                 const children = await host._loadAndCacheSiteFolderChildren(resolveSiteId, resolveDriveId, parentId);
                                 const match = (children || []).find((item: any) => !!item.folder && (
-                                  (item.name || '').trim().toLowerCase() === segName ||
-                                  stripPrefix((item.name || '').trim().toLowerCase()) === stripPrefix(segName)
+                                  norm(item.name) === segName ||
+                                  stripPrefix(norm(item.name)) === stripPrefix(segName)
                                 ));
                                 if (!match?.id) {
                                   // A vessel with no recorded folder path sits under its
@@ -2770,8 +2794,8 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                                       // eslint-disable-next-line no-await-in-loop
                                       const kids = await host._loadAndCacheSiteFolderChildren(resolveSiteId, resolveDriveId, mainFolder.id);
                                       const hit = (kids || []).find((item: any) => !!item.folder && !!item.id && (
-                                        (item.name || '').trim().toLowerCase() === segName ||
-                                        stripPrefix((item.name || '').trim().toLowerCase()) === stripPrefix(segName)
+                                        norm(item.name) === segName ||
+                                        stripPrefix(norm(item.name)) === stripPrefix(segName)
                                       ));
                                       if (hit) {
                                         resolvedPath.push({ id: mainFolder.id, name: mainFolder.name }, { id: hit.id, name: hit.name || folderPathStack[i].name });
