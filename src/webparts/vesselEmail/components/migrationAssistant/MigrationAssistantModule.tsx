@@ -40,14 +40,18 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
 export function MigrationAssistantModule({ apiBaseUrl, sessionId, actingEmail, isNight }: IMigrationAssistantModuleProps): React.ReactElement {
   const t = tokens(isNight);
   const [tab, setTab] = React.useState<Tab>('migration');
-  const [health, setHealth] = React.useState<'checking' | 'ok' | 'unreachable'>('checking');
+  const [health, setHealth] = React.useState<'checking' | 'ok' | 'not_configured' | 'unreachable'>('checking');
 
   const api = React.useMemo(() => new MigrationApi(apiBaseUrl, actingEmail || 'unknown', sessionId || ''), [apiBaseUrl, actingEmail, sessionId]);
 
   React.useEffect(() => {
     let cancelled = false;
     setHealth('checking');
-    api.health().then(() => !cancelled && setHealth('ok')).catch(() => !cancelled && setHealth('unreachable'));
+    // "configured: false" means the backend is up but has no Migration
+    // Assistant settings (backend/.env.migration) — say so instead of green.
+    api.health()
+      .then((h) => !cancelled && setHealth(h.configured ? 'ok' : 'not_configured'))
+      .catch(() => !cancelled && setHealth('unreachable'));
     return () => { cancelled = true; };
   }, [api]);
 
@@ -79,8 +83,11 @@ export function MigrationAssistantModule({ apiBaseUrl, sessionId, actingEmail, i
           </button>
         ))}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: t.textSubtle, paddingRight: 4 }}>
-          <span style={{ width: 7, height: 7, borderRadius: 999, background: health === 'ok' ? '#16a34a' : health === 'checking' ? '#d97706' : '#dc2626' }} />
-          {health === 'ok' ? 'Migration Assistant connected' : health === 'checking' ? 'Checking Migration Assistant…' : `Migration Assistant unreachable at ${apiBaseUrl}`}
+          <span style={{ width: 7, height: 7, borderRadius: 999, background: health === 'ok' ? '#16a34a' : health === 'unreachable' ? '#dc2626' : '#d97706' }} />
+          {health === 'ok' ? 'Migration Assistant connected'
+            : health === 'checking' ? 'Checking Migration Assistant…'
+            : health === 'not_configured' ? 'Migration Assistant not configured on the server (backend/.env.migration missing)'
+            : `Migration Assistant unreachable at ${apiBaseUrl}`}
         </div>
       </div>
       <div style={{ flex: 1, overflow: 'hidden', paddingTop: 14, display: 'flex', flexDirection: 'column' }}>
