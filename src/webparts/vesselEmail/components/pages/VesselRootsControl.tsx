@@ -21,7 +21,7 @@ async function readError(r: Response): Promise<string> {
   try { const j = await r.json(); return (j && (j.detail || j.message)) || `HTTP ${r.status}`; } catch { return `HTTP ${r.status}`; }
 }
 
-export function VesselRootsControl({ host, siteKey }: { host: VesselEmail; siteKey: string }): React.ReactElement {
+export function VesselRootsControl({ host, siteKey, onSaved }: { host: VesselEmail; siteKey: string; onSaved?: () => void }): React.ReactElement {
   const [saved, setSaved] = React.useState<RootsState | null>(null);
   const [loadError, setLoadError] = React.useState('');
   const [open, setOpen] = React.useState(false);
@@ -81,6 +81,7 @@ export function VesselRootsControl({ host, siteKey }: { host: VesselEmail; siteK
       if (!r.ok) throw new Error(await readError(r));
       await load();
       setOpen(false);
+      onSaved?.();
     } catch (e) {
       setError((e as Error).message);
     } finally {

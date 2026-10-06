@@ -22,6 +22,7 @@ import { KAIZEN_KNOWLEDGE_BANK_TREE, MAIN_FOLDERS } from '../vesselFolderTemplat
 import { isMobileWidth } from '../responsive';
 import { clay } from '../clayTheme';
 import { VesselDocumentPanel, clearVesselSummaryCache } from './VesselDocumentPanel';
+import { VesselRootsControl } from './VesselRootsControl';
 import { vdmsFont } from '../futuristicTheme';
 import {
   DmsPageHeader, dmsControlStyle, dmsBtn, dmsTone, DmsLoadingState, DmsEmptyState,
@@ -2300,6 +2301,25 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
             {filtered.length} vessel{filtered.length !== 1 ? 's' : ''}
           </span>
         </div>
+
+        {/* Where this site's vessel folders are — the same setting as Sites →
+            Site Management, here so a wrong "Found in SharePoint" suggestion
+            can be fixed on the spot. Saving re-scans the site, then the list
+            reloads. */}
+        {host.state.vesselSiteFilter && host.state.vesselSiteFilter !== 'all' && (
+          <div style={{ marginBottom: 14, background: 'var(--vdms-surface)', border: '1px solid var(--vdms-line)', borderRadius: 12, padding: '8px 6px' }}>
+            <VesselRootsControl
+              key={host.state.vesselSiteFilter}
+              host={host}
+              siteKey={host.state.vesselSiteFilter}
+              onSaved={() => {
+                clearVesselSummaryCache();
+                // The site is re-scanned in the background; reload once it has had time to finish.
+                window.setTimeout(() => { host._goToView('vessels').catch(() => undefined); }, 8000);
+              }}
+            />
+          </div>
+        )}
 
         {/* ── Folder creation status banners ── */}
         {folderCreationError && (
