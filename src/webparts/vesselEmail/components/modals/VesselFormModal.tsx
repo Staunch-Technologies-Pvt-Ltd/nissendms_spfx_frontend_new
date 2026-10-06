@@ -18,6 +18,7 @@ import type {
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
 import { isMobileWidth } from '../responsive';
 import { clay } from '../clayTheme';
+import { VesselTemplatePreview } from '../pages/VesselFolderTemplateSection';
 
 export function renderVesselForm(host: VesselEmail, mode: 'create' | 'edit'): React.ReactElement {
   return <VesselFormContent host={host} mode={mode} />;
@@ -455,8 +456,9 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
                         <span style={{ width: 17, height: 17, borderRadius: '50%', background: clay.accentGradient, color: '#fff', fontSize: 10, fontWeight: 800, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>3</span>
                         Folders inside {form.name || 'the vessel'}
                       </label>
+                      {isCreate && <div style={{ marginBottom: 10 }}><VesselTemplatePreview host={host} vesselName={form.name || ''} /></div>}
                       <div style={{ fontSize: 11, color: clay.textMuted, marginBottom: 8 }}>
-                        Add flat folders or nested paths such as Certificates/Statutory/Reports. They will be created inside the new vessel folder.
+                        Need anything extra for this vessel only? Add flat folders or nested paths such as Certificates/Statutory/Reports — they are created alongside the standard folders.
                         {!parentChosen && ' Select the parent folder above before creating the vessel.'}
                       </div>
                       <div style={{ display: 'flex', gap: 8 }}>

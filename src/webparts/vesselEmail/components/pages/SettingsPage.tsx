@@ -20,6 +20,7 @@ import type {
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
 import { FolderStructureModeSection } from './FolderStructureModeSection';
+import { VesselFolderTemplateSection } from './VesselFolderTemplateSection';
 import { TagConfigurationSection } from './TagConfigurationSection';
 import { ModuleManagementSection } from './ModuleManagementSection';
 import { FilterSearchManagementSection } from './FilterSearchManagementSection';
@@ -164,7 +165,10 @@ function SettingsPageView({ host }: { host: VesselEmail }): React.ReactElement {
             <h3 style={{ margin: '0 0 20px', fontFamily: DMS_FONT_DISPLAY, fontSize: 24, fontWeight: 800, letterSpacing: '-0.025em', color: 'var(--vdms-text)' }}>{settingsTab}</h3>
 
             {settingsTab === 'Vessel Settings' && (
-              <FolderStructureModeSection host={host} />
+              <>
+                <FolderStructureModeSection host={host} />
+                <VesselFolderTemplateSection host={host} />
+              </>
             )}
 
             {settingsTab === 'Tag Configuration' && (
