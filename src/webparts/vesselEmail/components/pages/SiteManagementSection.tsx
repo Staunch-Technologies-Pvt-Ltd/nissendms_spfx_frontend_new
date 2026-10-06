@@ -5,6 +5,7 @@ import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import { Icon } from '@fluentui/react/lib/Icon';
 import { clay } from '../clayTheme';
+import { VesselRootsControl } from './VesselRootsControl';
 import { DMS_FONT_DISPLAY, DMS_ON_ACCENT, dmsBtn, dmsControlStyle, dmsTone } from '../dmsDesignSystem';
 
 /**
@@ -304,8 +305,8 @@ function SiteIntegrationInfo({ host }: { host: VesselEmail }): React.ReactElemen
                 const isRemoving = removingSiteKey === site.name;
 
                 return (
+                  <React.Fragment key={`cfg-${site.name}`}>
                   <div
-                    key={`cfg-${site.name}`}
                     style={{
                       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                       padding: '8px 12px', borderRadius: 8,
@@ -384,6 +385,8 @@ function SiteIntegrationInfo({ host }: { host: VesselEmail }): React.ReactElemen
                       </button>
                     </div>
                   </div>
+                  {!isHidden && <VesselRootsControl host={host} siteKey={site.name} />}
+                  </React.Fragment>
                 );
               })}
               {filteredConfiguredSites.length === 0 && (
