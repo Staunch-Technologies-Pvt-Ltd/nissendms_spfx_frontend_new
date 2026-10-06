@@ -6202,9 +6202,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           .dms-filter-row > div > button { width: 100%; display: flex !important; align-items: center; justify-content: space-between; text-align: left; }
           .dms-filter-row select { flex: 1 1 150px; width: auto !important; min-width: 140px !important; max-width: 260px !important; }
 
-          /* Pinned header spacing. */
-          .dms-docs-sticky { gap: 12px !important; padding-bottom: 12px !important; }
-          .dms-docs-head p { margin-top: 3px !important; }
+          /* Header block spacing (compact, so the results get the room). */
+          .dms-docs-sticky { gap: 8px !important; padding-bottom: 8px !important; }
+          .dms-docs-head p { margin-top: 1px !important; }
 
           /* Back / forward arrows — quiet square buttons, accent on hover. */
           .dms-nav-arrow:not(:disabled):hover { background: var(--clay-accent-soft, #dceef2) !important; color: var(--clay-accent, #0e7490) !important; border-color: transparent !important; }
@@ -6241,16 +6241,18 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           /* Fluent dropdowns (Vessel / Category) take the same typography as the native selects. */
           html .vessel-dms-app .dms-filter-bar .ms-Dropdown, html .vessel-dms-app .dms-filter-bar .ms-Dropdown-title, html .vessel-dms-app .dms-filter-bar .ms-Dropdown-title *,
           html .vessel-dms-app .dms-filter-callout .ms-Dropdown-item, html .vessel-dms-app .dms-filter-callout .ms-Dropdown-item *,
-          html .dms-filter-callout .ms-Dropdown-item, html .dms-filter-callout .ms-Dropdown-item * { font-family: 'Manrope', 'Segoe UI Variable', 'Segoe UI', sans-serif !important; font-size: 15px !important; font-weight: 500 !important; letter-spacing: normal !important; }
+          html .dms-filter-callout .ms-Dropdown-item, html .dms-filter-callout .ms-Dropdown-item * { font-family: 'Manrope', 'Segoe UI Variable', 'Segoe UI', sans-serif !important; font-size: 13px !important; font-weight: 500 !important; letter-spacing: normal !important; }
           .dms-filter-bar .dms-filter-export:not(:disabled):hover { border-color: var(--clay-accent, #0e7490) !important; color: var(--clay-accent, #0e7490) !important; }
         `}</style>
-        {/* Sticky header: breadcrumb + module header + filter toolbar stay pinned
-            while the file table scrolls underneath. */}
+        {/* Header block: breadcrumb + module header + filter toolbar. Not
+            pinned any more — pinned, it kept half the screen while scrolling
+            and left the folders/files only the bottom half. It scrolls away
+            with the page so the results get the full height. */}
         {/* The AppLayout scroller has padding (--vdms-content-pad). A sticky `top: 0`
             pins at the scroller's padding edge, leaving that strip open above the header so
             scrolled rows show through. Pull the header up by the padding and re-add it as
             paddingTop so the resting layout is unchanged and nothing shows above it. */}
-        <div className="dms-docs-sticky" style={{ position: 'sticky', top: 'calc(-1 * var(--vdms-content-pad, 0px))', marginTop: 'calc(-1 * var(--vdms-content-pad, 0px))', marginLeft: 'calc(-1 * var(--vdms-content-pad, 0px))', marginRight: 'calc(-1 * var(--vdms-content-pad, 0px))', zIndex: 30, background: clay.bg, display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 'var(--vdms-content-pad, 0px)', paddingLeft: 'var(--vdms-content-pad, 0px)', paddingRight: 'var(--vdms-content-pad, 0px)', paddingBottom: 12, borderBottom: '1px solid var(--vdms-line)', boxShadow: '0 10px 16px -14px rgba(16,27,45,0.28)' }}>
+        <div className="dms-docs-sticky" style={{ position: 'relative', marginTop: 'calc(-1 * var(--vdms-content-pad, 0px))', marginLeft: 'calc(-1 * var(--vdms-content-pad, 0px))', marginRight: 'calc(-1 * var(--vdms-content-pad, 0px))', zIndex: 30, background: clay.bg, display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 'var(--vdms-content-pad, 0px)', paddingLeft: 'var(--vdms-content-pad, 0px)', paddingRight: 'var(--vdms-content-pad, 0px)', paddingBottom: 12, borderBottom: '1px solid var(--vdms-line)', boxShadow: '0 10px 16px -14px rgba(16,27,45,0.28)' }}>
         {/* Breadcrumb Navigation Trail */}
         <div className="dms-docs-nav" style={{ fontSize: 12.5, color: 'var(--vdms-text-muted)' }}>
           {/* Back / Forward navigation buttons */}
@@ -6398,15 +6400,15 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         <div className="dms-docs-head" style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16,
           background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-line)',
-          boxShadow: clay.shadowRaised, padding: '16px 18px', boxSizing: 'border-box',
+          boxShadow: clay.shadowRaised, padding: '10px 14px', boxSizing: 'border-box',
         }}>
           <div style={{ flex: '0 0 auto', flexShrink: 0, minWidth: 220, display: 'flex', alignItems: 'center', gap: 12 }}>
-           <DmsTileIcon icon="FabricFolder" tone="accent" size={40} />
+           <DmsTileIcon icon="FabricFolder" tone="accent" size={32} />
            <div style={{ minWidth: 0 }}>
-            <h2 style={{ margin: 0, fontSize: 'clamp(22px, 2.2vw, 28px)', fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.15, color: 'var(--vdms-text)', fontFamily: DMS_FONT_DISPLAY, wordBreak: 'break-word' }}>
+            <h2 style={{ margin: 0, fontSize: 'clamp(18px, 1.6vw, 21px)', fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.15, color: 'var(--vdms-text)', fontFamily: DMS_FONT_DISPLAY, wordBreak: 'break-word' }}>
               {currentFolderNode ? currentFolderNode.name : 'Documents'}
             </h2>
-            <p style={{ margin: '3px 0 0', fontSize: 13, fontWeight: 600, color: 'var(--vdms-text-muted)' }}>
+            <p style={{ margin: '1px 0 0', fontSize: 12, fontWeight: 600, color: 'var(--vdms-text-muted)' }}>
               {docViewMode === 'list'
                 ? `${filtered.length} rows · flattened list view`
                 : stackLevel === 0
@@ -6433,7 +6435,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
            </div>
           </div>
 
-          <div style={{ flex: '1 1 460px', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+          <div style={{ flex: '1 1 460px', minWidth: 0, display: 'flex', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
 
           {/* Top row — SharePoint site selector only. Never positioned
               absolutely, so it simply takes its own row above the action
@@ -6805,7 +6807,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         </div>
 
         {/* ── Filter Toolbar ── */}
-        <div className="dms-filter-bar" style={{ background: 'var(--vdms-surface)', borderRadius: 14, padding: '10px 12px', border: '1px solid var(--vdms-line)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div className="dms-filter-bar" style={{ background: 'var(--vdms-surface)', borderRadius: 12, padding: '8px 10px', border: '1px solid var(--vdms-line)', display: 'flex', flexDirection: 'column', gap: 6 }}>
           {docViewMode === 'list' && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingBottom: 8, borderBottom: '1px solid var(--vdms-border-soft)' }}>
               <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--vdms-text-muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -6832,8 +6834,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             </div>
           )}
 
-          <div className="dms-filter-row" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-            <div className="dms-filter-search" style={{ position: 'relative', flex: '1 1 260px', minWidth: 200 }}>
+          <div className="dms-filter-row" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            <div className="dms-filter-search" style={{ position: 'relative', flex: '1 1 220px', minWidth: 180, maxWidth: 340 }}>
               <Icon iconName="Search" aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--vdms-text-muted)', fontSize: 13, zIndex: 1, pointerEvents: 'none', lineHeight: 1 }} />
               {/* Debounced: typing feeds this page's expensive per-render
                   recompute (groupCatActive's recursive folder walk / fleet-wide
