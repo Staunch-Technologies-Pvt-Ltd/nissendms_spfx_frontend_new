@@ -24,7 +24,9 @@ see `backend/migration.env.example` and `backend/app/migration_assistant/README.
 - `api.ts` — fetch client (`MigrationApi`), adds the DMS session headers.
 - `fileUtils.ts`, `styles.ts` — icon/size helpers and shared style tokens.
 - `MigrationScanTab.tsx` — scan → subfolders → vessel → review → confirm.
-- `SiteToSiteTab.tsx` — copy-only migration between two SharePoint sites.
+- `SiteToSiteTab.tsx` — copy-only migration between two SharePoint sites: site
+  search / URL lookup, copy options, live progress over the `/stream` NDJSON
+  feed (pause / resume / cancel), verification summary, Excel report, job history.
 - `TagExistingFilesTab.tsx` — Managed Metadata tagging of already-placed files.
 - `VesselExcelExportTab.tsx` — read-only per-vessel Excel export.
 - `MigrationAssistantModule.tsx` — tab shell; the only file the host app imports.

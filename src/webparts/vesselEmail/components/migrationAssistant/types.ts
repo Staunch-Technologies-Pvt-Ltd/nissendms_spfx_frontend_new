@@ -150,6 +150,7 @@ export interface TaggedScanJob {
 export interface S2SSite {
   key: string;
   label: string;
+  url?: string;
 }
 
 export interface S2SDrive {
@@ -170,7 +171,9 @@ export interface S2SFile {
   content_type: string;
 }
 
-export type S2SItemStatus = 'discovered' | 'copying' | 'copied' | 'metadata_done' | 'metadata_attention' | 'failed';
+export type S2SItemStatus = 'discovered' | 'copying' | 'copied' | 'metadata_done' | 'metadata_attention' | 'skipped' | 'failed';
+
+export type S2SVerifyStatus = 'ok' | 'changed_by_sharepoint' | 'size_mismatch' | 'hash_mismatch' | 'missing' | 'error';
 
 export interface S2SItem {
   id: string;
@@ -182,17 +185,52 @@ export interface S2SItem {
   status: S2SItemStatus;
   dest_item_id: string | null;
   metadata_report: { field: string; kind: string; status: string; detail: string }[] | null;
+  permissions_report: { principal: string; roles: string[]; status: string; detail: string | null }[] | null;
+  verify_status: S2SVerifyStatus | null;
+  verify_detail: string | null;
   error: string | null;
+}
+
+export type S2SCopyStatus =
+  | 'running' | 'paused' | 'cancelled' | 'interrupted' | 'failed'
+  | 'completed' | 'completed_with_warnings' | 'completed_with_errors';
+
+export type S2SConflictPolicy = 'skip' | 'replace' | 'rename' | 'fail';
+
+export interface S2SCopyOptions {
+  conflictPolicy: S2SConflictPolicy;
+  copyPermissions: boolean;
+  copyVersions: boolean;
+}
+
+export interface S2SVerifySummary {
+  checked: number;
+  ok: number;
+  changed_by_sharepoint: number;
+  size_mismatch: number;
+  hash_mismatch: number;
+  missing: number;
+  error: number;
+  source_files: number;
+  source_folders: number;
+  source_bytes: number;
+  dest_files_verified: number;
+  dest_bytes_verified: number;
+  skipped: number;
+  not_copied: number;
+  passed: boolean;
 }
 
 export interface S2SJob {
   id: string;
   status: 'running' | 'done' | 'failed';
   source_site_key: string;
+  source_site_label: string;
   source_folder_path: string;
   selected_folders: string[];
   selected_files: string[];
   dest_site_key: string;
+  dest_site_label: string;
   dest_folder_path: string;
   total_found: number;
   processed: number;
@@ -201,19 +239,52 @@ export interface S2SJob {
   confirmed_at: string | null;
   confirmed_by_email: string | null;
   error: string | null;
+  copy_status: S2SCopyStatus | null;
+  conflict_policy: S2SConflictPolicy | null;
+  copy_permissions: boolean;
+  copy_versions: boolean;
+  copy_started_at: string | null;
+  copy_finished_at: string | null;
+  copy_summary: (Partial<S2SProgress> & { error?: string }) | null;
+  verify_status: 'running' | 'done' | 'failed' | null;
+  verified_at: string | null;
+  verify_summary: S2SVerifySummary | null;
+  live: boolean;
 }
 
-export interface S2SConfirmSummary {
-  total: number;
-  folders_created: number;
-  folders_existing: number;
-  folders_failed: number;
-  files_copied: number;
-  files_failed: number;
-  metadata_migrated: number;
-  metadata_attention: number;
-  managed_metadata_applied: number;
-  managed_metadata_unmapped: number;
-  failed_items: { path: string; error: string }[];
-  status: 'completed' | 'completed_with_warnings' | 'completed_with_errors';
+export interface S2SProgressEvent {
+  seq: number;
+  path: string;
+  kind: 'file' | 'folder';
+  status: 'copied' | 'attention' | 'skipped' | 'failed' | 'created';
+  detail: string | null;
 }
+
+/** One line of the /stream NDJSON feed. */
+export interface S2SProgress {
+  type: 'progress';
+  job_id: string;
+  state: S2SCopyStatus | 'cancelling' | 'verifying' | 'not_started';
+  phase: 'folders' | 'files' | 'verifying' | 'done';
+  files_total: number;
+  files_done: number;
+  files_failed: number;
+  files_skipped: number;
+  folders_total: number;
+  folders_done: number;
+  folders_failed: number;
+  bytes_total: number;
+  bytes_done: number;
+  metadata_attention: number;
+  permissions_attention: number;
+  verify_total: number;
+  verify_done: number;
+  speed_bps: number;
+  eta_seconds: number | null;
+  elapsed_seconds: number;
+  in_flight: string[];
+  events: S2SProgressEvent[];
+  seq: number;
+}
+
+export type S2SStreamLine = S2SProgress | { type: 'done'; job: S2SJob };

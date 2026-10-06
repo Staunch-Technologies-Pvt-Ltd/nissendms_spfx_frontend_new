@@ -15,13 +15,14 @@ import type {
   HierarchyNode,
   MigrationItem,
   MigrationScanJob,
-  S2SConfirmSummary,
   S2SDrive,
   S2SFile,
   S2SFolder,
   S2SItem,
+  S2SCopyOptions,
   S2SJob,
   S2SSite,
+  S2SStreamLine,
   SourceFile,
   SourceFolder,
   TaggedScanJob,
@@ -137,7 +138,7 @@ export class MigrationApi {
   }
 
   jobItemPreviewUrl(jobId: string, itemId: string): string {
-    return `${this.baseUrl.replace(/\/$/, '')}/api/migration/jobs/${jobId}/items/${itemId}/preview`;
+    return `${this.baseUrl.replace(/\/$/, '')}/api/migration-assistant/migration/jobs/${jobId}/items/${itemId}/preview`;
   }
 
   confirmJob(jobId: string): Promise<ConfirmSummary> {
@@ -149,7 +150,7 @@ export class MigrationApi {
   }
 
   vesselExcelExportUrl(vesselPath: string): string {
-    return `${this.baseUrl.replace(/\/$/, '')}/api/vessel-export/excel?vessel_path=${encodeURIComponent(vesselPath)}`;
+    return `${this.baseUrl.replace(/\/$/, '')}/api/migration-assistant/vessel-export/excel?vessel_path=${encodeURIComponent(vesselPath)}`;
   }
 
   scanExistingFiles(rootPath: string): Promise<ExistingFileTagScan> {
@@ -180,8 +181,23 @@ export class MigrationApi {
     return request(this.baseUrl, '/api/migration-assistant/site-to-site/sites', this.actingEmail, this.sessionId);
   }
 
+  /** Tenant-wide site search (needs Sites.Read.All on the app; the error
+   *  message says so when it isn't granted). */
+  searchS2SSites(query: string): Promise<S2SSite[]> {
+    return request(this.baseUrl, `/api/migration-assistant/site-to-site/sites/search?q=${encodeURIComponent(query)}`, this.actingEmail, this.sessionId);
+  }
+
+  /** Look up a site from any URL inside it and check the app can read it. */
+  resolveS2SSite(url: string): Promise<S2SSite> {
+    return request(this.baseUrl, '/api/migration-assistant/site-to-site/sites/resolve', this.actingEmail, this.sessionId, {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    });
+  }
+
   listS2SSiteDrives(siteKey: string): Promise<S2SDrive[]> {
-    return request(this.baseUrl, `/api/migration-assistant/site-to-site/sites/${siteKey}/drives`, this.actingEmail, this.sessionId);
+    // Query-string form: URL-based site keys contain slashes.
+    return request(this.baseUrl, `/api/migration-assistant/site-to-site/drives?site_key=${encodeURIComponent(siteKey)}`, this.actingEmail, this.sessionId);
   }
 
   browseS2SFolder(siteKey: string, driveId: string, path?: string): Promise<{ path: string; folders: S2SFolder[]; files: S2SFile[] }> {
@@ -223,10 +239,75 @@ export class MigrationApi {
     return request(this.baseUrl, `/api/migration-assistant/site-to-site/jobs/${jobId}/items`, this.actingEmail, this.sessionId);
   }
 
-  confirmS2SJob(jobId: string): Promise<S2SConfirmSummary> {
+  /** Starts the copy in the background; returns the job right away. Also
+   *  retries a finished job's failed / remaining items. */
+  confirmS2SJob(jobId: string, options: S2SCopyOptions): Promise<S2SJob> {
     return request(this.baseUrl, `/api/migration-assistant/site-to-site/jobs/${jobId}/confirm`, this.actingEmail, this.sessionId, {
       method: 'POST',
-      body: '{}',
+      body: JSON.stringify({
+        conflict_policy: options.conflictPolicy,
+        copy_permissions: options.copyPermissions,
+        copy_versions: options.copyVersions,
+      }),
     });
+  }
+
+  getS2SJob(jobId: string): Promise<S2SJob> {
+    return request(this.baseUrl, `/api/migration-assistant/site-to-site/jobs/${jobId}`, this.actingEmail, this.sessionId);
+  }
+
+  pauseS2SJob(jobId: string): Promise<S2SJob> {
+    return request(this.baseUrl, `/api/migration-assistant/site-to-site/jobs/${jobId}/pause`, this.actingEmail, this.sessionId, { method: 'POST', body: '{}' });
+  }
+
+  resumeS2SJob(jobId: string): Promise<S2SJob> {
+    return request(this.baseUrl, `/api/migration-assistant/site-to-site/jobs/${jobId}/resume`, this.actingEmail, this.sessionId, { method: 'POST', body: '{}' });
+  }
+
+  cancelS2SJob(jobId: string): Promise<S2SJob> {
+    return request(this.baseUrl, `/api/migration-assistant/site-to-site/jobs/${jobId}/cancel`, this.actingEmail, this.sessionId, { method: 'POST', body: '{}' });
+  }
+
+  verifyS2SJob(jobId: string): Promise<S2SJob> {
+    return request(this.baseUrl, `/api/migration-assistant/site-to-site/jobs/${jobId}/verify`, this.actingEmail, this.sessionId, { method: 'POST', body: '{}' });
+  }
+
+  s2sReportUrl(jobId: string): string {
+    return `${this.baseUrl.replace(/\/$/, '')}/api/migration-assistant/site-to-site/jobs/${jobId}/report`;
+  }
+
+  /**
+   * Follow a copy job's live NDJSON progress feed, calling `onLine` for each
+   * line. Resolves when the server sends the final "done" line; rejects if
+   * the connection drops (the caller reconnects) or `signal` aborts.
+   */
+  async streamS2SJob(jobId: string, onLine: (line: S2SStreamLine) => void, signal: AbortSignal): Promise<void> {
+    const url = `${this.baseUrl.replace(/\/$/, '')}/api/migration-assistant/site-to-site/jobs/${jobId}/stream`;
+    const res = await fetch(url, { headers: this.authHeaders(), signal });
+    if (!res.ok || !res.body) {
+      let detail = `Request failed (${res.status})`;
+      try { detail = (await res.json())?.detail || detail; } catch { /* non-JSON body */ }
+      throw new MigrationApiError(res.status, detail);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl = buffer.indexOf('\n');
+      while (nl >= 0) {
+        const raw = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (raw) {
+          const line = JSON.parse(raw) as S2SStreamLine;
+          onLine(line);
+          if (line.type === 'done') { void reader.cancel(); return; }
+        }
+        nl = buffer.indexOf('\n');
+      }
+    }
+    throw new MigrationApiError(0, 'Progress stream closed before the copy finished');
   }
 }
