@@ -2689,8 +2689,8 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                             void host._loadFilesForVessel(vessel.name).catch(() => undefined);
                           }
                         }}
-                        title={isSharePointOnly ? 'Confirm this vessel above to view its documents' : undefined}
-                        style={{ ...dmsBtn('primary', !isSharePointOnly), flex: 1, borderRadius: 14 }}
+                        title={`Open ${vessel.name}'s folder in Documents`}
+                        style={{ ...dmsBtn('primary'), flex: 1, borderRadius: 14 }}
                       >
 <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 12 }} /> View Documents
                       </button>
