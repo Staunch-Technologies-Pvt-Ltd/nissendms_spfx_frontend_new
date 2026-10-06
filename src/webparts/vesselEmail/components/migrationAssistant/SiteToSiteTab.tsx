@@ -927,6 +927,13 @@ function SitePicker({ title, api, picker, sites, sitesLoading, isNight, onPickSi
         {extra.map((s) => <button key={s.key} style={chip(picker.site?.key === s.key)} onClick={() => onPickSite(s)}>{s.label}</button>)}
         {selectedIsExtra && picker.site && <button style={chip(true)}>{picker.site.label}</button>}
       </div>
+      {!sitesLoading && (
+        <div style={{ fontSize: 11, color: t.textSubtle, marginTop: 4 }}>
+          {sites.length === 0
+            ? 'No sites yet — add one in Sites → Site Management, or find one above.'
+            : 'Sites listed here come from Sites → Site Management; a site added there appears here automatically.'}
+        </div>
+      )}
       {picker.site?.url && <div style={{ fontSize: 11, color: t.textSubtle, marginTop: 4 }}>{picker.site.url}</div>}
       {picker.site && (
         <>

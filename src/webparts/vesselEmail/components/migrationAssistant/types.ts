@@ -151,6 +151,8 @@ export interface S2SSite {
   key: string;
   label: string;
   url?: string;
+  /** "site_management" = added in Sites → Site Management; "allowed_sites" = .env.migration */
+  origin?: 'site_management' | 'allowed_sites';
 }
 
 export interface S2SDrive {
