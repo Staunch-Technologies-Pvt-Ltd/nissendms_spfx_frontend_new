@@ -1,8 +1,9 @@
-// Phase 7 — "Maritime" visual language (sea blue + cloudy sky, glass
-// surfaces). Replaces the Phase 6 "Ocean Clay" defaults. DESIGN ONLY: every
-// export, key and function signature below is unchanged, so nothing that
-// imports `clay` needs to change. Ocean Clay is kept as a selectable preset
-// in Settings → Color Management ("Ocean Clay (Legacy)").
+// Phase 8 — "Enterprise Maritime" visual language (deep navy + teal accent,
+// flat solid surfaces, restrained shadows). Replaces the Phase 7 "Maritime"
+// glass/gradient defaults. DESIGN ONLY: every export, key and function
+// signature below is unchanged, so nothing that imports `clay` needs to
+// change. Ocean Clay is kept as a selectable preset in Settings → Color
+// Management ("Ocean Clay (Legacy)").
 //
 // React 17 / Fluent UI 8 / SPFx constraint: plain TS constants + inline
 // style objects only — no CSS-in-JS library, no Tailwind, no build changes.
@@ -19,50 +20,50 @@ import type { IPartialTheme } from '@fluentui/react';
 // Raw light-mode values. Used for Fluent UI theme palettes (which need real
 // colours) and as the fallback inside every var() below.
 export const clayLight = {
-  bg: '#dcefff',
-  surface: '#f4faff',
-  surfaceRaised: '#e6f3fd',
-  surfaceHover: '#d6ebfa',
+  bg: '#eef2f7',
+  surface: '#ffffff',
+  surfaceRaised: '#f6f8fb',
+  surfaceHover: '#eaf0f6',
 
-  text: '#08243a',
-  textMuted: '#4a6a82',
+  text: '#101b2d',
+  textMuted: '#5b6b7f',
 
-  accent: '#0a7ea8',
-  accentHover: '#1463b8',
-  accentDark: '#0b5f8a',
-  accentDeep: '#0a4a73',
-  accentSoft: '#cfe8f7',
-  accentSoftHover: '#bcdff3',
+  accent: '#0e7490',
+  accentHover: '#0b5c72',
+  accentDark: '#0a4a5c',
+  accentDeep: '#0b2a4a',
+  accentSoft: '#dceef2',
+  accentSoftHover: '#c7e4ea',
 
-  accentGradient: 'linear-gradient(135deg, #1fa9cf, #1463b8)',
-  accentGradientHover: 'linear-gradient(135deg, #0a7ea8, #0f4f96)',
-  iconBgGradient: 'linear-gradient(150deg, #e3f4fd, #bfe4f7)',
+  accentGradient: 'linear-gradient(135deg, #14919b, #0e7490)',
+  accentGradientHover: 'linear-gradient(135deg, #0e7490, #0b5c72)',
+  iconBgGradient: 'linear-gradient(150deg, #e3f2f4, #cfe8ec)',
 
-  // Card / tile: soft glass lift.
-  shadowRaised: '0 12px 32px rgba(20,80,130,0.14), inset 0 1px 0 rgba(255,255,255,0.7)',
-  shadowRaisedHover: '0 18px 42px rgba(20,80,130,0.2), inset 0 1px 0 rgba(255,255,255,0.8)',
+  // Card / tile: flat surface, soft low-opacity lift.
+  shadowRaised: '0 1px 2px rgba(16,27,45,0.05), 0 4px 12px rgba(16,27,45,0.06)',
+  shadowRaisedHover: '0 2px 4px rgba(16,27,45,0.06), 0 8px 20px rgba(16,27,45,0.10)',
 
-  // Primary button: gradient fill + accent glow + top highlight.
-  shadowButton: '0 10px 26px rgba(10,126,168,0.32), inset 0 1px 0 rgba(255,255,255,0.35)',
+  // Primary button: flat fill + a restrained accent-tinted shadow.
+  shadowButton: '0 1px 2px rgba(16,27,45,0.08), 0 4px 10px rgba(14,116,144,0.25)',
 
   // Icon badge.
-  shadowIcon: 'inset 0 1px 0 rgba(255,255,255,0.75), inset 0 0 0 1px rgba(10,126,168,0.12)',
+  shadowIcon: 'inset 0 0 0 1px rgba(14,116,144,0.14)',
 
-  // Status pills.
-  pillActiveBg: '#d3f4e6',
-  pillActiveText: '#0b6b49',
+  // Status pills — green/amber/red semantic states.
+  pillActiveBg: '#dcfce7',
+  pillActiveText: '#15803d',
   pillActiveShadow: 'none',
-  pillWarnBg: '#fdf0d2',
-  pillWarnText: '#8a5a00',
+  pillWarnBg: '#fef3c7',
+  pillWarnText: '#b45309',
   pillWarnShadow: 'none',
-  pillDangerBg: '#fde0e4',
-  pillDangerText: '#b3243c',
+  pillDangerBg: '#fee2e2',
+  pillDangerText: '#b91c1c',
   pillDangerShadow: 'none',
 
-  radiusCard: 24,
-  radiusTile: 22,
-  radiusButton: 16,
-  radiusIcon: 14,
+  radiusCard: 12,
+  radiusTile: 10,
+  radiusButton: 8,
+  radiusIcon: 8,
 } as const;
 
 // Theme-aware tokens. Each value is a CSS custom property that flips between
@@ -125,7 +126,7 @@ export interface ClayColorTheme {
 // Must stay in sync with DEFAULT_COLORS in backend/app/color_settings_api.py.
 export const DEFAULT_CLAY_COLORS: ClayColorTheme = {
   light: { bg: clayLight.bg, text: clayLight.text, accent: clayLight.accent, hover: clayLight.accentHover },
-  night: { bg: '#031423', text: '#eaf6fd', accent: '#34d5ea', hover: '#2a8fe0' },
+  night: { bg: '#0a1626', text: '#e7eef5', accent: '#2dd4bf', hover: '#14b8a6' },
 };
 
 /** Must stay in sync with PRESETS in backend/app/color_settings_api.py. */
@@ -198,7 +199,9 @@ function deriveTokens(c: ClayColorSet, isNight: boolean) {
   const accentSoft = isNight ? mixHex(c.accent, '#000000', 0.62) : mixHex(c.accent, '#ffffff', 0.8);
   const accentSoftHover = isNight ? mixHex(c.accent, '#000000', 0.54) : mixHex(c.accent, '#ffffff', 0.72);
   const accentDark = darkenHex(c.hover, 0.08);
-  const accentDeep = darkenHex(c.hover, 0.22);
+  // Deep enough to read as a navy/near-black "primary" surface (sidebar,
+  // topbar) regardless of which accent hue a preset uses.
+  const accentDeep = darkenHex(c.hover, 0.5);
   const surface = isNight ? lightenHex(c.bg, 0.06) : lightenHex(c.bg, 0.6);
   const surfaceRaised = isNight ? lightenHex(c.bg, 0.12) : mixHex(lightenHex(c.bg, 0.4), c.accent, 0.04);
   const surfaceHover = isNight ? lightenHex(c.bg, 0.18) : mixHex(c.bg, c.accent, 0.1);
@@ -237,7 +240,7 @@ export function applyColorTheme(theme: ClayColorTheme): void {
       --clay-accent-gradient-hover: linear-gradient(135deg, ${c.accent}, ${darkenHex(c.hover, 0.12)}) !important;
       --clay-icon-bg: linear-gradient(150deg, ${d.accentSoft}, ${d.accentSoftHover}) !important;
       --clay-accent-glow: ${hexToRgba(c.accent, 0.4)} !important;
-      --clay-shadow-button: 0 10px 26px ${hexToRgba(c.accent, 0.32)}, inset 0 1px 0 rgba(255,255,255,0.35) !important;
+      --clay-shadow-button: 0 1px 2px rgba(16,27,45,0.08), 0 4px 10px ${hexToRgba(c.accent, 0.25)} !important;
     `;
   };
 

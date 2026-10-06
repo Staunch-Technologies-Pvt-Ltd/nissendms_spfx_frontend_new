@@ -1,5 +1,7 @@
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
+import { clay } from '../clayTheme';
+import { dmsBtn, dmsTone } from '../dmsDesignSystem';
 
 /**
  * Settings → Module Management.
@@ -14,17 +16,6 @@ import type VesselEmail from '../VesselEmail';
 
 interface ModuleInfo { id: string; label: string; }
 interface ConfigResponse { modules: ModuleInfo[]; hidden: string[]; is_admin: boolean; }
-
-const C = {
-  text: '#0f172a', sub: '#64748b', border: '#e2e8f0', blue: '#0a66d0', blueBg: '#e8f1ff',
-  redBg: '#fef2f2', red: '#b91c1c', greenBg: '#ecfdf5', green: '#047857',
-};
-
-const btn = (primary: boolean, disabled: boolean): React.CSSProperties => ({
-  border: primary ? 'none' : `1px solid ${C.border}`, background: disabled ? '#cbd5e1' : primary ? C.blue : '#fff',
-  color: primary ? '#fff' : C.text, fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 6,
-  cursor: disabled ? 'not-allowed' : 'pointer',
-});
 
 async function readError(r: Response): Promise<string> {
   try {
@@ -46,14 +37,14 @@ function Toggle({ on, disabled, onChange }: { on: boolean; disabled: boolean; on
       onClick={onChange}
       style={{
         position: 'relative', flexShrink: 0, width: trackW, height: trackH, borderRadius: trackH,
-        border: `1px solid ${on ? C.blue : C.border}`, background: on ? C.blue : '#e2e8f0',
+        border: `1px solid ${on ? clay.accent : 'var(--vdms-line)'}`, background: on ? clay.accent : 'var(--vdms-surface-alt)',
         cursor: disabled ? 'not-allowed' : 'pointer', padding: 0, opacity: disabled ? 0.6 : 1,
         transition: 'background 0.2s ease, border-color 0.2s ease',
       }}
     >
       <span style={{
         position: 'absolute', top: pad - 1, left: on ? trackW - knob - pad - 1 : pad - 1,
-        width: knob, height: knob, borderRadius: '50%', background: '#fff',
+        width: knob, height: knob, borderRadius: '50%', background: 'var(--vdms-surface)',
         boxShadow: '0 1px 3px rgba(0,0,0,0.3)', transition: 'left 0.2s ease',
       }} />
     </button>
@@ -125,41 +116,45 @@ export function ModuleManagementSection({ host }: { host: VesselEmail }): React.
     }
   };
 
-  if (loading && !config) return <div style={{ fontSize: 13, color: C.sub }}>Loading module settings…</div>;
+  if (loading && !config) return <div style={{ fontSize: 13, color: 'var(--vdms-text-muted)' }}>Loading module settings…</div>;
   if (!config) {
+    const dangerTone = dmsTone('danger');
     return (
-      <div style={{ padding: 12, borderRadius: 8, background: C.redBg, color: C.red, fontSize: 13 }}>
+      <div style={{ padding: 12, borderRadius: 8, background: dangerTone.bg, color: dangerTone.fg, fontSize: 13 }}>
         {error || 'Module settings are unavailable.'}{' '}
-        <button style={btn(false, false)} onClick={() => { load().catch(() => undefined); }}>Retry</button>
+        <button style={dmsBtn('secondary')} onClick={() => { load().catch(() => undefined); }}>Retry</button>
       </div>
     );
   }
 
+  const dangerTone = dmsTone('danger');
+  const successTone = dmsTone('success');
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 720 }}>
       <div>
-        <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>Module Management</div>
-        <div style={{ fontSize: 12, color: C.sub, marginTop: 2 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--vdms-text)' }}>Module Management</div>
+        <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>
           Turn a module off to hide it from the sidebar for every user. Settings and Profile are always available.
         </div>
       </div>
 
       {!config.is_admin && (
-        <div style={{ fontSize: 13, color: C.sub }}>Only administrators can change this setting.</div>
+        <div style={{ fontSize: 13, color: 'var(--vdms-text-muted)' }}>Only administrators can change this setting.</div>
       )}
 
-      <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ border: '1px solid var(--vdms-line)', borderRadius: 8, overflow: 'hidden' }}>
         {config.modules.map((m, idx) => {
           const isHidden = hidden.has(m.id);
           return (
             <div key={m.id} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '12px 14px', borderTop: idx === 0 ? 'none' : `1px solid ${C.border}`,
-              background: '#fff',
+              padding: '12px 14px', borderTop: idx === 0 ? 'none' : '1px solid var(--vdms-line)',
+              background: 'var(--vdms-surface)',
             }}>
               <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{m.label}</div>
-                <div style={{ fontSize: 11, color: isHidden ? C.red : C.green, marginTop: 2, fontWeight: 600 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--vdms-text)' }}>{m.label}</div>
+                <div style={{ fontSize: 11, color: isHidden ? dangerTone.fg : successTone.fg, marginTop: 2, fontWeight: 600 }}>
                   {isHidden ? 'Hidden' : 'Active'}
                 </div>
               </div>
@@ -170,14 +165,18 @@ export function ModuleManagementSection({ host }: { host: VesselEmail }): React.
       </div>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <button style={btn(true, !config.is_admin || !dirty || saving)} disabled={!config.is_admin || !dirty || saving} onClick={() => { save().catch(() => undefined); }}>
+        <button
+          style={dmsBtn('primary', !(!config.is_admin || !dirty || saving))}
+          disabled={!config.is_admin || !dirty || saving}
+          onClick={() => { save().catch(() => undefined); }}
+        >
           {saving ? 'Saving…' : 'Save changes'}
         </button>
-        {dirty && !saving && <span style={{ fontSize: 12, color: C.sub }}>You have unsaved changes.</span>}
+        {dirty && !saving && <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>You have unsaved changes.</span>}
       </div>
 
-      {error && <div style={{ padding: '10px 12px', borderRadius: 8, background: C.redBg, color: C.red, fontSize: 13 }}>{error}</div>}
-      {notice && <div style={{ padding: '10px 12px', borderRadius: 8, background: C.greenBg, color: C.green, fontSize: 13 }}>{notice}</div>}
+      {error && <div style={{ padding: '10px 12px', borderRadius: 8, background: dangerTone.bg, color: dangerTone.fg, fontSize: 13 }}>{error}</div>}
+      {notice && <div style={{ padding: '10px 12px', borderRadius: 8, background: successTone.bg, color: successTone.fg, fontSize: 13 }}>{notice}</div>}
     </div>
   );
 }

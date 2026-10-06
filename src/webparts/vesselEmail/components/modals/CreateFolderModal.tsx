@@ -2,6 +2,7 @@ import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import type VesselEmail from '../VesselEmail';
 import { isMobileWidth } from '../responsive';
+import { Icon } from '@fluentui/react/lib/Icon';
 
 /** Opened from the Documents module's "New Folder" toolbar button (top,
  *  next to Archive). `folderRef` is whatever the backend's
@@ -90,14 +91,14 @@ function CreateFolderDialog({ host, dialog }: { host: VesselEmail; dialog: Creat
       >
         {resultMsg ? (
           <div style={{ textAlign: 'center', padding: '20px 0 4px' }}>
-            <div style={{ fontSize: 44, marginBottom: 10 }}>✅</div>
+            <div style={{ fontSize: 44, marginBottom: 10 }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 44 }} /></div>
             <div style={{ fontSize: 17, fontWeight: 700, color: '#059669', marginBottom: 6 }}>Folder created</div>
             <p style={{ fontSize: 13, color: 'var(--vdms-text-muted)', margin: 0 }}>{resultMsg}</p>
           </div>
         ) : (
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-              <div style={{ width: 40, height: 40, borderRadius: 10, background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>📁</div>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}><Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 20 }} /></div>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--vdms-text)' }}>New folder</div>
                 <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>
@@ -158,13 +159,13 @@ function CreateFolderDialog({ host, dialog }: { host: VesselEmail; dialog: Creat
                 style={{ width: 15, height: 15, accentColor: '#2563eb', cursor: 'pointer' }}
               />
               <span style={{ fontSize: 12.5, color: 'var(--vdms-text)' }}>
-                🚢 This is a new vessel — open the Add Vessel form instead
+<Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 12.5 }} /> This is a new vessel — open the Add Vessel form instead
               </span>
             </label>
 
             {error && (
               <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#dc2626', marginBottom: 14 }}>
-                ⚠️ {error}
+<Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> {error}
               </div>
             )}
 

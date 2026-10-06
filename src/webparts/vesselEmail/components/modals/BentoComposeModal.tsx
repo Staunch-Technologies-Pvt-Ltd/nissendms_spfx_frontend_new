@@ -16,6 +16,9 @@ import type {
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
 import { isMobileWidth } from '../responsive';
+import { Icon } from '@fluentui/react/lib/Icon';
+import { clay } from '../clayTheme';
+import { dmsBtn, dmsControlStyle, dmsTone } from '../dmsDesignSystem';
 
 export function renderBentoComposeModal(host: VesselEmail): React.ReactElement | null {
     const {
@@ -141,27 +144,27 @@ export function renderBentoComposeModal(host: VesselEmail): React.ReactElement |
     return (
       <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: isMobile ? 10 : 20 }}
         onClick={() => !bentoComposeBusy && host.setState({ bentoComposeOpen: false })}>
-        <div style={{ background: '#fff', borderRadius: 12, padding: isMobile ? '16px 14px' : '28px 32px', width: isMobile ? '95vw' : 540, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}
+        <div style={{ background: 'var(--vdms-surface)', borderRadius: 12, padding: isMobile ? '16px 14px' : '28px 32px', width: isMobile ? '95vw' : 540, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', boxShadow: clay.shadowRaisedHover }}
           onClick={e => e.stopPropagation()}>
-          <div style={{ fontSize: 17, fontWeight: 800, color: '#0f172a', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 8 }}>
-            ✉ Compose & Dispatch Email
+          <div style={{ fontSize: 17, fontWeight: 800, color: 'var(--vdms-text)', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Icon iconName="Mail" aria-hidden="true" style={{ fontSize: 17 }} /> Compose & Dispatch Email
           </div>
 
-          {bentoComposeMsg && <div style={{ background: '#dff6dd', color: '#107c10', padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 }}>{bentoComposeMsg}</div>}
-          {bentoComposeErr && <div style={{ background: '#fde7e9', color: '#a4262c', padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 }}>{bentoComposeErr}</div>}
+          {bentoComposeMsg && <div style={{ background: dmsTone('success').bg, color: dmsTone('success').fg, padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 }}>{bentoComposeMsg}</div>}
+          {bentoComposeErr && <div style={{ background: dmsTone('danger').bg, color: dmsTone('danger').fg, padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 }}>{bentoComposeErr}</div>}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
             {/* Recipient – fixed, read-only */}
             <div>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 4 }}>Recipient (Fixed)</label>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--vdms-text-muted)', marginBottom: 4 }}>Recipient (Fixed)</label>
               <input type="text" value={FIXED_RECIPIENT} readOnly
-                style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13, background: '#f8fafc', color: '#64748b', boxSizing: 'border-box', cursor: 'not-allowed' }} />
+                style={{ ...dmsControlStyle(), width: '100%', background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-muted)', boxSizing: 'border-box', cursor: 'not-allowed' }} />
             </div>
 
             {/* Vessel Dropdown */}
             <div>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 4 }}>Vessel</label>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--vdms-text-muted)', marginBottom: 4 }}>Vessel</label>
               <select value={bentoComposeForm.vessel_name}
                 onChange={e => {
                   const selectedVesselName = e.target.value;
@@ -177,7 +180,7 @@ export function renderBentoComposeModal(host: VesselEmail): React.ReactElement |
                   }
                 }}
                 disabled={bentoComposeBusy}
-                style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13, background: '#fff', outline: 'none' }}>
+                style={{ ...dmsControlStyle(), width: '100%' }}>
                 <option value="">— Select vessel —</option>
                 {vessels.map(v => <option key={v.id} value={v.name}>{v.name}</option>)}
               </select>
@@ -185,11 +188,11 @@ export function renderBentoComposeModal(host: VesselEmail): React.ReactElement |
 
             {/* Document Tag Dropdown */}
             <div>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 4 }}>Document Tag</label>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--vdms-text-muted)', marginBottom: 4 }}>Document Tag</label>
               <select value={bentoComposeForm.datasource_tag}
                 onChange={e => setForm({ datasource_tag: e.target.value }, true)}
                 disabled={bentoComposeBusy}
-                style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13, background: '#fff', outline: 'none' }}>
+                style={{ ...dmsControlStyle(), width: '100%' }}>
                 {Object.keys(DATASOURCE_TAGS_MAP).map(k => (
                   <option key={k} value={k}>{DATASOURCE_TAGS_MAP[k]} ({k})</option>
                 ))}
@@ -198,8 +201,8 @@ export function renderBentoComposeModal(host: VesselEmail): React.ReactElement |
 
             {/* Subject – auto-filled, editable [DataSource:TAG] Vessel Name / Subject */}
             <div>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 4 }}>
-                Subject * <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 11 }}>(auto-filled, editable)</span>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--vdms-text-muted)', marginBottom: 4 }}>
+                Subject * <span style={{ fontWeight: 400, color: 'var(--vdms-text-faint)', fontSize: 11 }}>(auto-filled, editable)</span>
               </label>
               <input type="text"
                 value={bentoComposeForm.subject_text}
@@ -214,31 +217,31 @@ export function renderBentoComposeModal(host: VesselEmail): React.ReactElement |
                 }}
                 disabled={bentoComposeBusy}
                 placeholder="[DataSource:TAG] Vessel Name / Subject..."
-                style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid #0284c7', fontSize: 13, outline: 'none', boxSizing: 'border-box', background: '#f0f9ff' }} />
+                style={{ ...dmsControlStyle(), width: '100%', border: `1px solid ${clay.accent}`, boxSizing: 'border-box', background: clay.accentSoft }} />
             </div>
 
             {/* Body */}
             <div>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 4 }}>Body</label>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--vdms-text-muted)', marginBottom: 4 }}>Body</label>
               <textarea value={bentoComposeForm.body}
                 onChange={e => setForm({ body: e.target.value })}
                 disabled={bentoComposeBusy}
                 placeholder="Email body..."
                 rows={4}
-                style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13, outline: 'none', boxSizing: 'border-box', resize: 'vertical' }} />
+                style={{ ...dmsControlStyle(), width: '100%', boxSizing: 'border-box', resize: 'vertical' }} />
             </div>
 
             {/* Attach Approved File Dropdown */}
             <div>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 4 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--vdms-text-muted)', marginBottom: 4 }}>
                 Attach Approved File
-                <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 11, marginLeft: 6 }}>(from selected vessel documents)</span>
+                <span style={{ fontWeight: 400, color: 'var(--vdms-text-faint)', fontSize: 11, marginLeft: 6 }}>(from selected vessel documents)</span>
               </label>
               <select
                 value={bentoComposeForm.existing_attachment || ''}
                 onChange={e => setForm({ existing_attachment: e.target.value })}
                 disabled={bentoComposeBusy || !bentoComposeForm.vessel_name || isLoadingFiles}
-                style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13, background: bentoComposeForm.vessel_name ? '#fff' : '#f8fafc', outline: 'none' }}>
+                style={{ ...dmsControlStyle(), width: '100%', background: bentoComposeForm.vessel_name ? 'var(--vdms-glass)' : 'var(--vdms-surface-alt)' }}>
                 {!bentoComposeForm.vessel_name ? (
                   <option value="">— Select Vessel First —</option>
                 ) : isLoadingFiles ? (
@@ -255,18 +258,18 @@ export function renderBentoComposeModal(host: VesselEmail): React.ReactElement |
             </div>
 
             {/* Status indicator */}
-            <div style={{ background: '#f8fafc', borderRadius: 6, padding: '8px 12px', fontSize: 11, color: '#64748b', border: '1px solid #e2e8f0' }}>
-              📊 Status flow: <strong>Pending</strong> (on upload) → <strong>Pending</strong> (awaiting send) → <strong>Completed</strong> (after dispatch)
+            <div style={{ background: 'var(--vdms-surface-alt)', borderRadius: 6, padding: '8px 12px', fontSize: 11, color: 'var(--vdms-text-muted)', border: '1px solid var(--vdms-line)' }}>
+              <Icon iconName="BarChartVertical" aria-hidden="true" style={{ fontSize: 11 }} /> Status flow: <strong>Pending</strong> (on upload) → <strong>Pending</strong> (awaiting send) → <strong>Completed</strong> (after dispatch)
             </div>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20, flexDirection: isMobile ? 'column' : 'row' }}>
             <button onClick={() => host.setState({ bentoComposeOpen: false, bentoComposeErr: null, bentoComposeMsg: null })}
               disabled={bentoComposeBusy}
-              style={{ background: '#f1f5f9', border: '1px solid #cbd5e1', borderRadius: 6, minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 16px', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
+              style={{ ...dmsBtn('secondary', !bentoComposeBusy), minHeight: 44, width: isMobile ? '100%' : 'auto' }}>Cancel</button>
             <button onClick={handleSend} disabled={bentoComposeBusy}
-              style={{ background: '#0284c7', color: '#fff', border: 'none', borderRadius: 6, minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 20px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
-              {bentoComposeBusy ? '⏳ Sending...' : '✉ Send Email'}
+              style={{ ...dmsBtn('primary', !bentoComposeBusy), minHeight: 44, width: isMobile ? '100%' : 'auto', padding: '8px 20px' }}>
+              {bentoComposeBusy ? <><Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 13 }} /> Sending...</> : <><Icon iconName="Mail" aria-hidden="true" style={{ fontSize: 13 }} /> Send Email</>}
             </button>
           </div>
         </div>

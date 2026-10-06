@@ -15,6 +15,12 @@ import type {
   ApprovalItem, NotificationItem, UserItem,
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
+import { Icon } from '@fluentui/react/lib/Icon';
+import { clay } from '../clayTheme';
+import {
+  DmsPageHeader, DMS_TABLE_CARD, DMS_TABLE, DMS_TH, DMS_TR, DMS_TD,
+  dmsBtn, dmsTone, dmsGrid,
+} from '../dmsDesignSystem';
 
 export function renderBentoEmailDashboardPage(host: VesselEmail): React.ReactElement {
     const {
@@ -45,113 +51,109 @@ export function renderBentoEmailDashboardPage(host: VesselEmail): React.ReactEle
       return true;
     });
 
+    const completedTone = dmsTone('success');
+    const pendingTone = dmsTone('warning');
+    const failedTone = dmsTone('danger');
+    const statCardStyle: React.CSSProperties = {
+      background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-line)',
+      padding: '14px 18px', boxShadow: clay.shadowRaised,
+    };
+
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        <div style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', borderRadius: 12, padding: '24px 28px', color: '#fff', boxShadow: '0 4px 16px rgba(0,0,0,0.15)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
-            <div>
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'rgba(255,255,255,0.1)', padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, color: '#38bdf8', marginBottom: 8 }}>
-                🤖 AI BENTO AUTOMATION ENGINE
-              </div>
-              <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>AI Bento Email Dashboard</h1>
-              <p style={{ margin: '6px 0 0', fontSize: 13, color: '#94a3b8', maxWidth: 650 }}>
-                Automated document tagging, status tracking, and Graph email dispatching.
-              </p>
-            </div>
-            <button
-              style={{ background: 'linear-gradient(135deg, #38bdf8, #0284c7)', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 22px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
-              onClick={() => host.setState({
-                bentoComposeOpen: true,
-                bentoComposeMsg: null,
-                bentoComposeErr: null,
-                bentoComposeForm: {
-                  vessel_name: '',
-                  datasource_tag: 'mail',
-                  subject_text: host._buildAutoSubject('', 'mail', ''),
-                  body: '',
-                  file: null,
-                  existing_attachment: '',
-                  recipient: '',
-                },
-              })}
-            >
-              ✉ Compose & Dispatch Email
-            </button>
-            <button
-              disabled={bentoClearAllBusy || totalCount === 0}
-              style={{
-                background: 'rgba(239, 68, 68, 0.15)', color: '#fca5a5', border: '1px solid rgba(239, 68, 68, 0.4)',
-                borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700,
-                cursor: (bentoClearAllBusy || totalCount === 0) ? 'not-allowed' : 'pointer',
-                opacity: (bentoClearAllBusy || totalCount === 0) ? 0.6 : 1,
-              }}
-              onClick={() => {
-                if (!confirm(`Clear all ${totalCount} AI Bento Email log${totalCount === 1 ? '' : 's'}? This cannot be undone.`)) return;
-                void host._clearAllBentoLogs();
-              }}
-            >
-              {bentoClearAllBusy ? 'Clearing…' : '🗑 Clear All'}
-            </button>
-          </div>
-          {bentoClearAllErr && (
-            <div style={{ marginTop: 12, background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 8, padding: '8px 14px', fontSize: 12, color: '#fca5a5' }}>
-              {bentoClearAllErr}
-            </div>
-          )}
+        <DmsPageHeader
+          title="AI Bento Email Dashboard"
+          subtitle="Automated document tagging, status tracking, and Graph email dispatching."
+        >
+          <button
+            style={dmsBtn('primary')}
+            onClick={() => host.setState({
+              bentoComposeOpen: true,
+              bentoComposeMsg: null,
+              bentoComposeErr: null,
+              bentoComposeForm: {
+                vessel_name: '',
+                datasource_tag: 'mail',
+                subject_text: host._buildAutoSubject('', 'mail', ''),
+                body: '',
+                file: null,
+                existing_attachment: '',
+                recipient: '',
+              },
+            })}
+          >
+            <Icon iconName="Mail" aria-hidden="true" style={{ fontSize: 13 }} /> Compose & Dispatch Email
+          </button>
+          <button
+            disabled={bentoClearAllBusy || totalCount === 0}
+            style={dmsBtn('danger', !(bentoClearAllBusy || totalCount === 0))}
+            onClick={() => {
+              if (!confirm(`Clear all ${totalCount} AI Bento Email log${totalCount === 1 ? '' : 's'}? This cannot be undone.`)) return;
+              void host._clearAllBentoLogs();
+            }}
+          >
+            {bentoClearAllBusy ? 'Clearing…' : <><Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 13 }} /> Clear All</>}
+          </button>
+        </DmsPageHeader>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginTop: 22 }}>
-            <div style={{ background: 'rgba(255,255,255,0.06)', borderRadius: 10, padding: '14px 18px', border: '1px solid rgba(255,255,255,0.1)' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#94a3b8' }}>Total Processed</div>
-              <div style={{ fontSize: 26, fontWeight: 800, color: '#fff', marginTop: 4 }}>{totalCount}</div>
-            </div>
-            <div style={{ background: 'rgba(16, 185, 129, 0.12)', borderRadius: 10, padding: '14px 18px', border: '1px solid rgba(16, 185, 129, 0.25)' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#6ee7b7' }}>Completed</div>
-              <div style={{ fontSize: 26, fontWeight: 800, color: '#34d399', marginTop: 4 }}>{completedCount}</div>
-            </div>
-            <div style={{ background: 'rgba(245, 158, 11, 0.12)', borderRadius: 10, padding: '14px 18px', border: '1px solid rgba(245, 158, 11, 0.25)' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#fcd34d' }}>Pending</div>
-              <div style={{ fontSize: 26, fontWeight: 800, color: '#fbbf24', marginTop: 4 }}>{pendingCount}</div>
-            </div>
-            <div style={{ background: 'rgba(239, 68, 68, 0.12)', borderRadius: 10, padding: '14px 18px', border: '1px solid rgba(239, 68, 68, 0.25)' }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: '#fca5a5' }}>Failed</div>
-              <div style={{ fontSize: 26, fontWeight: 800, color: '#f87171', marginTop: 4 }}>{failedCount}</div>
-            </div>
+        {bentoClearAllErr && (
+          <div style={{ background: dmsTone('danger').bg, border: '1px solid var(--vdms-line)', borderRadius: 8, padding: '8px 14px', fontSize: 12, color: dmsTone('danger').fg }}>
+            {bentoClearAllErr}
+          </div>
+        )}
+
+        <div style={dmsGrid(180)}>
+          <div style={statCardStyle}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--vdms-text-muted)' }}>Total Processed</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--vdms-text)', marginTop: 4 }}>{totalCount}</div>
+          </div>
+          <div style={statCardStyle}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: completedTone.fg }}>Completed</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: completedTone.fg, marginTop: 4 }}>{completedCount}</div>
+          </div>
+          <div style={statCardStyle}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: pendingTone.fg }}>Pending</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: pendingTone.fg, marginTop: 4 }}>{pendingCount}</div>
+          </div>
+          <div style={statCardStyle}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: failedTone.fg }}>Failed</div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: failedTone.fg, marginTop: 4 }}>{failedCount}</div>
           </div>
         </div>
 
         {/* Logs Table */}
-        <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #e2e8f0', overflowX: 'auto' }}>
-          <table style={{ width: '100%', minWidth: 900, borderCollapse: 'collapse', fontSize: 13 }}>
+        <div style={{ ...DMS_TABLE_CARD, overflowX: 'auto' }}>
+          <table style={{ ...DMS_TABLE, minWidth: 900 }}>
             <thead>
-              <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: '#64748b', fontSize: 11, textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap' }}>
-                <th style={{ padding: '10px 16px' }}>#</th>
-                <th style={{ padding: '10px 16px' }}>Vessel</th>
-                <th style={{ padding: '10px 16px' }}>Tag</th>
-                <th style={{ padding: '10px 16px' }}>Subject</th>
-                <th style={{ padding: '10px 16px' }}>Recipient</th>
-                <th style={{ padding: '10px 16px' }}>Status</th>
-                <th style={{ padding: '10px 16px' }}>Attached File</th>
+              <tr>
+                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>#</th>
+                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Vessel</th>
+                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Tag</th>
+                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Subject</th>
+                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Recipient</th>
+                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Status</th>
+                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Attached File</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((log) => (
-                <tr key={log.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: '10px 16px', color: '#64748b', whiteSpace: 'nowrap' }}>#{log.id}</td>
-                  <td style={{ padding: '10px 16px', fontWeight: 600, whiteSpace: 'nowrap' }}>{log.vessel_name || '—'}</td>
-                  <td style={{ padding: '10px 16px', whiteSpace: 'nowrap' }}>{badge('blue', log.datasource_tag_used)}</td>
-                  <td style={{ padding: '10px 16px', color: '#1e293b', minWidth: 200 }}>{log.subject}</td>
-                  <td style={{ padding: '10px 16px', color: '#475569', whiteSpace: 'nowrap' }}>{log.recipient}</td>
-                  <td style={{ padding: '10px 16px', whiteSpace: 'nowrap' }}>
+                <tr key={log.id} style={DMS_TR}>
+                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>#{log.id}</td>
+                  <td style={{ ...DMS_TD, fontWeight: 600, color: 'var(--vdms-text)', whiteSpace: 'nowrap' }}>{log.vessel_name || '—'}</td>
+                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>{badge('blue', log.datasource_tag_used)}</td>
+                  <td style={{ ...DMS_TD, color: 'var(--vdms-text)', minWidth: 200 }}>{log.subject}</td>
+                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>{log.recipient}</td>
+                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>
                     {badge(log.status === 'completed' || log.status === 'success' ? 'green' : log.status === 'pending' ? 'orange' : 'red', log.status)}
                   </td>
-                  <td style={{ padding: '10px 16px', whiteSpace: 'nowrap' }}>
+                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>
                     {log.attachment_names && log.attachment_names.length > 0
                       ? log.attachment_names.map((name, i) => (
-                          <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 6, padding: '2px 8px', fontSize: 11, color: '#0284c7', fontWeight: 600, marginRight: 4 }}>
-                            📎 {name}
+                          <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: dmsTone('accent').bg, border: '1px solid var(--vdms-line)', borderRadius: 6, padding: '2px 8px', fontSize: 11, color: dmsTone('accent').fg, fontWeight: 600, marginRight: 4 }}>
+                            <Icon iconName="Attach" aria-hidden="true" style={{ fontSize: 11 }} /> {name}
                           </span>
                         ))
-                      : <span style={{ color: '#94a3b8', fontSize: 11 }}>—</span>
+                      : <span style={{ color: 'var(--vdms-text-faint)', fontSize: 11 }}>—</span>
                     }
                   </td>
                 </tr>

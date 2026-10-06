@@ -2,6 +2,7 @@ import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import type { FlatRow, GroupedRow } from '../types/rows';
 import type { ApprovalItem } from '../types/ui';
+import { Icon } from '@fluentui/react/lib/Icon';
 import { isMobileWidth, isTabletWidth } from '../responsive';
 import { resolveDetectedVesselForFile } from '../constants';
 import { clay } from '../clayTheme';
@@ -85,7 +86,7 @@ export function renderListView(
                           }}
                           style={{ fontSize: 12, color: '#0369a1', textDecoration: 'underline', cursor: 'pointer' }}
                         >
-                          {file.name}{(file as any).uploading ? ' ⏳' : ''}
+                          {file.name}{(file as any).uploading ? <> <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 12 }} /></> : ''}
                         </span>
                       </label>
                     )) : <span style={{ color: '#94a3b8', fontStyle: 'italic', fontSize: 11 }}>No files</span>}
@@ -115,7 +116,7 @@ export function renderListView(
                       title={rowSelectedCount > 0 ? `Archive ${rowSelectedCount} selected file(s)` : 'Select files to archive'}
                       style={{ minHeight: 44, border: '1px solid #d8b4fe', background: rowSelectedCount > 0 ? '#faf5ff' : '#f8fafc', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: rowSelectedCount > 0 ? 'pointer' : 'not-allowed', color: rowSelectedCount > 0 ? '#7e22ce' : '#cbd5e1' }}
                     >
-                      📦 Archive {rowSelectedCount > 0 ? `(${rowSelectedCount})` : ''}
+                      <Icon iconName="Package" aria-hidden="true" style={{ fontSize: 12 }} /> Archive {rowSelectedCount > 0 ? `(${rowSelectedCount})` : ''}
                     </button>
                     <button
                       type="button"
@@ -233,7 +234,7 @@ export function renderListView(
                               }}
                               style={{ width: 14, height: 14, accentColor: '#ef4444', cursor: 'pointer', flexShrink: 0 }}
                             />
-                            <span style={{ fontSize: 14 }}>{(file as any).uploading ? '⏳' : '📄'}</span>
+                            <span style={{ fontSize: 14 }}>{(file as any).uploading ? <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 14 }} /> : <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 14 }} />}</span>
                             <span
                               onClick={() => {
                                 if ((file as any).uploading) {
@@ -249,7 +250,7 @@ export function renderListView(
                                 ? `${file.name} (uploading)`
                                 : (file.id && /^\d+$/.test(file.id) ? `${file.name} (pending approval)` : `Click to open ${file.name}`)}
                             >
-                              {file.name}{(file as any).uploading ? ' ⏳' : (file.id && /^\d+$/.test(file.id) ? ' ⏳' : '')}
+                              {file.name}{(file as any).uploading ? <> <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 12 }} /></> : (file.id && /^\d+$/.test(file.id) ? <> <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 12 }} /></> : '')}
                             </span>
                             {(() => {
                               const detectedVessel = resolveDetectedVesselForFile(file, host, r.vesselName);
@@ -273,7 +274,7 @@ export function renderListView(
                                       whiteSpace: 'nowrap', flexShrink: 0,
                                     }}
                                   >
-                                    <span>✨</span> {detectedVessel}
+                                    <Icon iconName="Robot" aria-hidden="true" style={{ fontSize: 10 }} /> {detectedVessel}
                                   </button>
                                 );
                               } else {
@@ -292,7 +293,7 @@ export function renderListView(
                                       whiteSpace: 'nowrap', flexShrink: 0,
                                     }}
                                   >
-                                    <span>⚠️</span> Vessel: Not detected
+                                    <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 10 }} /> Vessel: Not detected
                                   </button>
                                 );
                               }
@@ -316,7 +317,7 @@ export function renderListView(
                                   whiteSpace: 'nowrap', flexShrink: 0,
                                 }}
                               >
-                                🔍 OCR
+                                <Icon iconName="Search" aria-hidden="true" style={{ fontSize: 10 }} /> OCR
                               </button>
                             )}
                             {!((file as any).uploading) && file.id && !file.id.startsWith('file_') && !/^\d+$/.test(file.id) && (
@@ -326,7 +327,7 @@ export function renderListView(
                                 onClick={() => void host._archiveDocumentFile(file.id, file.name, r.subFolderPath, r.group, r.vesselName)}
                                 style={{ border: '1px solid #c4b5fd', background: '#f5f3ff', borderRadius: 6, padding: '2px 7px', fontSize: 10, fontWeight: 700, cursor: 'pointer', color: '#6d28d9', whiteSpace: 'nowrap' }}
                               >
-                                📦 Archive
+                                <Icon iconName="Package" aria-hidden="true" style={{ fontSize: 10 }} /> Archive
                               </button>
                             )}
                           </div>
@@ -343,7 +344,7 @@ export function renderListView(
                         title={hasFiles ? 'Attachment Available' : 'Attachment Required'}
                         style={{ color: hasFiles ? '#15803d' : '#64748b', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}
                       >
-                        {hasFiles ? '✅ Attached' : '⚪ Not Attached'}
+                        {hasFiles ? <><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 11 }} /> Attached</> : <><Icon iconName="StatusCircleRing" aria-hidden="true" style={{ fontSize: 11 }} /> Not Attached</>}
                       </span>
                       {/* Row-level upload */}
                       <label style={{
@@ -366,7 +367,7 @@ export function renderListView(
                             host._openBulkUpload(bulkFiles, r.uploadFolderId, r.subFolderPath, r.vesselName);
                           }}
                         />
-                        {isUploading ? '⏳...' : '↑ Upload'}
+                        {isUploading ? <><Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 11 }} />...</> : '↑ Upload'}
                       </label>
                       {(() => {
                         const rowSelectedCount = r.files.filter(f => listViewSelectedFiles.has(f.id)).length;
@@ -393,7 +394,7 @@ export function renderListView(
                               }}
                               title={rowSelectedCount > 0 ? `Archive ${rowSelectedCount} selected file(s)` : 'Select files to archive'}
                             >
-                              📦{rowSelectedCount > 0 ? ` Archive (${rowSelectedCount})` : ' Archive'}
+                              <Icon iconName="Package" aria-hidden="true" style={{ fontSize: 11 }} />{rowSelectedCount > 0 ? ` Archive (${rowSelectedCount})` : ' Archive'}
                             </button>
                             <button
                               type="button"
@@ -416,7 +417,7 @@ export function renderListView(
                               }}
                               title={rowSelectedCount > 0 ? `Delete ${rowSelectedCount} selected file(s)` : 'Select files to delete'}
                             >
-                              🗑{rowSelectedCount > 0 ? ` Delete (${rowSelectedCount})` : ' Delete'}
+                              <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 11 }} />{rowSelectedCount > 0 ? ` Delete (${rowSelectedCount})` : ' Delete'}
                             </button>
                           </>
                         );

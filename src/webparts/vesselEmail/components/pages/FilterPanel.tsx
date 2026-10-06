@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Icon } from '@fluentui/react/lib/Icon';
 import { DebouncedSearchInput } from './DebouncedSearchInput';
 
 /**
@@ -105,7 +106,7 @@ export function FilterPanel(props: FilterPanelProps): React.ReactElement | null 
             aria-label="Close filters"
             style={{ border: 'none', background: 'transparent', fontSize: 16, cursor: 'pointer', color: 'var(--vdms-text-muted)', lineHeight: 1, padding: 4 }}
           >
-            ✕
+            <Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 16 }} />
           </button>
         </div>
 

@@ -5,6 +5,7 @@ import { MAIN_FOLDERS, folderNamesByMainFolder, subfolderNamesByFolder } from '.
 import { extractFilesFromDataTransfer } from '../BulkUploadModal';
 import { resolveDetectedVesselForFile } from '../constants';
 import { clay } from '../clayTheme';
+import { Icon } from '@fluentui/react/lib/Icon';
 
 export type MainFolderKey =
   | 'Technical & Crewing'
@@ -13,10 +14,10 @@ export type MainFolderKey =
   | 'Kaizen - Knowledge Bank'
   | 'Knowledge Bank';
 
-export const VESSEL_MAIN_FOLDERS: Array<{ key: MainFolderKey; emoji: string; color: string; bg: string }> = [
-  { key: 'Technical & Crewing',      emoji: '⚙️', color: '#dc2626', bg: '#fee2e2' },
-  { key: 'Commercial & Chartering',  emoji: '💼', color: '#16a34a', bg: '#dcfce7' },
-  { key: 'Insurance',                emoji: '🛡️', color: '#d97706', bg: '#fef3c7' },
+export const VESSEL_MAIN_FOLDERS: Array<{ key: MainFolderKey; emoji: React.ReactNode; color: string; bg: string }> = [
+  { key: 'Technical & Crewing',      emoji: <Icon iconName="Settings" aria-hidden="true" style={{ fontSize: 22 }} />, color: '#dc2626', bg: '#fee2e2' },
+  { key: 'Commercial & Chartering',  emoji: <Icon iconName="Suitcase" aria-hidden="true" style={{ fontSize: 22 }} />, color: '#16a34a', bg: '#dcfce7' },
+  { key: 'Insurance',                emoji: <Icon iconName="Shield" aria-hidden="true" style={{ fontSize: 22 }} />, color: '#d97706', bg: '#fef3c7' },
 ];
 
 export const DEFAULT_VESSEL_MAINS = folderNamesByMainFolder();
@@ -61,7 +62,7 @@ function FileTable({ files, onDelete, selectedIds, onToggleSelect, host, vesselN
                   </td>
                 )}
                 <td style={{ padding: '12px 16px', fontWeight: 600, color: clay.text, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 18 }}>{file.uploading ? '⏳' : (file.pending ? '🕒' : '📄')}</span>
+                  <span style={{ fontSize: 18 }}>{file.uploading ? <Icon iconName="Sync" aria-hidden="true" /> : (file.pending ? <Icon iconName="Clock" aria-hidden="true" /> : <Icon iconName="Page" aria-hidden="true" />)}</span>
                   <span>{file.name}</span>
                   {file.uploading && <span style={{ fontSize: 11, color: '#0369a1', fontWeight: 600, background: '#e0f2fe', borderRadius: 4, padding: '1px 6px' }}>Uploading...</span>}
                   {file.pending && <span style={{ fontSize: 11, color: '#d97706', fontWeight: 600, background: '#fef3c7', borderRadius: 4, padding: '1px 6px' }}>Pending Approval</span>}
@@ -88,7 +89,7 @@ function FileTable({ files, onDelete, selectedIds, onToggleSelect, host, vesselN
                             cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 3,
                           }}
                         >
-                          <span>✨</span> {detectedVessel}
+                          <Icon iconName="Robot" aria-hidden="true" style={{ fontSize: 10 }} /> {detectedVessel}
                         </button>
                       );
                     } else {
@@ -106,7 +107,7 @@ function FileTable({ files, onDelete, selectedIds, onToggleSelect, host, vesselN
                             cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 3,
                           }}
                         >
-                          <span>⚠️</span> Vessel: Not detected
+                          <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 10 }} /> Vessel: Not detected
                         </button>
                       );
                     }
@@ -136,7 +137,7 @@ function FileTable({ files, onDelete, selectedIds, onToggleSelect, host, vesselN
                           color: '#15803d', display: 'inline-flex', alignItems: 'center', gap: 3,
                         }}
                       >
-                        🔍 OCR
+                        <Icon iconName="Search" aria-hidden="true" style={{ fontSize: 11 }} /> OCR
                       </button>
                     )}
                     {onDelete && (
@@ -145,7 +146,7 @@ function FileTable({ files, onDelete, selectedIds, onToggleSelect, host, vesselN
                         style={{ border: '1px solid #fca5a5', background: '#fff5f5', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#ef4444' }}
                         title="Delete file"
                       >
-                        🗑 Delete
+                        <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 11 }} /> Delete
                       </button>
                     )}
                     {host && sharePointPath && (
@@ -170,7 +171,7 @@ function FileTable({ files, onDelete, selectedIds, onToggleSelect, host, vesselN
 
 // ── Folder card used at every level ──────────────────────────────────────────
 function FolderCard({ name, sub, emoji, bg, onClick }: {
-  name: string; sub: string; emoji: string; bg: string; onClick: () => void;
+  name: string; sub: string; emoji: React.ReactNode; bg: string; onClick: () => void;
 }): React.ReactElement {
   // Phase 6 "Ocean Clay" — puffy card: soft dual-tone shadow + generous
   // radius on the teal-tinted surface, while keeping each category's own
@@ -387,7 +388,7 @@ export function renderFolderView(
 
     const allMainFolders = [
       ...VESSEL_MAIN_FOLDERS,
-      { key: 'Kaizen - Knowledge Bank' as MainFolderKey, emoji: '📚', color: '#7c3aed', bg: '#ede9fe' },
+      { key: 'Kaizen - Knowledge Bank' as MainFolderKey, emoji: <Icon iconName="Library" aria-hidden="true" style={{ fontSize: 22 }} />, color: '#7c3aed', bg: '#ede9fe' },
     ];
 
     const visibleMainFolders = allMainFolders.filter(item => {
@@ -435,7 +436,7 @@ export function renderFolderView(
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ fontSize: 15, fontWeight: 700, color: clay.text, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 18 }}>📄</span> Uploaded Documents ({allCurrentFolderFiles.length})
+                <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 18 }} /> Uploaded Documents ({allCurrentFolderFiles.length})
               </div>
             </div>
             <FileTable
@@ -456,7 +457,7 @@ export function renderFolderView(
             {mainFolderAnomalies.length > 0 && (
               <div style={{ background: 'linear-gradient(135deg,#fffbeb,#fff9e6)', border: '2px solid #f59e0b', borderRadius: 14, padding: 20 }}>
                 <h4 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 700, color: '#92400e' }}>
-                  ⚠️ Folders Created Outside Standard Main Folders ({mainFolderAnomalies.length})
+                  <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 15 }} /> Folders Created Outside Standard Main Folders ({mainFolderAnomalies.length})
                 </h4>
                 <p style={{ margin: '0 0 12px', fontSize: 12, color: '#a16207' }}>
                   These folders were created directly in SharePoint Online at the main folder root level outside standard category structures.
@@ -465,7 +466,7 @@ export function renderFolderView(
                   {mainFolderAnomalies.map(item => (
                     <div key={item.id} style={{ background: 'var(--vdms-surface)', borderRadius: 10, border: '1px solid #fde68a', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 200 }}>
-                        <span style={{ fontSize: 24 }}>📁</span>
+                        <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 24 }} />
                         <div>
                           <div style={{ fontWeight: 700, fontSize: 13, color: '#1f1f1f' }}>{item.name}</div>
                           <div style={{ fontSize: 11, color: '#78716c', fontFamily: 'monospace' }}>{item.spo_path}</div>
@@ -474,11 +475,11 @@ export function renderFolderView(
                       <div style={{ display: 'flex', gap: 8 }}>
                         <button onClick={() => host.setState({ spoClassifyDialog: { anomaly: item, provisioning: false, done: false, error: null } })}
                           style={{ background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
-                          🔍 Classify
+                          <Icon iconName="Search" aria-hidden="true" style={{ fontSize: 12 }} /> Classify
                         </button>
                         <button onClick={() => host._dismissAnomaly(item.id)}
                           style={{ background: 'var(--vdms-surface)', color: '#78716c', border: '1px solid #d6d3d1', borderRadius: 6, padding: '6px 10px', fontSize: 11, cursor: 'pointer' }}>
-                          ✕ Dismiss
+                          <Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 11 }} /> Dismiss
                         </button>
                       </div>
                     </div>
@@ -515,7 +516,7 @@ export function renderFolderView(
           <FolderCard
             name={commonFolderDisplayName}
             sub={`Shared ${docMainFolder || ''} documents`}
-            emoji="📁"
+            emoji={<Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 22 }} />}
             bg="#fef3c7"
             onClick={() => {
               host._pushFolderNav([...folderPathStack, { id: 'common', name: commonFolderDisplayName }], docMainFolder);
@@ -528,7 +529,7 @@ export function renderFolderView(
             key={v.id}
             name={v.name}
             sub="Vessel"
-            emoji="🚢"
+            emoji={<Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 22 }} />}
             bg="#e0f2fe"
             onClick={() => {
               host._pushFolderNav([...folderPathStack, { id: v.id, name: v.name }], docMainFolder);
@@ -564,7 +565,7 @@ export function renderFolderView(
               fontSize: 20, fontWeight: 700, flexShrink: 0,
               boxShadow: clay.shadowIcon,
             }}>
-              {host.state.documentVesselsLoadingMore ? '⏳' : '+'}
+              {host.state.documentVesselsLoadingMore ? <Icon iconName="Sync" aria-hidden="true" /> : '+'}
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 14, color: clay.accentDark, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -625,7 +626,7 @@ export function renderFolderView(
               key={sfName + idx}
               name={sfName}
               sub={isAtCategoryLevel ? 'Document Section' : (stackLevel === 3 ? 'Category' : 'Sub-Category')}
-              emoji="📁"
+              emoji={<Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 22 }} />}
               bg="#e0f2fe"
               onClick={() => {
                 const vesselName = currentVesselNameFromStack || (folderPathStack.length > 0 ? folderPathStack[0].name : null);
@@ -673,7 +674,7 @@ export function renderFolderView(
               }}
               title="Delete uploaded folders (non-template only)"
             >
-              <span>🗑</span> Delete Uploaded Folder
+              <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 13 }} /> Delete Uploaded Folder
             </button>
           </div>
         )}
@@ -694,7 +695,7 @@ export function renderFolderView(
         {subAnomalies.length > 0 && (
           <div style={{ background: '#fff7ed', border: '1px solid #ffedd5', borderRadius: 14, padding: 18 }}>
             <h4 style={{ margin: '0 0 8px', fontSize: 14, fontWeight: 700, color: '#c2410c' }}>
-              ⚠️ Other / Unclassified Items Inside Vessel Tree ({subAnomalies.length})
+              <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 14 }} /> Other / Unclassified Items Inside Vessel Tree ({subAnomalies.length})
             </h4>
             <p style={{ margin: '0 0 12px', fontSize: 12, color: '#9a3412' }}>
               These items were added inside the vessel folder in SharePoint but are not part of the standard template structure.
@@ -703,7 +704,7 @@ export function renderFolderView(
               {subAnomalies.map(item => (
                 <div key={item.id} style={{ background: 'var(--vdms-surface)', borderRadius: 8, border: '1px solid #fed7aa', padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <span style={{ fontSize: 18 }}>{item.item_type === 'folder' ? '📁' : '📄'}</span>
+                    <Icon iconName={item.item_type === 'folder' ? 'FabricFolder' : 'Page'} aria-hidden="true" style={{ fontSize: 18 }} />
                     <div>
                       <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--vdms-text)' }}>{item.name}</span>
                       <span style={{ fontSize: 11, color: 'var(--vdms-text-muted)', marginLeft: 8 }}>Path: {item.spo_path}</span>
@@ -711,7 +712,7 @@ export function renderFolderView(
                   </div>
                   <button onClick={() => host._dismissAnomaly(item.id)}
                     style={{ background: 'var(--vdms-surface)', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}>
-                    ✕ Dismiss
+                    <Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 11 }} /> Dismiss
                   </button>
                 </div>
               ))}
@@ -757,7 +758,7 @@ export function renderFolderView(
         boxShadow: clay.shadowRaised,
       }}>
         <div style={{ width: 64, height: 64, borderRadius: clay.radiusIcon, background: clay.iconBgGradient, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30, boxShadow: clay.shadowIcon }}>
-          ☁️
+          <Icon iconName="Cloud" aria-hidden="true" style={{ fontSize: 30 }} />
         </div>
         <div>
           <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: clay.text }}>This folder is empty</h3>
@@ -785,7 +786,7 @@ export function renderFolderView(
                 host._openBulkUpload(bulkFiles, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
               }}
             />
-            <span>⬆</span> Upload Files
+            <Icon iconName="Up" aria-hidden="true" style={{ fontSize: 13 }} /> Upload Files
           </label>
 
           <label style={{
@@ -810,7 +811,7 @@ export function renderFolderView(
                 host._openBulkUpload(bulkFiles, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
               }}
             />
-            <span>📁</span> Upload Folder
+            <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 13 }} /> Upload Folder
           </label>
 
           {uploadedOnlySubfolderNames.length > 0 && (
@@ -833,7 +834,7 @@ export function renderFolderView(
               }}
               title="Delete uploaded folders (non-template only)"
             >
-              <span>🗑</span> Delete Uploaded Folder
+              <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 13 }} /> Delete Uploaded Folder
             </button>
           )}
         </div>

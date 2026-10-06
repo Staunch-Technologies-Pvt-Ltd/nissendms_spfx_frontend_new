@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Icon } from '@fluentui/react/lib/Icon';
 import type VesselEmail from '../VesselEmail';
 
 /**
@@ -110,7 +111,7 @@ export function CopilotSearchPanel({ host }: { host: VesselEmail }): React.React
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}
       >
-        {open ? '✕' : '✨'}
+        {open ? <Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 18 }} /> : <Icon iconName="Robot" aria-hidden="true" style={{ fontSize: 18 }} />}
       </button>
 
       {/* Popup chat panel */}
@@ -126,7 +127,7 @@ export function CopilotSearchPanel({ host }: { host: VesselEmail }): React.React
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 16 }}>✨</span>
+            <Icon iconName="Robot" aria-hidden="true" style={{ fontSize: 16 }} />
             <span style={{ fontWeight: 700, fontSize: 13, color: '#4c1d95' }}>Ask Copilot</span>
           </div>
           <div style={{ fontSize: 11, color: '#7c3aed', marginTop: 2 }}>
@@ -200,7 +201,7 @@ export function CopilotSearchPanel({ host }: { host: VesselEmail }): React.React
                           cursor: item.kind === 'file' ? 'pointer' : 'default', fontSize: 12,
                         }}
                       >
-                        <span>{item.kind === 'file' ? '📄' : '📁'}</span>
+                        <span>{item.kind === 'file' ? <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 12 }} /> : <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 12 }} />}</span>
                         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {item.name}
                         </span>

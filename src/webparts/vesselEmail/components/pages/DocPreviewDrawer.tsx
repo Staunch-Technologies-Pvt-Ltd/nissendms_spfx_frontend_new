@@ -15,6 +15,7 @@ import type {
   ApprovalItem, NotificationItem, UserItem,
 } from '../types/ui';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../vesselImagePool';
+import { Icon } from '@fluentui/react/lib/Icon';
 
 export function renderDocPreviewDrawer(host: VesselEmail): React.ReactElement | null {
     const { selectedDocPreview } = host.state;
@@ -47,14 +48,14 @@ export function renderDocPreviewDrawer(host: VesselEmail): React.ReactElement | 
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15 }}>
-            <span>📄</span> Document Overview
+            <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 15 }} /> Document Overview
           </div>
           <button
             onClick={() => host.setState({ selectedDocPreview: null })}
             style={{ border: 'none', background: 'transparent', color: '#cbd5e1', fontSize: 18, cursor: 'pointer', fontWeight: 700 }}
             title="Close Drawer"
           >
-            ✕
+            <Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 18 }} />
           </button>
         </div>
 
@@ -65,7 +66,7 @@ export function renderDocPreviewDrawer(host: VesselEmail): React.ReactElement | 
             background: '#f0f9ff', borderRadius: 12, padding: 20, border: '1px solid #bae6fd',
             display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 8,
           }}>
-            <div style={{ fontSize: 42 }}>📄</div>
+            <div style={{ fontSize: 42 }}><Icon iconName="Page" aria-hidden="true" style={{ fontSize: 42 }} /></div>
             <a
               href={downloadUrl || '#'}
               target="_blank"
@@ -94,27 +95,27 @@ export function renderDocPreviewDrawer(host: VesselEmail): React.ReactElement | 
               Metadata Details
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, borderBottom: '1px solid #f1f5f9', paddingBottom: 6 }}>
-              <span style={{ color: '#64748b' }}>🚢 Vessel Name:</span>
+              <span style={{ color: '#64748b' }}><Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 12 }} /> Vessel Name:</span>
               <strong style={{ color: '#0f172a' }}>{selectedDocPreview.vesselName}</strong>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, borderBottom: '1px solid #f1f5f9', paddingBottom: 6 }}>
-              <span style={{ color: '#64748b' }}>📁 Group:</span>
+              <span style={{ color: '#64748b' }}><Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 12 }} /> Group:</span>
               <span style={{ color: '#2563eb', fontWeight: 600 }}>{selectedDocPreview.group}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, borderBottom: '1px solid #f1f5f9', paddingBottom: 6 }}>
-              <span style={{ color: '#64748b' }}>🏷️ Category:</span>
+              <span style={{ color: '#64748b' }}><Icon iconName="Tag" aria-hidden="true" style={{ fontSize: 12 }} /> Category:</span>
               <strong style={{ color: '#1e293b' }}>{selectedDocPreview.category}</strong>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, borderBottom: '1px solid #f1f5f9', paddingBottom: 6 }}>
-              <span style={{ color: '#64748b' }}>💾 Size:</span>
+              <span style={{ color: '#64748b' }}><Icon iconName="Save" aria-hidden="true" style={{ fontSize: 12 }} /> Size:</span>
               <span style={{ color: '#475569' }}>{selectedDocPreview.size || '142 KB'}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, borderBottom: '1px solid #f1f5f9', paddingBottom: 6 }}>
-              <span style={{ color: '#64748b' }}>📅 Date:</span>
+              <span style={{ color: '#64748b' }}><Icon iconName="Calendar" aria-hidden="true" style={{ fontSize: 12 }} /> Date:</span>
               <span style={{ color: '#475569' }}>{selectedDocPreview.date || 'Today'}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12 }}>
-              <span style={{ color: '#64748b' }}>🗺️ Folder Path:</span>
+              <span style={{ color: '#64748b' }}><Icon iconName="Globe2" aria-hidden="true" style={{ fontSize: 12 }} /> Folder Path:</span>
               <span style={{ color: '#334155', fontFamily: 'monospace', fontSize: 11, background: '#f8fafc', padding: '4px 6px', borderRadius: 4, wordBreak: 'break-all' }}>
                 {selectedDocPreview.folderPath}
               </span>
@@ -150,7 +151,7 @@ export function renderDocPreviewDrawer(host: VesselEmail): React.ReactElement | 
               fontSize: 13, fontWeight: 600, textDecoration: 'none', textAlign: 'center',
             }}
           >
-            🌐 Open / View Document
+            <Icon iconName="Globe" aria-hidden="true" style={{ fontSize: 13 }} /> Open / View Document
           </a>
           <button
             onClick={() => {
@@ -166,7 +167,7 @@ export function renderDocPreviewDrawer(host: VesselEmail): React.ReactElement | 
               fontSize: 13, fontWeight: 600, cursor: 'pointer',
             }}
           >
-            ✉ Send via Bento Email
+            <Icon iconName="Mail" aria-hidden="true" style={{ fontSize: 13 }} /> Send via Bento Email
           </button>
           <button
             onClick={() => host.setState({ selectedDocPreview: null })}

@@ -1,33 +1,22 @@
 import * as React from 'react';
+import { Icon } from '@fluentui/react/lib/Icon';
 import type VesselEmail from '../VesselEmail';
 import { clay } from '../clayTheme';
 import type { VesselRecord } from '../types/rows';
 import type { AlertItem } from '../types/ui';
 import { dashboardHeroShipImage } from '../dashboardHeroShip';
 
-// Home Vessels panel: rows per page (see the "Pagination footer" below).
-const VESSELS_PAGE_SIZE = 10;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Home / Dashboard
 //
-//   • Counters: Total Files, Total Folders, Total Sites, Total Vessels
-//     (GET /api/dashboard/stats — backend pages through each site's whole
-//     library, so these are real totals, not the first 500 items).
-//   • Sites: one row per SharePoint site with its own file / folder counts.
-//   • Vessels: one row per vessel (name, hull no., ship type, IMO, shipyard,
-//     which site it came from, status), scoped by the same SharePoint Site
-//     filter as everything else on Home, via GET /api/vessels?site_key=…
-//     (the same endpoint the Vessels module itself uses). When "All
-//     SharePoint Sites" is selected, a vessel that exists on more than one
-//     site can legitimately appear more than once — the "From Site" column
-//     is what tells those rows apart, there is no dedup here.
-//   • Documents: browsed and paged right here on Home (no redirect to the
-//     Documents module) via GET /api/dashboard/documents, with filters for
-//     site, vessel, file type, person, text, and date — day-wise (today,
-//     yesterday, a specific day), month-wise (this/last month, any month that
-//     has files) and ranges (last 7/30/90 days, this/last year, custom) — on
-//     either the modified or created date, plus group-by Day / Month.
+// An at-a-glance summary, not another browsing surface: live totals (GET
+// /api/dashboard/stats), fleet status (GET /api/vessels, already loaded
+// app-wide), monthly document activity (facets from GET
+// /api/dashboard/documents, the same endpoint the Documents module itself
+// uses) and real events/anomalies (GET /api/alerts/all, already polled
+// app-wide for the header alert bell). Every document, every vessel and
+// every site in full detail still lives in the Documents / Vessels / Sites
+// modules — this page never re-renders those as tables.
 //
 // Plain inline styles + React 17 hooks only (SPFx / Fluent UI 8 constraint).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,9 +70,7 @@ export interface DashboardSiteSummary {
   vessels?: number;
   /** The official Term Store labels behind `vessels` — real, current
    * SharePoint vessel folder names for this site, not read from the
-   * vessels DB table. Used to build the Home Vessels section so it always
-   * matches "Total Vessels" and never depends on a vessel's (sometimes
-   * stale) provisioned_site_key. */
+   * vessels DB table. */
   vessel_names?: string[];
 }
 
@@ -103,976 +90,6 @@ export interface DashboardStats {
   last_refreshed_epoch?: number | null;
 }
 
-interface DocumentsPageResponse {
-  items: RealDashboardDoc[];
-  total: number;
-  page: number;
-  page_size: number;
-  total_pages: number;
-  facets: {
-    months: Array<{ month: string; count: number }>;
-    vessels: Array<{ name: string; count: number }>;
-    file_types: Array<{ type: string; count: number }>;
-    people: string[];
-  };
-}
-
-type DatePreset =
-  | 'all' | 'today' | 'yesterday' | 'day'
-  | 'last7' | 'last30' | 'last90'
-  | 'this_month' | 'last_month' | 'month'
-  | 'this_year' | 'last_year' | 'custom';
-
-type GroupBy = 'none' | 'day' | 'month';
-
-interface DocFilters {
-  q: string;
-  vessel: string;
-  fileType: string;
-  person: string;
-  dateField: 'modified' | 'created';
-  preset: DatePreset;
-  day: string;        // yyyy-mm-dd, for preset 'day'
-  month: string;      // yyyy-mm, for preset 'month'
-  from: string;       // yyyy-mm-dd, for preset 'custom'
-  to: string;         // yyyy-mm-dd (inclusive), for preset 'custom'
-  groupBy: GroupBy;
-  sort: string;
-  pageSize: number;
-}
-
-const DEFAULT_FILTERS: DocFilters = {
-  q: '', vessel: 'all', fileType: 'all', person: 'all',
-  dateField: 'modified', preset: 'all', day: '', month: '', from: '', to: '',
-  groupBy: 'none', sort: 'newest', pageSize: 10,
-};
-
-// Kept across visits to Home in the same page load, so leaving Home and
-// coming back doesn't reset the filters or the page the user was on.
-let rememberedFilters: DocFilters = { ...DEFAULT_FILTERS };
-let rememberedPage = 1;
-let refreshNonce = 0;
-
-const FILE_TYPE_LABELS: Record<string, string> = {
-  pdf: 'PDF', word: 'Word', excel: 'Excel / CSV', powerpoint: 'PowerPoint', image: 'Images',
-  drawing: 'Drawings (DWG/DXF)', email: 'Emails', archive: 'Archives', text: 'Text', other: 'Other',
-};
-
-const DATE_PRESET_LABELS: Array<{ value: DatePreset; label: string }> = [
-  { value: 'all', label: 'Any time' },
-  { value: 'today', label: 'Today' },
-  { value: 'yesterday', label: 'Yesterday' },
-  { value: 'day', label: 'Specific day…' },
-  { value: 'last7', label: 'Last 7 days' },
-  { value: 'last30', label: 'Last 30 days' },
-  { value: 'last90', label: 'Last 90 days' },
-  { value: 'this_month', label: 'This month' },
-  { value: 'last_month', label: 'Last month' },
-  { value: 'month', label: 'Specific month…' },
-  { value: 'this_year', label: 'This year' },
-  { value: 'last_year', label: 'Last year' },
-  { value: 'custom', label: 'Custom range…' },
-];
-
-const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-function monthLabel(ym: string): string {
-  const [y, m] = ym.split('-').map(Number);
-  return y && m ? `${MONTH_NAMES[m - 1]} ${y}` : ym;
-}
-
-function parseLocalDate(value: string): Date | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '');
-  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
-}
-
-/** [from, to) in epoch ms for a preset, in the browser's own time zone. */
-function dateRangeFor(f: DocFilters): { from?: number; to?: number } {
-  const now = new Date();
-  const startOfDay = (d: Date): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const addDays = (d: Date, n: number): Date => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
-  const today = startOfDay(now);
-  switch (f.preset) {
-    case 'today': return { from: today.getTime(), to: addDays(today, 1).getTime() };
-    case 'yesterday': return { from: addDays(today, -1).getTime(), to: today.getTime() };
-    case 'day': {
-      const d = parseLocalDate(f.day);
-      return d ? { from: d.getTime(), to: addDays(d, 1).getTime() } : {};
-    }
-    case 'last7': return { from: addDays(today, -6).getTime(), to: addDays(today, 1).getTime() };
-    case 'last30': return { from: addDays(today, -29).getTime(), to: addDays(today, 1).getTime() };
-    case 'last90': return { from: addDays(today, -89).getTime(), to: addDays(today, 1).getTime() };
-    case 'this_month': return {
-      from: new Date(now.getFullYear(), now.getMonth(), 1).getTime(),
-      to: new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime(),
-    };
-    case 'last_month': return {
-      from: new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime(),
-      to: new Date(now.getFullYear(), now.getMonth(), 1).getTime(),
-    };
-    case 'month': {
-      const m = /^(\d{4})-(\d{2})$/.exec(f.month || '');
-      if (!m) return {};
-      const y = Number(m[1]);
-      const mo = Number(m[2]) - 1;
-      return { from: new Date(y, mo, 1).getTime(), to: new Date(y, mo + 1, 1).getTime() };
-    }
-    case 'this_year': return { from: new Date(now.getFullYear(), 0, 1).getTime(), to: new Date(now.getFullYear() + 1, 0, 1).getTime() };
-    case 'last_year': return { from: new Date(now.getFullYear() - 1, 0, 1).getTime(), to: new Date(now.getFullYear(), 0, 1).getTime() };
-    case 'custom': {
-      const a = parseLocalDate(f.from);
-      const b = parseLocalDate(f.to);
-      return { from: a ? a.getTime() : undefined, to: b ? addDays(b, 1).getTime() : undefined };
-    }
-    default: return {};
-  }
-}
-
-function getFileIcon(name: string): { icon: string; color: string } {
-  const low = (name || '').toLowerCase();
-  if (low.endsWith('.pdf')) return { icon: '📄', color: '#ef4444' };
-  if (low.endsWith('.docx') || low.endsWith('.doc')) return { icon: '📝', color: '#2563eb' };
-  if (low.endsWith('.xlsx') || low.endsWith('.xls') || low.endsWith('.csv')) return { icon: '📊', color: '#10b981' };
-  if (low.endsWith('.pptx') || low.endsWith('.ppt')) return { icon: '📽️', color: '#ea580c' };
-  if (low.endsWith('.dwg') || low.endsWith('.dxf')) return { icon: '📐', color: '#8b5cf6' };
-  if (/\.(png|jpe?g|gif|bmp|tiff?|webp|heic)$/.test(low)) return { icon: '🖼️', color: '#f59e0b' };
-  if (/\.(msg|eml)$/.test(low)) return { icon: '✉️', color: '#0284c7' };
-  if (/\.(zip|rar|7z)$/.test(low)) return { icon: '🗜️', color: '#64748b' };
-  return { icon: '📄', color: 'var(--vdms-text-muted)' };
-}
-
-function formatNumber(value: number | undefined | null): string {
-  return typeof value === 'number' && isFinite(value) ? value.toLocaleString() : '—';
-}
-
-function formatDateTime(epoch?: number | null): string {
-  if (!epoch) return '—';
-  const d = new Date(epoch);
-  return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' }) +
-    ', ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-}
-
-function dayKey(epoch: number): string {
-  const d = new Date(epoch);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function dayHeading(key: string): string {
-  const d = parseLocalDate(key);
-  if (!d) return key;
-  const today = new Date();
-  const t0 = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-  if (d.getTime() === t0) return 'Today';
-  if (d.getTime() === t0 - 86400000) return 'Yesterday';
-  return d.toLocaleDateString(undefined, { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
-}
-
-// Folder names that are never real vessels even when they slip into a
-// site's Term Store vessel-term matching — same exclusion list the
-// Documents/Vessels Graph-fallback discovery already applies (see
-// VesselEmail.tsx's vessel-node filter: pool-* slots and the two "common"
-// wrapper folders). Kept here too because the live per-site scan behind
-// the Home Vessels section (below) matches purely against the Term Store,
-// with no name-shape check of its own.
-function _isKnownNonVesselFolderName(name: string): boolean {
-  const n = (name || '').trim().toLowerCase();
-  return /^pool-/i.test(n) || n === 'common for all ships' || n === 'common (not ship specific)';
-}
-
-// ── Shared small styles ──────────────────────────────────────────────────────
-const controlStyle = (border: string, surface: string, text: string): React.CSSProperties => ({
-  padding: '7px 10px', borderRadius: 8, border: `1px solid ${border}`, fontSize: 12,
-  background: surface, color: text, outline: 'none', minWidth: 0,
-});
-
-const thStyle: React.CSSProperties = {
-  padding: '9px 12px', textAlign: 'left', fontSize: 11, fontWeight: 700,
-  textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--vdms-text-muted)', whiteSpace: 'nowrap',
-};
-
-const tdStyle: React.CSSProperties = { padding: '10px 12px', verticalAlign: 'top', fontSize: 13 };
-
-interface Palette { surface: string; border: string; text: string; muted: string; }
-
-// ── Documents panel (paged, filtered) ────────────────────────────────────────
-function DashboardDocumentsPanel(props: {
-  host: VesselEmail;
-  siteKey: string;
-  nonce: number;
-  statsEpoch?: number | null;
-  palette: Palette;
-}): React.ReactElement {
-  const { host, siteKey, nonce, statsEpoch, palette } = props;
-  const [filters, setFiltersState] = React.useState<DocFilters>(rememberedFilters);
-  const [page, setPageState] = React.useState<number>(rememberedPage);
-  const [qInput, setQInput] = React.useState<string>(rememberedFilters.q);
-  const [data, setData] = React.useState<DocumentsPageResponse | null>(null);
-  const [loading, setLoading] = React.useState<boolean>(false);
-  const [error, setError] = React.useState<string>('');
-  const [retry, setRetry] = React.useState<number>(0);
-
-  const setFilters = (patch: Partial<DocFilters>): void => {
-    const next = { ...filters, ...patch };
-    rememberedFilters = next;
-    rememberedPage = 1;
-    setFiltersState(next);
-    setPageState(1);
-  };
-  const setPage = (p: number): void => {
-    rememberedPage = p;
-    setPageState(p);
-  };
-
-  // Debounce the search box so typing doesn't fire a request per key.
-  React.useEffect(() => {
-    if (qInput === filters.q) return undefined;
-    const t = window.setTimeout(() => setFilters({ q: qInput }), 350);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [qInput]);
-
-  // A different site on the Home site switcher starts from page 1.
-  const lastSite = React.useRef(siteKey);
-  React.useEffect(() => {
-    if (lastSite.current !== siteKey) {
-      lastSite.current = siteKey;
-      setPage(1);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [siteKey]);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    const base = host._base();
-    if (!base) return undefined;
-    const range = dateRangeFor(filters);
-    const params = new URLSearchParams();
-    if (siteKey && siteKey !== 'all') params.set('site_key', siteKey);
-    if (filters.q.trim()) params.set('q', filters.q.trim());
-    if (filters.vessel !== 'all') params.set('vessel', filters.vessel);
-    if (filters.fileType !== 'all') params.set('file_type', filters.fileType);
-    if (filters.person !== 'all') params.set('person', filters.person);
-    params.set('date_field', filters.dateField);
-    if (range.from !== undefined) params.set('from_ms', String(range.from));
-    if (range.to !== undefined) params.set('to_ms', String(range.to));
-    params.set('tz_offset_min', String(new Date().getTimezoneOffset()));
-    params.set('sort', filters.sort);
-    params.set('page', String(page));
-    params.set('page_size', String(filters.pageSize));
-    setLoading(true);
-    setError('');
-    host._fetchJson(`${base}/api/dashboard/documents?${params.toString()}`)
-      .then((res: any) => {
-        if (cancelled) return;
-        if (!res || !Array.isArray(res.items)) throw new Error('Unexpected response');
-        setData(res as DocumentsPageResponse);
-        if (res.page && res.page !== page) setPage(res.page);
-      })
-      .catch((err: any) => {
-        if (cancelled) return;
-        setError(err?.message || 'Could not load documents');
-      })
-      .then(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [siteKey, filters, page, nonce, retry, statsEpoch]);
-
-  const { surface, border, text, muted } = palette;
-  const ctl = controlStyle(border, surface, text);
-  const facets = data?.facets;
-  const items = data?.items || [];
-  const total = data?.total || 0;
-  const totalPages = data?.total_pages || 1;
-  const startIdx = total === 0 ? 0 : (page - 1) * filters.pageSize + 1;
-  const endIdx = Math.min(total, page * filters.pageSize);
-  const epochOf = (d: RealDashboardDoc): number =>
-    (filters.dateField === 'created' ? (d.createdEpoch || d.modifiedEpoch) : d.modifiedEpoch) || 0;
-  const activeFilterCount = [
-    filters.q, filters.vessel !== 'all', filters.fileType !== 'all', filters.person !== 'all', filters.preset !== 'all',
-  ].filter(Boolean).length;
-
-  // Group rows on the current page into Day / Month sections.
-  const groups: Array<{ key: string; label: string; rows: RealDashboardDoc[] }> = [];
-  if (filters.groupBy === 'none') {
-    groups.push({ key: 'all', label: '', rows: items });
-  } else {
-    items.forEach(doc => {
-      const ep = epochOf(doc);
-      const key = ep ? (filters.groupBy === 'day' ? dayKey(ep) : dayKey(ep).slice(0, 7)) : 'unknown';
-      let g = groups.find(x => x.key === key);
-      if (!g) {
-        g = { key, label: key === 'unknown' ? 'No date' : (filters.groupBy === 'day' ? dayHeading(key) : monthLabel(key)), rows: [] };
-        groups.push(g);
-      }
-      g.rows.push(doc);
-    });
-  }
-
-  const pageButtons: number[] = [];
-  {
-    const windowStart = Math.max(1, Math.min(page - 2, totalPages - 4));
-    for (let p = windowStart; p <= Math.min(totalPages, windowStart + 4); p++) pageButtons.push(p);
-  }
-  const pageBtn = (active: boolean, disabled = false): React.CSSProperties => ({
-    minWidth: 32, height: 30, padding: '0 10px', borderRadius: 8, fontSize: 12, fontWeight: 700,
-    border: `1px solid ${active ? clay.accentDark : border}`,
-    background: active ? clay.accent : surface, color: active ? '#fff' : (disabled ? 'var(--vdms-text-faint)' : text),
-    cursor: disabled ? 'not-allowed' : 'pointer',
-  });
-
-  const openDoc = (doc: RealDashboardDoc): void => {
-    if (doc.webUrl) window.open(doc.webUrl, '_blank', 'noopener');
-  };
-
-  return (
-    <div style={{ background: surface, borderRadius: 22, border: `1px solid ${border}`, padding: 22, boxShadow: clay.shadowRaised, backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <h3 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: text }}>Documents</h3>
-          <span style={{ fontSize: 11, fontWeight: 700, color: clay.accentDark, background: clay.accentSoft, borderRadius: 12, padding: '1px 8px' }}>
-            {loading && !data ? '…' : `${formatNumber(total)} ${activeFilterCount > 0 ? 'matching' : 'files'}`}
-          </span>
-          {loading && data && <span style={{ fontSize: 11, color: muted }}>Updating…</span>}
-        </div>
-        {activeFilterCount > 0 && (
-          <button
-            type="button"
-            onClick={() => { setQInput(''); setFilters({ ...DEFAULT_FILTERS, groupBy: filters.groupBy, sort: filters.sort, pageSize: filters.pageSize }); }}
-            style={{ background: 'none', border: 'none', color: clay.accentDark, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
-          >
-            ✕ Clear filters ({activeFilterCount})
-          </button>
-        )}
-      </div>
-
-      {/* Filters */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
-        <input
-          value={qInput}
-          onChange={e => setQInput(e.target.value)}
-          placeholder="Search file name (partial ok), folder, vessel, person…"
-          aria-label="Search documents"
-          style={{ ...ctl, flex: '1 1 240px' }}
-        />
-        <select aria-label="Date" value={filters.preset} onChange={e => setFilters({ preset: e.target.value as DatePreset })} style={ctl}>
-          {DATE_PRESET_LABELS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-        </select>
-        {filters.preset === 'day' && (
-          <input type="date" aria-label="Day" value={filters.day} onChange={e => setFilters({ day: e.target.value })} style={ctl} />
-        )}
-        {filters.preset === 'month' && (
-          <select aria-label="Month" value={filters.month} onChange={e => setFilters({ month: e.target.value })} style={ctl}>
-            <option value="">Select month</option>
-            {(facets?.months || []).map(m => (
-              <option key={m.month} value={m.month}>{monthLabel(m.month)} ({m.count})</option>
-            ))}
-          </select>
-        )}
-        {filters.preset === 'custom' && (
-          <>
-            <input type="date" aria-label="From" value={filters.from} onChange={e => setFilters({ from: e.target.value })} style={ctl} />
-            <span style={{ alignSelf: 'center', fontSize: 12, color: muted }}>to</span>
-            <input type="date" aria-label="To" value={filters.to} onChange={e => setFilters({ to: e.target.value })} style={ctl} />
-          </>
-        )}
-        <select aria-label="Date field" value={filters.dateField} onChange={e => setFilters({ dateField: e.target.value as 'modified' | 'created' })} style={ctl}>
-          <option value="modified">by Modified date</option>
-          <option value="created">by Uploaded date</option>
-        </select>
-        <select aria-label="Vessel" value={filters.vessel} onChange={e => setFilters({ vessel: e.target.value })} style={{ ...ctl, maxWidth: 190 }}>
-          <option value="all">All vessels</option>
-          {(facets?.vessels || []).map(v => <option key={v.name} value={v.name}>{v.name} ({v.count})</option>)}
-        </select>
-        <select aria-label="File type" value={filters.fileType} onChange={e => setFilters({ fileType: e.target.value })} style={ctl}>
-          <option value="all">All file types</option>
-          {(facets?.file_types || []).map(t => <option key={t.type} value={t.type}>{FILE_TYPE_LABELS[t.type] || t.type} ({t.count})</option>)}
-        </select>
-        <select aria-label="Person" value={filters.person} onChange={e => setFilters({ person: e.target.value })} style={{ ...ctl, maxWidth: 190 }}>
-          <option value="all">Anyone</option>
-          {(facets?.people || []).map(p => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <select aria-label="Group by" value={filters.groupBy} onChange={e => setFilters({ groupBy: e.target.value as GroupBy })} style={ctl}>
-          <option value="none">No grouping</option>
-          <option value="day">Group by day</option>
-          <option value="month">Group by month</option>
-        </select>
-        <select aria-label="Sort" value={filters.sort} onChange={e => setFilters({ sort: e.target.value })} style={ctl}>
-          <option value="newest">Newest first</option>
-          <option value="oldest">Oldest first</option>
-          <option value="created_newest">Recently uploaded</option>
-          <option value="name_az">Name A–Z</option>
-          <option value="name_za">Name Z–A</option>
-          <option value="size_desc">Largest first</option>
-          <option value="size_asc">Smallest first</option>
-        </select>
-      </div>
-
-      {error ? (
-        <div style={{ padding: '32px 16px', textAlign: 'center', color: '#b91c1c', border: '1px dashed #fca5a5', borderRadius: 12, background: '#fef2f2' }}>
-          <div style={{ fontWeight: 700 }}>Couldn't load documents</div>
-          <div style={{ fontSize: 12, marginTop: 4 }}>{error}. If the backend was just updated, restart it so the new Home endpoint is available.</div>
-          <button type="button" onClick={() => setRetry(r => r + 1)} style={{ marginTop: 10, border: '1px solid #fca5a5', background: '#fff', color: '#b91c1c', borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>↻ Retry</button>
-        </div>
-      ) : (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
-            <thead>
-              <tr style={{ borderBottom: '2px solid var(--vdms-border)' }}>
-                <th style={thStyle}>Name</th>
-                <th style={thStyle}>Site</th>
-                <th style={thStyle}>Vessel</th>
-                <th style={thStyle}>{filters.dateField === 'created' ? 'Uploaded' : 'Modified'}</th>
-                <th style={thStyle}>Size</th>
-                <th style={{ ...thStyle, textAlign: 'right' }}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!data && loading ? (
-                <tr><td colSpan={6} style={{ ...tdStyle, padding: '36px 16px', textAlign: 'center', color: muted }}>Loading documents…</td></tr>
-              ) : items.length === 0 ? (
-                <tr>
-                  <td colSpan={6} style={{ ...tdStyle, padding: '36px 16px', textAlign: 'center', color: 'var(--vdms-text-faint)' }}>
-                    <div style={{ fontSize: 28, marginBottom: 6 }}>📂</div>
-                    <div style={{ fontWeight: 600, color: 'var(--vdms-text-muted)' }}>
-                      {activeFilterCount > 0 ? 'No documents match these filters' : 'No documents found'}
-                    </div>
-                  </td>
-                </tr>
-              ) : groups.map(group => (
-                <React.Fragment key={group.key}>
-                  {filters.groupBy !== 'none' && (
-                    <tr>
-                      <td colSpan={6} style={{ padding: '10px 12px 6px', fontSize: 12, fontWeight: 800, color: clay.accentDark, background: 'var(--vdms-surface-alt)' }}>
-                        {group.label} <span style={{ fontWeight: 600, color: muted }}>· {group.rows.length} on this page</span>
-                      </td>
-                    </tr>
-                  )}
-                  {group.rows.map(doc => {
-                    const { icon, color } = getFileIcon(doc.name);
-                    const who = filters.dateField === 'created' ? doc.createdBy : doc.modifiedBy;
-                    return (
-                      <tr key={doc.id} style={{ borderBottom: '1px solid var(--vdms-border-soft)' }}>
-                        <td style={{ ...tdStyle, maxWidth: 360 }}>
-                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                            <span style={{ fontSize: 16, color, flexShrink: 0 }}>{icon}</span>
-                            <div style={{ minWidth: 0 }}>
-                              <div
-                                onClick={() => openDoc(doc)}
-                                title={doc.name}
-                                style={{ fontWeight: 600, color: doc.webUrl ? '#0284c7' : 'var(--vdms-text)', cursor: doc.webUrl ? 'pointer' : 'default', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                              >
-                                {doc.name}
-                              </div>
-                              {doc.subFolderPath && (
-                                <div title={doc.subFolderPath} style={{ fontSize: 11, color: muted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                  {doc.subFolderPath.split(/\s*>\s*/).join(' › ')}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </td>
-                        <td style={{ ...tdStyle, whiteSpace: 'nowrap', color: 'var(--vdms-text-secondary)' }}>{doc.siteName || doc.site || '—'}</td>
-                        <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
-                          {doc.vessel && doc.vessel !== 'Not Listed' ? (
-                            <span style={{ background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text)', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>{doc.vessel}</span>
-                          ) : (
-                            <span style={{ fontSize: 11, color: 'var(--vdms-text-faint)' }}>Not listed</span>
-                          )}
-                        </td>
-                        <td style={{ ...tdStyle, whiteSpace: 'nowrap', color: 'var(--vdms-text-muted)', fontSize: 12 }}>
-                          <div>{formatDateTime(epochOf(doc))}</div>
-                          {who && <div style={{ fontSize: 11, color: 'var(--vdms-text-faint)' }}>{who}</div>}
-                        </td>
-                        <td style={{ ...tdStyle, whiteSpace: 'nowrap', color: 'var(--vdms-text-muted)', fontSize: 12 }}>{doc.fileSize || '—'}</td>
-                        <td style={{ ...tdStyle, textAlign: 'right' }}>
-                          <button
-                            type="button"
-                            disabled={!doc.webUrl}
-                            onClick={() => openDoc(doc)}
-                            style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6, padding: '4px 10px', fontSize: 12, fontWeight: 600, color: '#0284c7', cursor: doc.webUrl ? 'pointer' : 'not-allowed', opacity: doc.webUrl ? 1 : 0.5 }}
-                          >
-                            Open
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </React.Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Pagination */}
-      {!error && total > 0 && (
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 14 }}>
-          <div style={{ fontSize: 12, color: muted }}>
-            Showing <strong style={{ color: text }}>{formatNumber(startIdx)}–{formatNumber(endIdx)}</strong> of <strong style={{ color: text }}>{formatNumber(total)}</strong>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <button type="button" disabled={page <= 1} onClick={() => setPage(1)} style={pageBtn(false, page <= 1)} aria-label="First page">«</button>
-            <button type="button" disabled={page <= 1} onClick={() => setPage(page - 1)} style={pageBtn(false, page <= 1)}>‹ Prev</button>
-            {pageButtons.map(p => (
-              <button key={p} type="button" onClick={() => setPage(p)} style={pageBtn(p === page)} aria-current={p === page ? 'page' : undefined}>{p}</button>
-            ))}
-            <button type="button" disabled={page >= totalPages} onClick={() => setPage(page + 1)} style={pageBtn(false, page >= totalPages)}>Next ›</button>
-            <button type="button" disabled={page >= totalPages} onClick={() => setPage(totalPages)} style={pageBtn(false, page >= totalPages)} aria-label="Last page">»</button>
-            <select
-              aria-label="Rows per page"
-              value={filters.pageSize}
-              onChange={e => setFilters({ pageSize: Number(e.target.value) })}
-              style={{ ...ctl, marginLeft: 6 }}
-            >
-              {[10, 20, 50, 100].map(n => <option key={n} value={n}>{n} / page</option>)}
-            </select>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-interface DashboardVesselRow {
-  name: string;
-  siteKey: string;
-  meta?: VesselRecord;
-}
-
-// ── Vessels panel (site-wise, mirrors the Documents panel) ──────────────────
-//
-// Source of truth: dashboardStats.sites[].vessel_names — the SAME live,
-// per-site Term Store folder scan that "Total Vessels" is summed from (see
-// backend _term_store_vessel_folder_count). This is deliberately NOT built
-// from GET /api/vessels (the vessels DB table): a vessel's stored
-// provisioned_site_key can be stale (e.g. left over as "local" from early
-// testing, long after the vessel's real folder moved / was reconciled to a
-// production site), and trusting it both mis-attributes vessels to the
-// wrong site AND silently drops real, currently-existing vessels whenever
-// their name collides with an unrelated, wrongly-tagged DB row. The
-// vessels table is still queried once (unscoped) purely to enrich a
-// matching name with hull no. / IMO / ship type / shipyard when a DMS
-// record exists for it — never to decide which vessels or sites exist.
-// The Vessel Name cell shows only the name; whether it has a DMS record
-// is a Status-column concern, not something to clutter the name with.
-function DashboardVesselsPanel(props: {
-  host: VesselEmail;
-  siteKey: string;
-  nonce: number;
-  dashboardStats: DashboardStats | null;
-  palette: Palette;
-}): React.ReactElement {
-  const { host, siteKey, nonce, dashboardStats, palette } = props;
-  const [metaByName, setMetaByName] = React.useState<Record<string, VesselRecord>>({});
-  const [metaError, setMetaError] = React.useState<string>('');
-  const [search, setSearch] = React.useState<string>('');
-  const [retry, setRetry] = React.useState<number>(0);
-  const [page, setPage] = React.useState<number>(0);
-
-  // Jump back to page 1 whenever the site filter changes or the vessel list
-  // is refreshed, so pagination never gets stuck past the end of a shorter,
-  // re-filtered list.
-  React.useEffect(() => { setPage(0); }, [siteKey, nonce]);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    const base = host._base();
-    if (!base) return undefined;
-    host._fetchJson(`${base}/api/vessels`)
-      .then((res: any) => {
-        if (cancelled || !Array.isArray(res)) return;
-        const map: Record<string, VesselRecord> = {};
-        res.forEach((v: any) => {
-          const key = String(v.name || '').trim().toLowerCase();
-          // Prefer a real DMS record over a SharePoint-only discovered one
-          // if both happen to be present under the same name.
-          if (key && (!map[key] || (map[key].source === 'sharepoint' && v.source !== 'sharepoint'))) {
-            map[key] = v;
-          }
-        });
-        setMetaByName(map);
-      })
-      .catch((err: any) => { if (!cancelled) setMetaError(err?.message || ''); });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nonce, retry]);
-
-  const { surface, border, text, muted } = palette;
-  const ctl = controlStyle(border, surface, text);
-  const sites = dashboardStats?.sites || [];
-  const loading = !dashboardStats;
-
-  const siteNameFor = (key?: string | null): string => {
-    if (!key) return '—';
-    const match = (host.state.documentSites || []).find(s =>
-      String(s.site_key || '').toLowerCase() === key.toLowerCase() ||
-      String(s.sp_site_name || '').toLowerCase() === key.toLowerCase()
-    );
-    return match?.sp_site_name || match?.site_key || key;
-  };
-
-  const rows: DashboardVesselRow[] = [];
-  sites.forEach(site => {
-    if (siteKey !== 'all' && String(site.site_key || '').toLowerCase() !== siteKey.toLowerCase()) return;
-    (site.vessel_names || []).forEach(name => {
-      if (_isKnownNonVesselFolderName(name)) return;
-      rows.push({ name, siteKey: site.site_key, meta: metaByName[name.trim().toLowerCase()] });
-    });
-  });
-
-  const q = search.trim().toLowerCase();
-  const filtered = q
-    ? rows.filter(r =>
-        r.name.toLowerCase().includes(q) ||
-        (r.meta?.imo || '').toLowerCase().includes(q) ||
-        (r.meta?.hull_number || '').toLowerCase().includes(q) ||
-        (r.meta?.vessel_type || '').toLowerCase().includes(q) ||
-        (r.meta?.shipyard || '').toLowerCase().includes(q)
-      )
-    : rows;
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / VESSELS_PAGE_SIZE));
-  const safePage = Math.min(page, totalPages - 1);
-  const pageRows = filtered.slice(safePage * VESSELS_PAGE_SIZE, (safePage + 1) * VESSELS_PAGE_SIZE);
-
-  const statusPill = (row: DashboardVesselRow): React.ReactElement => {
-    const hasDbRecord = !!row.meta && row.meta.source !== 'sharepoint';
-    if (!hasDbRecord) {
-      return (
-        <span
-          title="A real SharePoint folder matching this site's Term Store vessel list — no DMS vessel record for it yet"
-          style={{ display: 'inline-block', borderRadius: 12, padding: '2px 10px', fontSize: 11, fontWeight: 700, background: clay.pillWarnBg, color: clay.pillWarnText, boxShadow: clay.pillWarnShadow, whiteSpace: 'nowrap' }}
-        >
-          Not in DMS yet
-        </span>
-      );
-    }
-    const s = row.meta?.status || 'Active';
-    const bg = s === 'Active' ? clay.pillActiveBg : s === 'In Maintenance' ? clay.pillWarnBg : clay.pillDangerBg;
-    const fg = s === 'Active' ? clay.pillActiveText : s === 'In Maintenance' ? clay.pillWarnText : clay.pillDangerText;
-    const shadow = s === 'Active' ? clay.pillActiveShadow : s === 'In Maintenance' ? clay.pillWarnShadow : clay.pillDangerShadow;
-    return (
-      <span style={{ display: 'inline-block', borderRadius: 12, padding: '2px 10px', fontSize: 11, fontWeight: 700, background: bg, color: fg, boxShadow: shadow, whiteSpace: 'nowrap' }}>
-        {s === 'Active' ? '● Active' : s}
-      </span>
-    );
-  };
-
-  return (
-    <div style={{ background: surface, borderRadius: 22, border: `1px solid ${border}`, padding: 22, boxShadow: clay.shadowRaised, backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <h3 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: text }}>Vessels</h3>
-          <span style={{ fontSize: 11, fontWeight: 700, color: clay.accentDark, background: clay.accentSoft, borderRadius: 12, padding: '1px 8px' }}>
-            {loading ? '…' : `${formatNumber(filtered.length)} ${q ? 'matching' : 'vessels'}`}
-          </span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <input
-            value={search}
-            onChange={e => { setSearch(e.target.value); setPage(0); }}
-            placeholder="Search vessel, IMO, hull no…"
-            aria-label="Search vessels"
-            style={{ ...ctl, minWidth: 220 }}
-          />
-          <button
-            type="button"
-            onClick={() => host._goToView('vessels')}
-            style={{ background: 'none', border: 'none', color: clay.accentDark, fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
-          >
-            Manage vessels →
-          </button>
-        </div>
-      </div>
-
-      <div style={{ fontSize: 11, color: muted, marginBottom: 10 }}>
-        Live count from each site's actual SharePoint folders — the same figure as the <strong style={{ color: text }}>Total Vessels</strong> tile above, not the vessels database.
-        {siteKey === 'all' && rows.length > 0 && (
-          <> The same vessel can appear more than once if its folder genuinely exists on more than one site — check <strong style={{ color: text }}>From Site</strong> to tell those rows apart.</>
-        )}
-      </div>
-
-      {metaError && (
-        <div style={{ fontSize: 11, color: '#b91c1c', marginBottom: 8 }}>
-          Vessel details (hull no. / IMO / type) couldn't be loaded — names and sites below are still live. {metaError}{' '}
-          <button type="button" onClick={() => { setMetaError(''); setRetry(r => r + 1); }} style={{ background: 'none', border: 'none', color: '#b91c1c', fontWeight: 700, textDecoration: 'underline', cursor: 'pointer', fontSize: 11, padding: 0 }}>Retry</button>
-        </div>
-      )}
-
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 880 }}>
-          <thead>
-            <tr style={{ borderBottom: '2px solid var(--vdms-border)' }}>
-              <th style={thStyle}>Vessel Name</th>
-              <th style={thStyle}>Hull Number</th>
-              <th style={thStyle}>Ship Type</th>
-              <th style={thStyle}>IMO Number</th>
-              <th style={thStyle}>Shipyard</th>
-              <th style={thStyle}>From Site</th>
-              <th style={thStyle}>Status</th>
-              <th style={{ ...thStyle, textAlign: 'right' }}>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan={8} style={{ ...tdStyle, textAlign: 'center', color: muted, padding: '24px 12px' }}>Counting vessels from SharePoint…</td></tr>
-            ) : filtered.length === 0 ? (
-              <tr>
-                <td colSpan={8} style={{ ...tdStyle, padding: '36px 16px', textAlign: 'center', color: 'var(--vdms-text-faint)' }}>
-                  <div style={{ fontSize: 28, marginBottom: 6 }}>⚓</div>
-                  <div style={{ fontWeight: 600, color: 'var(--vdms-text-muted)' }}>
-                    {q ? 'No vessels match this search' : 'No vessels found for this site'}
-                  </div>
-                </td>
-              </tr>
-            ) : pageRows.map((row, idx) => (
-              <tr key={`${row.siteKey}:${row.name}:${idx}`} style={{ borderBottom: '1px solid var(--vdms-border-soft)' }}>
-                <td style={{ ...tdStyle, fontWeight: 700, color: text, whiteSpace: 'nowrap' }}>⚓ {row.name}</td>
-                <td style={{ ...tdStyle, color: 'var(--vdms-text-secondary)' }}>{row.meta?.hull_number || '—'}</td>
-                <td style={{ ...tdStyle, color: 'var(--vdms-text-secondary)' }}>{row.meta?.vessel_type || '—'}</td>
-                <td style={{ ...tdStyle, color: 'var(--vdms-text-secondary)', whiteSpace: 'nowrap' }}>{row.meta?.imo || '—'}</td>
-                <td style={{ ...tdStyle, color: 'var(--vdms-text-secondary)' }}>{row.meta?.shipyard || '—'}</td>
-                <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
-                  <span style={{ background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text)', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>
-                    🌐 {siteNameFor(row.siteKey)}
-                  </span>
-                </td>
-                <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{statusPill(row)}</td>
-                <td style={{ ...tdStyle, textAlign: 'right' }}>
-                  <button
-                    type="button"
-                    onClick={() => host.setState({ vesselSiteFilter: row.siteKey || 'all' }, () => { void host._goToView('vessels'); })}
-                    style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6, padding: '4px 10px', fontSize: 12, fontWeight: 600, color: '#0284c7', cursor: 'pointer' }}
-                  >
-                    View
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {!loading && filtered.length > 0 && (
-        <div style={{ padding: '10px 2px 0', color: muted, fontSize: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-          <span>
-            Showing {safePage * VESSELS_PAGE_SIZE + 1}–{Math.min((safePage + 1) * VESSELS_PAGE_SIZE, filtered.length)} of {filtered.length} vessels
-          </span>
-          <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
-            <button
-              type="button"
-              onClick={() => setPage(Math.max(0, safePage - 1))}
-              disabled={safePage === 0}
-              style={{ border: `1px solid ${border}`, background: surface, borderRadius: 6, padding: '3px 8px', fontSize: 11, cursor: safePage === 0 ? 'not-allowed' : 'pointer', opacity: safePage === 0 ? 0.4 : 1 }}
-            >‹</button>
-            {Array.from({ length: totalPages }, (_, i) => (
-              <button
-                key={i}
-                type="button"
-                onClick={() => setPage(i)}
-                style={{ border: `1px solid ${i === safePage ? 'transparent' : border}`, background: i === safePage ? clay.accentGradient : surface, color: i === safePage ? '#fff' : text, borderRadius: 6, padding: '3px 8px', fontSize: 11, fontWeight: i === safePage ? 700 : 400, cursor: 'pointer', minWidth: 26 }}
-              >{i + 1}</button>
-            ))}
-            <button
-              type="button"
-              onClick={() => setPage(Math.min(totalPages - 1, safePage + 1))}
-              disabled={safePage >= totalPages - 1}
-              style={{ border: `1px solid ${border}`, background: surface, borderRadius: 6, padding: '3px 8px', fontSize: 11, cursor: safePage >= totalPages - 1 ? 'not-allowed' : 'pointer', opacity: safePage >= totalPages - 1 ? 0.4 : 1 }}
-            >›</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Hero calendar ────────────────────────────────────────────────────────────
-// Month calendar for the welcome banner: today is highlighted, and hovering (or
-// tapping) a date lists the alerts raised and the documents uploaded that day.
-// Uploads come from the same /api/dashboard/documents endpoint as the Documents
-// panel (created date, scoped by the Home site switcher), fetched per month.
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const FULL_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-
-function humanize(value: string): string {
-  const t = String(value || '').replace(/_/g, ' ').trim();
-  return t ? t.charAt(0).toUpperCase() + t.slice(1) : 'Alert';
-}
-
-function HeroCalendar(props: { host: VesselEmail; siteKey: string; nonce: number; statsEpoch?: number | null }): React.ReactElement {
-  const { host, siteKey, nonce, statsEpoch } = props;
-  const today = new Date();
-  const todayKey = dayKey(today.getTime());
-  const [view, setView] = React.useState<{ y: number; m: number }>({ y: today.getFullYear(), m: today.getMonth() });
-  const [docsByDay, setDocsByDay] = React.useState<Record<string, RealDashboardDoc[]>>({});
-  const [docsLoading, setDocsLoading] = React.useState<boolean>(false);
-  const [hover, setHover] = React.useState<{ key: string; top: number } | null>(null);
-  const [pinned, setPinned] = React.useState<{ key: string; top: number } | null>(null);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    const base = host._base();
-    if (!base) return undefined;
-    const from = new Date(view.y, view.m, 1).getTime();
-    const to = new Date(view.y, view.m + 1, 1).getTime();
-    const collected: RealDashboardDoc[] = [];
-    const loadPage = (pageNo: number): Promise<void> => {
-      const params = new URLSearchParams();
-      if (siteKey && siteKey !== 'all') params.set('site_key', siteKey);
-      params.set('date_field', 'created');
-      params.set('from_ms', String(from));
-      params.set('to_ms', String(to));
-      params.set('tz_offset_min', String(new Date().getTimezoneOffset()));
-      params.set('sort', 'created_newest');
-      params.set('page', String(pageNo));
-      params.set('page_size', '200');
-      return host._fetchJson(`${base}/api/dashboard/documents?${params.toString()}`).then((res: any) => {
-        if (cancelled) return undefined;
-        const items: RealDashboardDoc[] = Array.isArray(res?.items) ? res.items : [];
-        items.forEach(d => collected.push(d));
-        return pageNo < (res?.total_pages || 1) && pageNo < 5 ? loadPage(pageNo + 1) : undefined;
-      });
-    };
-    setDocsLoading(true);
-    loadPage(1)
-      .then(() => {
-        if (cancelled) return;
-        const grouped: Record<string, RealDashboardDoc[]> = {};
-        collected.forEach(d => {
-          const epoch = d.createdEpoch || d.modifiedEpoch;
-          if (!epoch) return;
-          const k = dayKey(epoch);
-          (grouped[k] = grouped[k] || []).push(d);
-        });
-        setDocsByDay(grouped);
-      })
-      .catch(() => { if (!cancelled) setDocsByDay({}); })
-      .then(() => { if (!cancelled) setDocsLoading(false); });
-    return () => { cancelled = true; };
-  }, [view.y, view.m, siteKey, nonce, statsEpoch]);
-
-  const alertsByDay: Record<string, AlertItem[]> = {};
-  (host.state.alertsList || []).forEach(a => {
-    const t = a.created_at ? new Date(a.created_at).getTime() : NaN;
-    if (!isFinite(t)) return;
-    const k = dayKey(t);
-    (alertsByDay[k] = alertsByDay[k] || []).push(a);
-  });
-
-  const first = new Date(view.y, view.m, 1);
-  const daysInMonth = new Date(view.y, view.m + 1, 0).getDate();
-  const lead = (first.getDay() + 6) % 7; // Monday-first
-  const cellCount = Math.ceil((lead + daysInMonth) / 7) * 7;
-  const cells: Date[] = [];
-  for (let i = 0; i < cellCount; i++) cells.push(new Date(view.y, view.m, 1 - lead + i));
-
-  const shift = (delta: number): void => {
-    setHover(null); setPinned(null);
-    setView(v => { const d = new Date(v.y, v.m + delta, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
-  };
-  const goToday = (): void => { setHover(null); setPinned(null); setView({ y: today.getFullYear(), m: today.getMonth() }); };
-
-  const active = hover || pinned;
-  const activeDocs = active ? (docsByDay[active.key] || []) : [];
-  const activeAlerts = active ? (alertsByDay[active.key] || []) : [];
-  const activeDate = active ? parseLocalDate(active.key) : null;
-  const DOT_DOC = clay.accent;
-  const DOT_ALERT = '#f59e0b';
-  const navBtn: React.CSSProperties = { width: 30, height: 30, borderRadius: 10, border: '1px solid var(--vdms-line)', background: 'var(--vdms-field)', color: 'var(--vdms-text)', fontSize: 16, fontWeight: 700, lineHeight: 1, cursor: 'pointer', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' };
-  const sectionLabel: React.CSSProperties = { fontSize: 11, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--vdms-text-muted)', margin: '10px 0 4px', display: 'flex', alignItems: 'center', gap: 6 };
-  const rowStyle: React.CSSProperties = { fontSize: 12.5, fontWeight: 600, color: 'var(--vdms-text)', padding: '3px 0', display: 'flex', gap: 6, alignItems: 'center', minWidth: 0 };
-  const ellipsis: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 };
-  const popTop = (el: HTMLElement): number => el.offsetTop + el.offsetHeight + 6;
-
-  return (
-    <div style={{ position: 'relative', width: '100%', borderRadius: 22, padding: '14px 14px 12px', background: 'var(--vdms-glass-strong)', border: '1px solid var(--vdms-line-strong)', boxShadow: '0 14px 34px rgba(0,30,70,0.18)', boxSizing: 'border-box' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <button type="button" aria-label="Previous month" onClick={() => shift(-1)} style={navBtn}>‹</button>
-        <div style={{ flex: 1, textAlign: 'center', fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif", fontSize: 15, fontWeight: 800, color: 'var(--vdms-text)', letterSpacing: '-0.01em' }}>
-          {FULL_MONTHS[view.m]} {view.y}
-        </div>
-        <button type="button" onClick={goToday} style={{ ...navBtn, width: 'auto', padding: '0 10px', fontSize: 12, fontWeight: 700 }}>Today</button>
-        <button type="button" aria-label="Next month" onClick={() => shift(1)} style={navBtn}>›</button>
-      </div>
-
-      <div style={{ position: 'relative' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, marginBottom: 2 }}>
-          {WEEKDAYS.map(w => <div key={w} style={{ textAlign: 'center', fontSize: 10.5, fontWeight: 800, letterSpacing: '0.06em', color: 'var(--vdms-text-muted)', padding: '2px 0' }}>{w.toUpperCase()}</div>)}
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
-          {cells.map(d => {
-            const k = dayKey(d.getTime());
-            const inMonth = d.getMonth() === view.m;
-            const isToday = k === todayKey;
-            const nDocs = (docsByDay[k] || []).length;
-            const nAlerts = (alertsByDay[k] || []).length;
-            const isActive = !!active && active.key === k;
-            return (
-              <div
-                key={k}
-                tabIndex={0}
-                aria-label={`${d.toDateString()}${nDocs ? `, ${nDocs} documents uploaded` : ''}${nAlerts ? `, ${nAlerts} alerts` : ''}${isToday ? ', today' : ''}`}
-                onMouseEnter={e => setHover({ key: k, top: popTop(e.currentTarget) })}
-                onMouseLeave={() => setHover(null)}
-                onFocus={e => setHover({ key: k, top: popTop(e.currentTarget) })}
-                onBlur={() => setHover(null)}
-                onClick={e => { const top = popTop(e.currentTarget); setPinned(p => (p && p.key === k ? null : { key: k, top })); }}
-                style={{
-                  height: 38, borderRadius: 11, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, cursor: 'pointer', userSelect: 'none', outline: 'none',
-                  background: isToday ? clay.accentGradient : isActive ? 'var(--vdms-field)' : 'transparent',
-                  boxShadow: isToday ? clay.shadowButton : isActive ? 'inset 0 0 0 1.5px var(--vdms-focus)' : 'none',
-                  color: isToday ? '#fff' : 'var(--vdms-text)', opacity: inMonth ? 1 : 0.42,
-                }}
-              >
-                <span style={{ fontSize: 13, fontWeight: isToday ? 800 : 700, lineHeight: 1 }}>{d.getDate()}</span>
-                <span style={{ display: 'flex', gap: 3, height: 5 }}>
-                  {nDocs > 0 && <span style={{ width: 5, height: 5, borderRadius: '50%', background: isToday ? '#fff' : DOT_DOC }} />}
-                  {nAlerts > 0 && <span style={{ width: 5, height: 5, borderRadius: '50%', background: isToday ? '#ffe3a3' : DOT_ALERT }} />}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-
-        {active && activeDate && (
-          <div style={{ position: 'absolute', left: 0, right: 0, top: active.top, zIndex: 60, pointerEvents: 'none', borderRadius: 16, padding: '12px 14px 12px', background: 'var(--vdms-glass-strong)', border: '1px solid var(--vdms-line-strong)', boxShadow: '0 18px 44px rgba(0,20,50,0.35)', backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' }}>
-            <div style={{ fontSize: 13.5, fontWeight: 800, color: 'var(--vdms-text)' }}>
-              {activeDate.toLocaleDateString(undefined, { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' })}
-              {active.key === todayKey && <span style={{ marginLeft: 8, fontSize: 10.5, fontWeight: 800, color: '#fff', background: clay.accentGradient, borderRadius: 999, padding: '2px 8px' }}>TODAY</span>}
-            </div>
-            <div style={sectionLabel}><span style={{ width: 7, height: 7, borderRadius: '50%', background: DOT_ALERT }} />Alerts · {activeAlerts.length}</div>
-            {activeAlerts.length === 0 && <div style={{ ...rowStyle, color: 'var(--vdms-text-muted)' }}>No alerts on this day</div>}
-            {activeAlerts.slice(0, 3).map(a => (
-              <div key={a.id} style={rowStyle}>
-                <span style={{ flexShrink: 0 }}>🔔</span>
-                <span style={ellipsis}>{a.folder_name || humanize(a.alert_type)}</span>
-                <span style={{ marginLeft: 'auto', flexShrink: 0, fontSize: 11, color: 'var(--vdms-text-muted)', fontWeight: 700 }}>{humanize(a.alert_type)}</span>
-              </div>
-            ))}
-            {activeAlerts.length > 3 && <div style={{ ...rowStyle, color: 'var(--vdms-text-muted)' }}>+{activeAlerts.length - 3} more</div>}
-            <div style={sectionLabel}><span style={{ width: 7, height: 7, borderRadius: '50%', background: DOT_DOC }} />Documents uploaded · {activeDocs.length}</div>
-            {activeDocs.length === 0 && <div style={{ ...rowStyle, color: 'var(--vdms-text-muted)' }}>{docsLoading ? 'Loading…' : 'No documents uploaded on this day'}</div>}
-            {activeDocs.slice(0, 4).map(doc => (
-              <div key={doc.id} style={rowStyle}>
-                <span style={{ flexShrink: 0 }}>{getFileIcon(doc.name).icon}</span>
-                <span style={ellipsis} title={doc.name}>{doc.name}</span>
-                {doc.vessel && <span style={{ marginLeft: 'auto', flexShrink: 0, maxWidth: 90, fontSize: 11, color: 'var(--vdms-text-muted)', fontWeight: 700, ...ellipsis }}>{doc.vessel}</span>}
-              </div>
-            ))}
-            {activeDocs.length > 4 && <div style={{ ...rowStyle, color: 'var(--vdms-text-muted)' }}>+{activeDocs.length - 4} more</div>}
-          </div>
-        )}
-      </div>
-
-      <div style={{ display: 'flex', gap: 14, justifyContent: 'center', marginTop: 8, fontSize: 11, fontWeight: 700, color: 'var(--vdms-text-muted)' }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: DOT_DOC }} />Documents</span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: DOT_ALERT }} />Alerts</span>
-      </div>
-    </div>
-  );
-}
-
-// ── Page ─────────────────────────────────────────────────────────────────────
 /**
  * All documents currently loaded for the dashboard (full list when the
  * stats endpoint returned it, otherwise the recent-documents sample).
@@ -1085,19 +102,254 @@ export function extractRealDocuments(host: VesselEmail): RealDashboardDoc[] {
   return stats.recent_documents || [];
 }
 
+// Kept across visits to Home in the same page load, so leaving Home and
+// coming back doesn't lose the last refresh.
+let refreshNonce = 0;
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function formatNumber(value: number | undefined | null): string {
+  return typeof value === 'number' && isFinite(value) ? value.toLocaleString() : '—';
+}
+
+function formatDateTime(epoch?: number | null): string {
+  if (!epoch) return '—';
+  const d = new Date(epoch);
+  return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' }) +
+    ', ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+/** "vessel_unrecognised" → "Vessel unrecognised" (generic alert-type label). */
+function humanize(value: string): string {
+  const t = String(value || '').replace(/_/g, ' ').trim();
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : 'Alert';
+}
+
+function timeAgo(epochMs: number | null | undefined): string {
+  if (!epochMs) return '';
+  const diff = Date.now() - epochMs;
+  if (diff < 60_000) return 'Just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d ago`;
+  return new Date(epochMs).toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
+}
+
+function alertEpoch(a: AlertItem): number {
+  const t = a.created_at ? new Date(a.created_at).getTime() : NaN;
+  return isFinite(t) ? t : 0;
+}
+
+/** Anomaly-type alerts are the real, actionable "something needs a look"
+ *  signal — as opposed to routine activity (folder created, email sent, …). */
+const ANOMALY_ALERT_TYPES = new Set(['vessel_unrecognised', 'file_outside_structure', 'subfolder_anomaly']);
+
+function iconForAlert(a: AlertItem): string {
+  switch (a.alert_type) {
+    case 'vessel_provisioned': return 'Ferry';
+    case 'vessel_deleted':
+    case 'document_deleted': return 'Delete';
+    case 'folder_created': return 'FabricFolder';
+    case 'crud_operation': return 'Sync';
+    case 'vessel_unrecognised':
+    case 'file_outside_structure':
+    case 'subfolder_anomaly': return 'Warning';
+    default: return 'History';
+  }
+}
+
+interface Palette { surface: string; border: string; text: string; muted: string; }
+
+const controlStyle = (border: string, surface: string, text: string): React.CSSProperties => ({
+  padding: '7px 10px', borderRadius: 8, border: `1px solid ${border}`, fontSize: 12,
+  background: surface, color: text, outline: 'none', minWidth: 0,
+});
+
+// ── Small building blocks shared by the chart/list cards below ──────────────
+
+function SectionCard(props: { palette: Palette; children: React.ReactNode }): React.ReactElement {
+  const { palette, children } = props;
+  return (
+    <div style={{
+      background: palette.surface, borderRadius: 18, border: `1px solid ${palette.border}`,
+      padding: 20, boxShadow: clay.shadowRaised,
+      backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)',
+      display: 'flex', flexDirection: 'column', minWidth: 0,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function EmptyNote(props: { palette: Palette; children: React.ReactNode }): React.ReactElement {
+  return (
+    <div style={{ padding: '26px 10px', textAlign: 'center', color: props.palette.muted, fontSize: 12.5 }}>
+      {props.children}
+    </div>
+  );
+}
+
+/** Flat SVG donut — no charting library installed, and one isn't worth
+ *  adding for three static segments. */
+function DonutChart(props: {
+  segments: Array<{ value: number; color: string }>;
+  centerValue: string;
+  centerLabel: string;
+  palette: Palette;
+  size?: number;
+}): React.ReactElement {
+  const { segments, centerValue, centerLabel, palette, size = 118 } = props;
+  const strokeWidth = Math.round(size * 0.145);
+  const r = (size - strokeWidth) / 2;
+  const c = size / 2;
+  const circumference = 2 * Math.PI * r;
+  const total = segments.reduce((sum, s) => sum + s.value, 0);
+  let drawn = 0;
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }}>
+      <g transform={`rotate(-90 ${c} ${c})`}>
+        <circle cx={c} cy={c} r={r} fill="none" stroke={palette.border} strokeWidth={strokeWidth} />
+        {total > 0 && segments.filter(s => s.value > 0).map((s, i) => {
+          const dash = (s.value / total) * circumference;
+          const el = (
+            <circle
+              key={i} cx={c} cy={c} r={r} fill="none" stroke={s.color} strokeWidth={strokeWidth}
+              strokeDasharray={`${dash} ${circumference - dash}`} strokeDashoffset={-drawn}
+            />
+          );
+          drawn += dash;
+          return el;
+        })}
+      </g>
+      <text x={c} y={c - 4} textAnchor="middle" dominantBaseline="middle" fill={palette.text} style={{ fontSize: size * 0.2, fontWeight: 800, fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif" }}>
+        {centerValue}
+      </text>
+      <text x={c} y={c + size * 0.14} textAnchor="middle" dominantBaseline="middle" fill={palette.muted} style={{ fontSize: size * 0.082, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+        {centerLabel}
+      </text>
+    </svg>
+  );
+}
+
+function DonutLegendRow(props: { label: string; count: number; total: number; color: string; palette: Palette }): React.ReactElement {
+  const { label, count, total, color, palette } = props;
+  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+      <span style={{ width: 9, height: 9, borderRadius: '50%', background: color, flexShrink: 0 }} />
+      <span style={{ flex: 1, color: palette.text, fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      <span style={{ fontWeight: 800, color: palette.text }}>{count}</span>
+      <span style={{ color: palette.muted, fontSize: 11, width: 34, textAlign: 'right' }}>{pct}%</span>
+    </div>
+  );
+}
+
+function MiniBarChart(props: { data: Array<{ label: string; value: number }>; palette: Palette }): React.ReactElement {
+  const { data, palette } = props;
+  const max = Math.max(1, ...data.map(d => d.value));
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 128, padding: '4px 2px 0' }}>
+      {data.map(d => (
+        <div key={d.label} style={{ flex: '1 1 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: palette.text, minHeight: 13 }}>{d.value > 0 ? d.value : ''}</div>
+          <div style={{ width: '100%', maxWidth: 30, height: Math.max(3, (d.value / max) * 82), background: clay.accentGradient, borderRadius: 5 }} />
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: palette.muted }}>{d.label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Document Activity — real monthly volume from the Documents module's
+// own facets (GET /api/dashboard/documents), not an invented expiry figure
+// the backend doesn't compute. ───────────────────────────────────────────────
+function DocumentActivityTrend(props: { host: VesselEmail; siteKey: string; nonce: number; palette: Palette }): React.ReactElement {
+  const { host, siteKey, nonce, palette } = props;
+  const [months, setMonths] = React.useState<Array<{ month: string; count: number }> | null>(null);
+  const [error, setError] = React.useState<string>('');
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const base = host._base();
+    if (!base) return undefined;
+    const params = new URLSearchParams();
+    if (siteKey && siteKey !== 'all') params.set('site_key', siteKey);
+    params.set('date_field', 'modified');
+    params.set('page', '1');
+    params.set('page_size', '5'); // facets cover the whole site-scoped set regardless of page size
+    setError('');
+    host._fetchJson(`${base}/api/dashboard/documents?${params.toString()}`)
+      .then((res: any) => {
+        if (cancelled) return;
+        setMonths(Array.isArray(res?.facets?.months) ? res.facets.months : []);
+      })
+      .catch((err: any) => { if (!cancelled) setError(err?.message || 'Could not load activity'); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [siteKey, nonce]);
+
+  const last6 = React.useMemo(() => {
+    const byMonth = new Map((months || []).map(m => [m.month, m.count]));
+    const now = new Date();
+    const out: Array<{ label: string; value: number }> = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      out.push({ label: MONTH_NAMES[d.getMonth()], value: byMonth.get(key) || 0 });
+    }
+    return out;
+  }, [months]);
+
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: palette.text }}>Document Activity</h3>
+      </div>
+      <p style={{ margin: '0 0 10px', fontSize: 11.5, color: palette.muted, fontWeight: 600 }}>Files added or modified, last 6 months</p>
+      {error ? (
+        <EmptyNote palette={palette}>Couldn't load activity — {error}</EmptyNote>
+      ) : months === null ? (
+        <EmptyNote palette={palette}>Loading…</EmptyNote>
+      ) : last6.every(m => m.value === 0) ? (
+        <EmptyNote palette={palette}>No document activity recorded yet</EmptyNote>
+      ) : (
+        <MiniBarChart data={last6} palette={palette} />
+      )}
+    </>
+  );
+}
+
+// ── Compact activity/attention row ───────────────────────────────────────────
+function ListRow(props: { icon: string; iconBg: string; iconColor: string; title: string; sub: string; when?: string }): React.ReactElement {
+  const { icon, iconBg, iconColor, title, sub, when } = props;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ width: 28, height: 28, borderRadius: 9, background: iconBg, color: iconColor, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <Icon iconName={icon} style={{ fontSize: 12.5 }} />
+      </div>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</div>
+        <div style={{ fontSize: 11, opacity: 0.75, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub}</div>
+      </div>
+      {when && <div style={{ fontSize: 10.5, opacity: 0.6, flexShrink: 0, whiteSpace: 'nowrap' }}>{when}</div>}
+    </div>
+  );
+}
+
+// ── Page ─────────────────────────────────────────────────────────────────────
 export function renderDashboard(host: VesselEmail): React.ReactElement {
-  const { vessels, loading, dashboardStats } = host.state;
+  const { vessels, dashboardStats } = host.state;
   const cardSurface = 'var(--vdms-glass)';
   const cardBorder = 'var(--vdms-line)';
   const primaryText = 'var(--vdms-text)';
   const mutedText = 'var(--vdms-text-muted)';
-  const glassCard: React.CSSProperties = { backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' };
   const now = new Date();
   const hour = now.getHours();
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   const firstName = String(host.props.userDisplayName || '').trim().split(/\s+/)[0] || 'there';
   const unreadAlerts = host._unreadAlertCount();
-  const dateLabel = now.toLocaleDateString(undefined, { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' }).replace(/,/g, ' ·');
+  const dateLabel = now.toLocaleDateString(undefined, { weekday: 'long', day: '2-digit', month: 'short', year: 'numeric' });
   const palette: Palette = { surface: cardSurface, border: cardBorder, text: primaryText, muted: mutedText };
   const statsLoading = !dashboardStats;
   const siteFilter = host.state.dashboardSiteFilter || 'all';
@@ -1128,12 +380,46 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
   }));
 
   const totalFiles = dashboardStats ? (dashboardStats.total_files ?? dashboardStats.total_documents) : undefined;
-  const totalFolders = dashboardStats?.total_folders;
-  const siteRows: DashboardSiteSummary[] = dashboardStats?.sites && dashboardStats.sites.length > 0
-    ? dashboardStats.sites
-    : [];
-  const totalSites = dashboardStats?.total_sites ?? (siteRows.length || (siteFilter === 'all' ? dashboardSiteOptions.length : 1));
+  const siteRows: DashboardSiteSummary[] = dashboardStats?.sites || [];
   const totalVessels = dashboardStats?.total_vessels ?? (vessels || []).length;
+
+  // Fleet status — real, from vessels registered in the DMS (GET /api/vessels,
+  // already loaded app-wide). Unknown/missing status defaults to "Active",
+  // the same convention used everywhere else this field is read.
+  const vesselList: VesselRecord[] = vessels || [];
+  let activeVesselCount = 0, maintenanceVesselCount = 0, otherVesselCount = 0;
+  vesselList.forEach(v => {
+    const s = v.status || 'Active';
+    if (s === 'Active') activeVesselCount++;
+    else if (s === 'In Maintenance') maintenanceVesselCount++;
+    else otherVesselCount++;
+  });
+
+  // Requires attention — real signals only: sites the backend failed to scan,
+  // and unread anomaly alerts (unrecognised vessel folders, files uploaded
+  // outside the DMS tree, unexpected subfolders). No invented "expiring /
+  // expired document" counts: the backend doesn't track document expiry.
+  const siteIssues = siteRows.filter(s => !!s.error);
+  const unreadAnomalies = (host.state.alertsList || [])
+    .filter(a => ANOMALY_ALERT_TYPES.has(a.alert_type) && !a.read)
+    .sort((a, b) => alertEpoch(b) - alertEpoch(a));
+  const attentionItems: Array<{ key: string; icon: string; title: string; sub: string; when?: string }> = [
+    ...siteIssues.map(s => ({
+      key: `site:${s.site_key}`, icon: 'Warning',
+      title: s.site_name || s.site_key, sub: s.error || 'Unable to load this site',
+    })),
+    ...unreadAnomalies.map(a => ({
+      key: a.id, icon: iconForAlert(a),
+      title: a.folder_name || a.vessel_name || humanize(a.alert_type),
+      sub: humanize(a.alert_type), when: timeAgo(alertEpoch(a)),
+    })),
+  ];
+  const attentionCount = attentionItems.length;
+  const attentionPreview = attentionItems.slice(0, 5);
+
+  const recentActivity = [...(host.state.alertsList || [])]
+    .sort((a, b) => alertEpoch(b) - alertEpoch(a))
+    .slice(0, 6);
 
   const refresh = (): void => {
     void host._loadDashboardStats(true).then(() => {
@@ -1142,170 +428,167 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
     });
   };
 
-  const statCard = (label: string, value: number | undefined, icon: string, sub?: React.ReactNode): React.ReactElement => (
-    <div style={{ ...glassCard, background: cardSurface, borderRadius: 22, padding: 22, border: `1px solid ${cardBorder}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: clay.shadowRaised }}>
-      <div>
-        <div style={{ fontSize: 34, fontWeight: 700, fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif", letterSpacing: '-0.03em', color: primaryText, minHeight: 42 }}>
-          {statsLoading || (loading && value === undefined) ? <span style={{ color: mutedText, fontSize: 22 }}>…</span> : formatNumber(value)}
+  const kpiCard = (opts: { label: string; value: number | undefined; icon: string; tone?: 'neutral' | 'success' | 'warning'; sub?: React.ReactNode }): React.ReactElement => {
+    const tone = opts.tone || 'neutral';
+    const iconBg = tone === 'success' ? clay.pillActiveBg : tone === 'warning' ? clay.pillWarnBg : clay.accentSoft;
+    const iconColor = tone === 'success' ? clay.pillActiveText : tone === 'warning' ? clay.pillWarnText : clay.accentDark;
+    return (
+      <div style={{ background: cardSurface, borderRadius: 16, padding: '16px 18px', border: `1px solid ${cardBorder}`, boxShadow: clay.shadowRaised, display: 'flex', flexDirection: 'column', gap: 10, backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: mutedText, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{opts.label}</span>
+          <div style={{ width: 30, height: 30, borderRadius: 9, background: iconBg, color: iconColor, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Icon iconName={opts.icon} style={{ fontSize: 14 }} />
+          </div>
         </div>
-        <div style={{ fontSize: 13, color: mutedText, fontWeight: 600, marginTop: 2 }}>{label}</div>
-        {sub}
+        <div style={{ fontSize: 30, fontWeight: 800, fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif", letterSpacing: '-0.02em', color: primaryText, lineHeight: 1 }}>
+          {statsLoading && opts.value === undefined ? <span style={{ fontSize: 18, color: mutedText, fontWeight: 600 }}>…</span> : formatNumber(opts.value)}
+        </div>
+        {opts.sub}
       </div>
-      <div style={{ width: 44, height: 44, borderRadius: 14, background: clay.accentSoft, color: clay.accentDark, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{icon}</div>
+    );
+  };
+
+  const sectionHeader = (title: string, right?: React.ReactNode): React.ReactElement => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+      <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: primaryText }}>{title}</h3>
+      {right}
     </div>
   );
 
+  const viewAllAlertsLink = (show: boolean): React.ReactElement | undefined => show ? (
+    <button type="button" onClick={() => { void host._goToView('alerts'); }} style={{ background: 'none', border: 'none', color: clay.accentDark, fontSize: 12, fontWeight: 700, cursor: 'pointer', padding: 0 }}>
+      View all →
+    </button>
+  ) : undefined;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Hero banner: greeting (left) · ship (centre) · calendar (right). Actions reuse existing host navigation. */}
-      <div className="vdms-hero" style={{ position: 'relative', zIndex: 20, borderRadius: 28, border: `1px solid ${cardBorder}`, boxShadow: 'var(--vdms-shadow)', minHeight: 300, display: 'flex', flexWrap: 'wrap', alignItems: 'stretch', background: 'linear-gradient(100deg, var(--vdms-glass-strong), var(--vdms-glass))', backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' }}>
-        <div style={{ position: 'relative', flex: '1 1 270px', minWidth: 0, padding: 'clamp(20px, 2.6vw, 36px)', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-          <div style={{ fontFamily: "'JetBrains Mono', Consolas, monospace", fontSize: 12, fontWeight: 700, letterSpacing: '0.18em', textTransform: 'uppercase', color: clay.accent }}>{dateLabel}</div>
-          <h2 style={{ margin: '10px 0 8px', fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif", fontSize: 'clamp(26px, 2.8vw, 42px)', lineHeight: 1.08, fontWeight: 800, letterSpacing: '-0.03em', color: primaryText }}>{greeting}, {firstName}</h2>
-          <p style={{ margin: 0, fontSize: 16, lineHeight: 1.55, fontWeight: 600, color: 'var(--vdms-text-secondary)' }}>
-            {unreadAlerts > 0 ? `${unreadAlerts} new alert${unreadAlerts === 1 ? ' is' : 's are'} waiting for you.` : 'You are all caught up — no new alerts.'}
-          </p>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {/* Header: page title + subtitle (left), site filter + refresh (right) */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 'clamp(22px, 2.2vw, 28px)', fontWeight: 800, letterSpacing: '-0.02em', color: primaryText, fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif" }}>
+            Dashboard
+          </h1>
+          <p style={{ margin: '3px 0 0', fontSize: 13, fontWeight: 600, color: mutedText }}>Vessel compliance and document overview</p>
         </div>
-        {/* Centre: the ship, edges feathered into the banner */}
-        <div aria-hidden="true" style={{ flex: '1.5 1 260px', minWidth: 0, minHeight: 220, margin: '14px 0', backgroundImage: `url("${dashboardHeroShipImage}")`, backgroundSize: 'cover', backgroundPosition: 'center 58%', backgroundRepeat: 'no-repeat', borderRadius: 22, WebkitMaskImage: 'linear-gradient(90deg, transparent 0%, #000 16%, #000 84%, transparent 100%)', maskImage: 'linear-gradient(90deg, transparent 0%, #000 16%, #000 84%, transparent 100%)' }} />
-        <div style={{ flex: '0 0 360px', maxWidth: '100%', padding: '16px 18px 16px 4px', boxSizing: 'border-box', display: 'flex', alignItems: 'center' }}>
-          <HeroCalendar host={host} siteKey={siteFilter} nonce={refreshNonce} statsEpoch={dashboardStats?.last_refreshed_epoch} />
-        </div>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* SharePoint Site Filter — scopes every figure and list below. */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        {dashboardStats?.last_refreshed_epoch && (
-          <span style={{ fontSize: 12, color: mutedText }}>
-            Last refreshed {formatDateTime(dashboardStats.last_refreshed_epoch)}
-          </span>
-        )}
-        <span style={{ fontSize: 13, color: mutedText, fontWeight: 600 }}>SharePoint Site:</span>
-        <select
-          value={siteFilter}
-          onChange={e => host._handleDashboardSiteChange(e.target.value)}
-          style={{
-            padding: '9px 14px', borderRadius: 10, border: `1px solid ${cardBorder}`, fontSize: 13,
-            background: cardSurface, outline: 'none', minWidth: 220, color: primaryText,
-            boxShadow: clay.shadowRaised, cursor: 'pointer',
-          }}
-        >
-          <option value="all">All SharePoint Sites</option>
-          {dashboardSiteOptions.map(site => <option key={site.key} value={site.key}>{site.label}</option>)}
-        </select>
-        <button
-          type="button"
-          onClick={refresh}
-          title="Re-count files and folders from SharePoint"
-          style={{ padding: '9px 14px', borderRadius: 10, border: `1px solid ${cardBorder}`, background: cardSurface, color: primaryText, fontSize: 13, fontWeight: 600, cursor: 'pointer', boxShadow: clay.shadowRaised }}
-        >
-          ↻ Refresh
-        </button>
-      </div>
-
-      {/* Counters */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
-        {statCard('Total Files', totalFiles, '📄', siteRows.some(s => s.stats_pending) ? <div style={{ fontSize: 11, color: '#0a66d0', fontWeight: 700, marginTop: 2 }}>⏳ still counting — total is updating live</div> : undefined)}
-        {statCard('Total Folders', totalFolders, '📁')}
-        {statCard('Total Sites', totalSites, '🌐')}
-        {statCard('Total Vessels', totalVessels, '⚓',
-          <button onClick={() => host._goToView('vessels')} style={{ background: 'none', border: 'none', color: clay.accentDark, fontSize: 11, fontWeight: 600, padding: 0, marginTop: 8, cursor: 'pointer' }}>Manage vessels →</button>
-        )}
-      </div>
-      </div>
-      {/* Sites */}
-      <div style={{ ...glassCard, background: cardSurface, borderRadius: 22, border: `1px solid ${cardBorder}`, padding: 22, boxShadow: clay.shadowRaised }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <h3 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: primaryText }}>SharePoint Sites</h3>
-          {siteFilter !== 'all' && (
-            <button type="button" onClick={() => host._handleDashboardSiteChange('all')} style={{ background: 'none', border: 'none', color: clay.accentDark, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>Show all sites</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          {dashboardStats?.last_refreshed_epoch && (
+            <span style={{ fontSize: 11.5, color: mutedText }}>Last refreshed {formatDateTime(dashboardStats.last_refreshed_epoch)}</span>
           )}
-        </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560 }}>
-            <thead>
-              <tr style={{ borderBottom: '2px solid var(--vdms-border)' }}>
-                <th style={thStyle}>Site</th>
-                <th style={{ ...thStyle, textAlign: 'right' }}>Files</th>
-                <th style={{ ...thStyle, textAlign: 'right' }}>Folders</th>
-                <th style={thStyle}>Last activity</th>
-                <th style={{ ...thStyle, textAlign: 'right' }}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {statsLoading ? (
-                <tr><td colSpan={5} style={{ ...tdStyle, textAlign: 'center', color: mutedText, padding: '24px 12px' }}>Counting files and folders…</td></tr>
-              ) : siteRows.length === 0 ? (
-                <tr><td colSpan={5} style={{ ...tdStyle, textAlign: 'center', color: 'var(--vdms-text-faint)', padding: '24px 12px' }}>No site details available yet — restart the backend to pick up the new Home counters.</td></tr>
-              ) : siteRows.map(site => {
-                const isSelected = siteFilter !== 'all' && (siteFilter.toLowerCase() === (site.site_key || '').toLowerCase());
-                return (
-                  <tr key={site.site_key + (site.drive_id || '')} style={{ borderBottom: '1px solid var(--vdms-border-soft)', background: isSelected ? 'var(--vdms-surface-alt)' : undefined }}>
-                    <td style={{ ...tdStyle, fontWeight: 700, color: primaryText }}>
-                      🌐 {site.site_name || site.site_key}
-                      {site.truncated && <span style={{ marginLeft: 6, fontSize: 10, color: '#92400e' }}>(partial)</span>}
-                      {site.stats_pending && (
-                        <span
-                          title="This site was just added — its file/folder counts are being scanned now and will fill in shortly."
-                          style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#0a66d0', background: '#eef4ff', border: '1px solid #cfe0fb', borderRadius: 6, padding: '1px 6px' }}
-                        >
-                          ⏳ Counting…
-                        </span>
-                      )}
-                      {site.error && (
-                        <span
-                          title={site.error}
-                          style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, padding: '1px 6px' }}
-                        >
-                          ⚠ Unable to load
-                        </span>
-                      )}
-                      {site.error && (
-                        <div style={{ marginTop: 2, fontSize: 11, fontWeight: 400, color: '#b91c1c' }}>
-                          {site.error}
-                        </div>
-                      )}
-                    </td>
-                    <td style={{ ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: site.error ? '#b91c1c' : undefined }}>
-                      {site.error ? <span title={site.error}>Error</span> : site.stats_pending ? (site.counting ? <span style={{ color: 'var(--vdms-text-muted)' }}>{formatNumber(site.files)}+</span> : <span style={{ color: 'var(--vdms-text-muted)' }}>…</span>) : formatNumber(site.files)}
-                    </td>
-                    <td style={{ ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: site.error ? '#b91c1c' : undefined }}>
-                      {site.error ? <span title={site.error}>Error</span> : site.stats_pending ? (site.counting ? <span style={{ color: 'var(--vdms-text-muted)' }}>{formatNumber(site.folders)}+</span> : <span style={{ color: 'var(--vdms-text-muted)' }}>…</span>) : formatNumber(site.folders)}
-                    </td>
-                    <td style={{ ...tdStyle, color: 'var(--vdms-text-muted)', fontSize: 12 }}>{site.error ? '—' : site.stats_pending ? 'Just added' : formatDateTime(site.last_modified_epoch)}</td>
-                    <td style={{ ...tdStyle, textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      {!isSelected && (
-                        <button
-                          type="button"
-                          onClick={() => host._handleDashboardSiteChange(site.site_key)}
-                          style={{ background: clay.accentSoft, border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 12, fontWeight: 700, color: clay.accentDeep, cursor: 'pointer', marginRight: 6 }}
-                        >
-                          Show documents
-                        </button>
-                      )}
-                      {site.web_url && (
-                        <button
-                          type="button"
-                          onClick={() => window.open(site.web_url, '_blank', 'noopener')}
-                          style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6, padding: '4px 10px', fontSize: 12, fontWeight: 600, color: '#0284c7', cursor: 'pointer' }}
-                        >
-                          Open site
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <select
+            value={siteFilter}
+            onChange={e => host._handleDashboardSiteChange(e.target.value)}
+            style={{ ...controlStyle(cardBorder, cardSurface, primaryText), padding: '8px 12px', minWidth: 200, boxShadow: clay.shadowRaised, cursor: 'pointer' }}
+          >
+            <option value="all">All SharePoint Sites</option>
+            {dashboardSiteOptions.map(site => <option key={site.key} value={site.key}>{site.label}</option>)}
+          </select>
+          <button
+            type="button"
+            onClick={refresh}
+            title="Re-count files, folders and vessels"
+            style={{ padding: '8px 12px', borderRadius: 8, border: `1px solid ${cardBorder}`, background: cardSurface, color: primaryText, fontSize: 12.5, fontWeight: 600, cursor: 'pointer', boxShadow: clay.shadowRaised, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          >
+            <Icon iconName="Refresh" style={{ fontSize: 12 }} /> Refresh
+          </button>
         </div>
       </div>
 
-      {/* Vessels — site-wise, same SharePoint Site filter as everything else on Home */}
-      <DashboardVesselsPanel host={host} siteKey={siteFilter} nonce={refreshNonce} dashboardStats={dashboardStats} palette={palette} />
+      {/* Slim marine banner — keeps the brand identity without dominating the page */}
+      <div style={{ position: 'relative', borderRadius: 18, overflow: 'hidden', minHeight: 72, display: 'flex', alignItems: 'center', padding: '0 22px', border: `1px solid ${cardBorder}`, boxShadow: clay.shadowRaised }}>
+        <div aria-hidden="true" style={{ position: 'absolute', inset: 0, backgroundImage: `url("${dashboardHeroShipImage}")`, backgroundSize: 'cover', backgroundPosition: 'center 55%', opacity: 0.18 }} />
+        <div aria-hidden="true" style={{ position: 'absolute', inset: 0, background: `linear-gradient(100deg, ${cardSurface} 32%, transparent 90%)` }} />
+        <div style={{ position: 'relative', zIndex: 1 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: clay.accent }}>{dateLabel}</div>
+          <div style={{ fontSize: 14.5, fontWeight: 700, color: primaryText, marginTop: 2 }}>
+            {greeting}, {firstName} — {unreadAlerts > 0 ? `${unreadAlerts} alert${unreadAlerts === 1 ? '' : 's'} need${unreadAlerts === 1 ? 's' : ''} attention.` : 'the fleet is all caught up.'}
+          </div>
+        </div>
+      </div>
 
-      {/* Documents — browsed and paged here on Home */}
-      <DashboardDocumentsPanel host={host} siteKey={siteFilter} nonce={refreshNonce} statsEpoch={dashboardStats?.last_refreshed_epoch} palette={palette} />
+      {/* KPI row */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14 }}>
+        {kpiCard({ label: 'Total Vessels', value: totalVessels, icon: 'Ferry' })}
+        {kpiCard({
+          label: 'Active Vessels', value: activeVesselCount, icon: 'CheckMark', tone: 'success',
+          sub: vesselList.length > 0 ? <span style={{ fontSize: 11, color: mutedText, fontWeight: 600 }}>of {vesselList.length} in DMS</span> : undefined,
+        })}
+        {kpiCard({ label: 'Total Documents', value: totalFiles, icon: 'Page' })}
+        {kpiCard({
+          label: 'Needs Attention', value: attentionCount, icon: 'Warning', tone: attentionCount > 0 ? 'warning' : 'success',
+          sub: viewAllAlertsLink(attentionCount > 0),
+        })}
+      </div>
+
+      {/* Fleet status + document activity */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
+        <SectionCard palette={palette}>
+          {sectionHeader('Fleet Status', <span style={{ fontSize: 11, fontWeight: 700, color: clay.accentDark, background: clay.accentSoft, borderRadius: 12, padding: '1px 8px' }}>{vesselList.length} vessels</span>)}
+          {vesselList.length === 0 ? (
+            <EmptyNote palette={palette}>No vessel records yet</EmptyNote>
+          ) : (
+            <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+              <DonutChart
+                palette={palette}
+                centerValue={String(vesselList.length)}
+                centerLabel="Vessels"
+                segments={[
+                  { value: activeVesselCount, color: clay.pillActiveText },
+                  { value: maintenanceVesselCount, color: clay.pillWarnText },
+                  { value: otherVesselCount, color: clay.pillDangerText },
+                ]}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 9, flex: 1, minWidth: 150 }}>
+                <DonutLegendRow label="Active" count={activeVesselCount} total={vesselList.length} color={clay.pillActiveText} palette={palette} />
+                <DonutLegendRow label="In Maintenance" count={maintenanceVesselCount} total={vesselList.length} color={clay.pillWarnText} palette={palette} />
+                <DonutLegendRow label="Inactive / Other" count={otherVesselCount} total={vesselList.length} color={clay.pillDangerText} palette={palette} />
+              </div>
+            </div>
+          )}
+          <div style={{ fontSize: 11, color: mutedText, marginTop: 12 }}>Based on vessels registered in the DMS.</div>
+        </SectionCard>
+
+        <SectionCard palette={palette}>
+          <DocumentActivityTrend host={host} siteKey={siteFilter} nonce={refreshNonce} palette={palette} />
+        </SectionCard>
+      </div>
+
+      {/* Requires attention + recent activity */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
+        <SectionCard palette={palette}>
+          {sectionHeader('Requires Attention', viewAllAlertsLink(attentionCount > 0))}
+          {attentionPreview.length === 0 ? (
+            <EmptyNote palette={palette}>Nothing needs attention right now</EmptyNote>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, color: primaryText }}>
+              {attentionPreview.map(item => (
+                <ListRow key={item.key} icon={item.icon} iconBg={clay.pillWarnBg} iconColor={clay.pillWarnText} title={item.title} sub={item.sub} when={item.when} />
+              ))}
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard palette={palette}>
+          {sectionHeader('Recent Activity', viewAllAlertsLink(recentActivity.length > 0))}
+          {recentActivity.length === 0 ? (
+            <EmptyNote palette={palette}>No recent activity yet</EmptyNote>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, color: primaryText }}>
+              {recentActivity.map(a => (
+                <ListRow
+                  key={a.id}
+                  icon={iconForAlert(a)}
+                  iconBg={clay.accentSoft}
+                  iconColor={clay.accentDark}
+                  title={a.folder_name || a.vessel_name || humanize(a.alert_type)}
+                  sub={humanize(a.alert_type)}
+                  when={timeAgo(alertEpoch(a))}
+                />
+              ))}
+            </div>
+          )}
+        </SectionCard>
+      </div>
     </div>
   );
 }

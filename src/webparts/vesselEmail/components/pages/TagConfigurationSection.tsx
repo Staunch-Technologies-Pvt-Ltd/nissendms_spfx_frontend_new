@@ -1,5 +1,7 @@
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
+import { clay } from '../clayTheme';
+import { dmsBtn, dmsControlStyle } from '../dmsDesignSystem';
 
 /**
  * Settings → Tag Configuration.
@@ -9,7 +11,7 @@ import type VesselEmail from '../VesselEmail';
  */
 
 type Level = 'domain' | 'main_folder' | 'group' | 'category' | 'sub_category';
-type Tab = Level | 'vessel_names';
+type Tab = Level | 'vessel_names' | 'internal';
 type Mode = 'add' | 'replace';
 // 'site' = the session's current active site, 'template' = the default for
 // new clients, or a literal site_key picked from the site selector below —
@@ -42,17 +44,28 @@ interface SiteOption { site_key: string; display_name: string; }
 const LEVELS: Level[] = ['domain', 'main_folder', 'group', 'category', 'sub_category'];
 const LABEL: Record<Tab, string> = {
   domain: 'Domains', main_folder: 'Main Folders', group: 'Groups', category: 'Categories',
-  sub_category: 'Sub Categories', vessel_names: 'Vessel Names',
+  sub_category: 'Sub Categories', vessel_names: 'Vessel Names', internal: 'Internal',
 };
 const SINGULAR: Record<Level, string> = {
   domain: 'Domain', main_folder: 'Main Folder', group: 'Group', category: 'Category', sub_category: 'Sub Category',
 };
 const INVALID = /[~"#%*:<>?/\\{|}]/;
 
+// Simplified admin view. Set to false to bring back the advanced controls
+// (client scope picker, Add/Replace mode, Source filter, List/Tree toggle,
+// Code/Description fields, Copy-from-site, Reset to Default).
+const SIMPLE_UI = true;
+// Levels that only drive folder-path parsing and have no SharePoint column,
+// so they are shown read-only in simple view.
+const INTERNAL_LEVELS: Level[] = ['main_folder', 'sub_category'];
+const SIMPLE_TABS: Tab[] = ['domain', 'group', 'category', 'vessel_names', 'internal'];
+
+// Token-backed palette — every value resolves through `clay.*` / `var(--vdms-*)`
+// so this section matches Dashboard's look (and re-themes with it).
 const C = {
-  text: '#0f172a', sub: '#64748b', border: '#e2e8f0', blue: '#0a66d0', blueBg: '#e8f1ff',
-  amberBg: '#fffbeb', amber: '#92400e', redBg: '#fef2f2', red: '#b91c1c', greenBg: '#ecfdf5', green: '#047857',
-  greyBg: '#f1f5f9', grey: '#475569',
+  text: 'var(--vdms-text)', sub: 'var(--vdms-text-muted)', border: 'var(--vdms-line)', blue: clay.accent, blueBg: clay.accentSoft,
+  amberBg: clay.pillWarnBg, amber: clay.pillWarnText, redBg: clay.pillDangerBg, red: clay.pillDangerText, greenBg: clay.pillActiveBg, green: clay.pillActiveText,
+  greyBg: 'var(--vdms-surface-alt)', grey: 'var(--vdms-text-muted)',
 };
 const DIFF_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
   new: { bg: C.greenBg, fg: C.green, label: 'New' },
@@ -62,13 +75,11 @@ const DIFF_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
   error: { bg: C.redBg, fg: C.red, label: 'Error' },
 };
 
-const btn = (kind: 'primary' | 'plain' | 'danger', disabled: boolean): React.CSSProperties => ({
-  border: kind === 'plain' ? `1px solid ${C.border}` : 'none',
-  background: disabled ? '#cbd5e1' : kind === 'primary' ? C.blue : kind === 'danger' ? C.red : '#fff',
-  color: kind === 'plain' ? C.text : '#fff', fontSize: 12, fontWeight: 600, padding: '6px 12px',
-  borderRadius: 6, cursor: disabled ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
-});
-const input: React.CSSProperties = { padding: '6px 8px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13, boxSizing: 'border-box' };
+// Thin wrapper over the shared `dmsBtn` so every call site below (unchanged)
+// now renders with Dashboard's button spec instead of this section's own.
+const btn = (kind: 'primary' | 'plain' | 'danger', disabled: boolean): React.CSSProperties =>
+  dmsBtn(kind === 'plain' ? 'secondary' : kind, !disabled);
+const input: React.CSSProperties = dmsControlStyle();
 const pill = (bg: string, fg: string): React.CSSProperties => ({ background: bg, color: fg, borderRadius: 999, padding: '2px 8px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' });
 
 async function readError(r: Response): Promise<string> {
@@ -86,6 +97,7 @@ async function readError(r: Response): Promise<string> {
 export function TagConfigurationSection({ host }: { host: VesselEmail }): React.ReactElement {
   const [scope, setScope] = React.useState<Scope>('site');
   const [tab, setTab] = React.useState<Tab>('domain');
+  const [moreOpen, setMoreOpen] = React.useState(false);
   const [cfg, setCfg] = React.useState<ConfigResponse | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState('');
@@ -182,12 +194,14 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
     return cur && cur.level === 'domain' ? cur : undefined;
   };
   const isAdmin = !!cfg?.is_admin;
-  const level: Level | null = tab === 'vessel_names' ? null : tab;
+  const level: Level | null = tab === 'vessel_names' || tab === 'internal' ? null : tab;
   // Only Domain, Group and Category have a real SharePoint column to sync
   // (Main Folder has no column; Sub Category is never written to SharePoint).
   const syncableLevel: Level | null = level && SYNCABLE_LEVELS.includes(level) ? level : null;
   const hasSyncWork = !!sync && (!!sync.add.length || !!sync.remove.length || !!sync.term_store?.add.length);
-  const mode: Mode = level && cfg ? (cfg.modes[level] || 'add') : 'add';
+  const mode: Mode = SIMPLE_UI ? 'add' : (level && cfg ? (cfg.modes[level] || 'add') : 'add');
+  const internalLevel = SIMPLE_UI && !!level && INTERNAL_LEVELS.includes(level);
+  const canEdit = isAdmin && !internalLevel;
   const domains = items.filter(i => i.level === 'domain');
 
   // ---- cascading parent picker ---------------------------------------
@@ -408,20 +422,38 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
   React.useEffect(() => { if (tab === 'vessel_names' && !vessels) loadVessels(false).catch(() => undefined); }, [tab]);
 
   // ---- render helpers ------------------------------------------------
+  const tabCount = (t: Tab): string | number =>
+    t === 'vessel_names' ? 'Term Store' : t === 'internal' ? 'read-only'
+      : items.filter(i => i.level === t && i.status === 'Active').length;
+  const internalRows = items.filter(i => INTERNAL_LEVELS.includes(i.level)
+    && (!search || `${i.name} ${i.path}`.toLowerCase().includes(search.toLowerCase())))
+    .sort((a, b) => a.level.localeCompare(b.level) || a.path.localeCompare(b.path));
+  const sharePointLabel = (l: Level): string =>
+    l === 'domain' ? 'Column + Term Store' : SYNCABLE_LEVELS.includes(l) ? 'Column choice' : 'Path only';
+  const simpleActions = (it: TagItem): React.ReactElement => (
+    <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+      <button style={btn('plain', !canEdit || !!busy)} disabled={!canEdit || !!busy}
+        onClick={() => setEditor({ id: it.id, name: it.name, code: it.code || '', description: it.description || '', parentChain: chainFor(it.parent_id) })}>Rename</button>
+      <button style={btn('plain', !canEdit || !!busy)} disabled={!canEdit || !!busy}
+        onClick={() => { setStatus(it, it.status === 'Active' ? 'Inactive' : 'Active').catch(() => undefined); }}>
+        {it.status === 'Active' ? 'Archive' : 'Restore'}
+      </button>
+    </div>
+  );
   const statusPill = (s: string): React.ReactElement =>
     s === 'Active' ? <span style={pill(C.greenBg, C.green)}>Active</span> : <span style={pill(C.greyBg, C.grey)}>{s}</span>;
 
   const actions = (it: TagItem): React.ReactElement => (
     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-      <button style={btn('plain', !isAdmin || !!busy)} disabled={!isAdmin || !!busy} aria-label={`Move ${it.name} up`} onClick={() => { move(it, -1).catch(() => undefined); }}>↑</button>
-      <button style={btn('plain', !isAdmin || !!busy)} disabled={!isAdmin || !!busy} aria-label={`Move ${it.name} down`} onClick={() => { move(it, 1).catch(() => undefined); }}>↓</button>
-      <button style={btn('plain', !isAdmin || !!busy)} disabled={!isAdmin || !!busy}
+      <button style={btn('plain', !canEdit || !!busy)} disabled={!canEdit || !!busy} aria-label={`Move ${it.name} up`} onClick={() => { move(it, -1).catch(() => undefined); }}>↑</button>
+      <button style={btn('plain', !canEdit || !!busy)} disabled={!canEdit || !!busy} aria-label={`Move ${it.name} down`} onClick={() => { move(it, 1).catch(() => undefined); }}>↓</button>
+      <button style={btn('plain', !canEdit || !!busy)} disabled={!canEdit || !!busy}
         onClick={() => setEditor({ id: it.id, name: it.name, code: it.code || '', description: it.description || '', parentChain: chainFor(it.parent_id) })}>Edit</button>
       {it.status === 'Active'
-        ? <button style={btn('plain', !isAdmin || !!busy)} disabled={!isAdmin || !!busy} onClick={() => { setStatus(it, 'Inactive').catch(() => undefined); }}>Deactivate</button>
-        : <button style={btn('plain', !isAdmin || !!busy)} disabled={!isAdmin || !!busy} onClick={() => { setStatus(it, 'Active').catch(() => undefined); }}>Activate</button>}
+        ? <button style={btn('plain', !canEdit || !!busy)} disabled={!canEdit || !!busy} onClick={() => { setStatus(it, 'Inactive').catch(() => undefined); }}>Deactivate</button>
+        : <button style={btn('plain', !canEdit || !!busy)} disabled={!canEdit || !!busy} onClick={() => { setStatus(it, 'Active').catch(() => undefined); }}>Activate</button>}
       {!it.is_default && (
-        <button style={btn('plain', !isAdmin || !!busy)} disabled={!isAdmin || !!busy} title="Only unused custom items can be deleted"
+        <button style={btn('plain', !canEdit || !!busy)} disabled={!canEdit || !!busy} title="Only unused custom items can be deleted"
           onClick={() => { remove(it).catch(() => undefined); }}>Delete</button>
       )}
     </div>
@@ -431,7 +463,7 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
     childrenOf(pid).flatMap(it => {
       const match = !search || `${it.name} ${it.path}`.toLowerCase().includes(search.toLowerCase());
       const own = match ? [(
-        <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', paddingLeft: 8 + depth * 18, borderBottom: '1px solid #f1f5f9', background: it.level === level ? '#f8fbff' : 'transparent' }}>
+        <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', paddingLeft: 8 + depth * 18, borderBottom: '1px solid var(--vdms-border-soft)', background: it.level === level ? clay.accentSoft : 'transparent' }}>
           <span style={{ fontSize: 13, color: it.status === 'Active' ? C.text : C.sub, fontWeight: it.level === level ? 700 : 400 }}>{it.name}</span>
           <span style={{ fontSize: 11, color: C.sub }}>{SINGULAR[it.level]}</span>
           {statusPill(it.status)}
@@ -453,7 +485,7 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
       )}
       <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, maxHeight: 280, overflow: 'auto' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-          <thead><tr style={{ background: '#f8fafc' }}>
+          <thead><tr style={{ background: 'var(--vdms-surface-alt)' }}>
             {['Result', 'Level', 'Name', 'Parent', 'Note'].map(h => <th key={h} style={{ textAlign: 'left', padding: '6px 8px', color: C.sub, borderBottom: `1px solid ${C.border}` }}>{h}</th>)}
           </tr></thead>
           <tbody>
@@ -501,34 +533,46 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 1040 }}>
+      {SIMPLE_UI && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Tag configuration</div>
+          <div style={{ fontSize: 12, color: C.sub }}>Changes are pushed to SharePoint and the Term Store automatically.</div>
+        </div>
+      )}
       {/* Header: scope + global actions */}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 12, color: C.sub }}>
+        {!SIMPLE_UI && <div style={{ fontSize: 12, color: C.sub }}>
           Client: <b style={{ color: C.text }}>
             {scope === 'template'
               ? 'Default template for new clients'
               : (siteOptions.find(s => s.site_key === cfg.site_key)?.display_name || cfg.site_key)}
           </b>
           {cfg.origin !== 'site' && scope !== 'template' && <span> · using defaults until the first change</span>}
-        </div>
-        <select aria-label="Scope" style={input} value={scope} onChange={e => { setScope(e.target.value); setDiff(null); setEditor(null); setSync(null); }}>
+        </div>}
+        {!SIMPLE_UI && <select aria-label="Scope" style={input} value={scope} onChange={e => { setScope(e.target.value); setDiff(null); setEditor(null); setSync(null); }}>
           <option value="site">Apply to current client{activeSiteKey ? ` (${siteOptions.find(s => s.site_key === activeSiteKey)?.display_name || activeSiteKey})` : ''}</option>
           {siteOptions.filter(s => s.site_key !== activeSiteKey).map(s => (
             <option key={s.site_key} value={s.site_key}>{s.display_name}</option>
           ))}
           <option value="template" disabled={!isAdmin}>Default template for new clients (Admin)</option>
-        </select>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        </select>}
+        <div style={{ marginLeft: 'auto', position: 'relative' }}>
+          <button type="button" aria-haspopup="menu" aria-expanded={moreOpen} style={btn('plain', false)} onClick={() => setMoreOpen(o => !o)}>More ▾</button>
+          {moreOpen && (
+          <div role="menu" className="vdms-more-menu" onClick={() => setMoreOpen(false)} style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 20, minWidth: 230, display: 'flex', flexDirection: 'column', gap: 2, padding: 6, borderRadius: 12, background: 'var(--vdms-surface)', border: '1px solid var(--vdms-line)', boxShadow: '0 12px 28px rgba(16,40,80,0.18)' }}>
+          <style>{`.vdms-more-menu button { width: 100%; text-align: left !important; border: none !important; background: transparent !important; box-shadow: none !important; } .vdms-more-menu button:hover:not(:disabled) { background: var(--vdms-surface-alt) !important; }`}</style>
           <button style={btn('plain', !isAdmin || !!busy)} disabled={!isAdmin || !!busy} onClick={() => { restore(0).catch(() => undefined); }}>Undo last change</button>
           <button style={btn('plain', !!busy)} disabled={!!busy} onClick={() => { setPanel(panel === 'history' ? '' : 'history'); loadSnapshots().catch(() => undefined); }}>History</button>
           <button style={btn('plain', !!busy)} disabled={!!busy} onClick={() => { download('csv').catch(() => undefined); }}>Export CSV</button>
           <button style={btn('plain', !!busy)} disabled={!!busy} onClick={() => { download('xlsx').catch(() => undefined); }}>Export Excel</button>
           <button style={btn('plain', !isAdmin || !!busy)} disabled={!isAdmin || !!busy} onClick={() => { setPanel(panel === 'import' ? '' : 'import'); setImportRows(null); setDiff(null); }}>Bulk import</button>
-          <button style={btn('plain', !isAdmin || !!busy)} disabled={!isAdmin || !!busy} onClick={() => { setPanel(panel === 'copy' ? '' : 'copy'); setCopyDiff(null); }}>Copy from other site</button>
+          {!SIMPLE_UI && <button style={btn('plain', !isAdmin || !!busy)} disabled={!isAdmin || !!busy} onClick={() => { setPanel(panel === 'copy' ? '' : 'copy'); setCopyDiff(null); }}>Copy from other site</button>}
           <button style={btn('plain', !!busy || scope === 'template' || !syncableLevel)} disabled={!!busy || scope === 'template' || !syncableLevel}
             title={syncableLevel ? '' : 'Switch to the Domains, Groups or Categories tab to sync its SharePoint column'}
             onClick={() => { setPanel(panel === 'sync' ? '' : 'sync'); setSync(null); runSync(false).catch(() => undefined); }}>SharePoint tag sync</button>
-          <button style={btn('danger', !isAdmin || !!busy)} disabled={!isAdmin || !!busy} onClick={() => setConfirmReset(true)}>Reset to Default</button>
+          {!SIMPLE_UI && <button style={btn('danger', !isAdmin || !!busy)} disabled={!isAdmin || !!busy} onClick={() => setConfirmReset(true)}>Reset to Default</button>}
+          </div>
+          )}
         </div>
       </div>
 
@@ -553,7 +597,7 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <tbody>
                 {snapshots.map(s => (
-                  <tr key={s.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  <tr key={s.id} style={{ borderBottom: '1px solid var(--vdms-border-soft)' }}>
                     <td style={{ padding: '4px 6px' }}>#{s.id}</td>
                     <td style={{ padding: '4px 6px' }}>{s.created_at ? new Date(s.created_at).toLocaleString() : ''}</td>
                     <td style={{ padding: '4px 6px' }}>{s.mode}</td>
@@ -702,15 +746,45 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
 
       {/* Level tabs */}
       <div role="tablist" aria-label="Tag levels" style={{ display: 'flex', gap: 4, borderBottom: `1px solid ${C.border}`, flexWrap: 'wrap' }}>
-        {([...LEVELS, 'vessel_names'] as Tab[]).map(t => (
+        {(SIMPLE_UI ? SIMPLE_TABS : [...LEVELS, 'vessel_names'] as Tab[]).map(t => (
           <button key={t} role="tab" aria-selected={tab === t}
             onClick={() => { setTab(t); setEditor(null); setDiff(null); setPanel(panel === 'import' || panel === 'history' || panel === 'sync' ? panel : ''); setBulkText(''); setBulkParent([]); }}
             style={{ border: 'none', borderBottom: `2px solid ${tab === t ? C.blue : 'transparent'}`, background: 'transparent', padding: '8px 12px', fontSize: 13, fontWeight: tab === t ? 700 : 500, color: tab === t ? C.blue : C.grey, cursor: 'pointer' }}>
-            {LABEL[t]}
-            {t !== 'vessel_names' && <span style={{ marginLeft: 6, fontSize: 11, color: C.sub }}>{items.filter(i => i.level === t && i.status === 'Active').length}</span>}
+            {t === 'internal' ? '\u{1F512} Internal' : LABEL[t]}
+            {(SIMPLE_UI || t !== 'vessel_names') && <span style={{ marginLeft: 6, fontSize: 11, color: C.sub }}>{SIMPLE_UI ? tabCount(t) : items.filter(i => i.level === t && i.status === 'Active').length}</span>}
           </button>
         ))}
       </div>
+
+      {tab === 'internal' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: 13 }}>
+          <div style={{ padding: '8px 12px', borderRadius: 8, background: C.blueBg, color: C.text }}>
+            Main Folders and Sub Categories only help read folder paths. They are not SharePoint columns, so they are view-only here.
+          </div>
+          <input aria-label="Search" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} style={{ ...input, width: 240 }} />
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'auto', maxHeight: 520 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: 'var(--vdms-surface-alt)', position: 'sticky', top: 0 }}>
+                  {['Name', 'Type', 'Used for'].map(h => (
+                    <th key={h} style={{ textAlign: 'left', padding: '7px 8px', color: C.sub, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {!internalRows.length && <tr><td colSpan={3} style={{ padding: 14, color: C.sub }}>Nothing matches your search.</td></tr>}
+                {internalRows.map(it => (
+                  <tr key={it.id} style={{ borderBottom: '1px solid var(--vdms-border-soft)' }}>
+                    <td style={{ padding: '6px 8px', fontWeight: 600 }}>{it.name}</td>
+                    <td style={{ padding: '6px 8px', color: C.sub }}>{SINGULAR[it.level]}</td>
+                    <td style={{ padding: '6px 8px', color: C.sub }}>Path parsing</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {tab === 'vessel_names' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
@@ -721,7 +795,7 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
           {vessels && (
             <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, maxHeight: 360, overflow: 'auto' }}>
               {!vessels.names.length ? <div style={{ padding: 10, color: C.sub }}>No vessel terms found.</div>
-                : vessels.names.map(n => <div key={n} style={{ padding: '5px 10px', borderBottom: '1px solid #f1f5f9' }}>{n}</div>)}
+                : vessels.names.map(n => <div key={n} style={{ padding: '5px 10px', borderBottom: '1px solid var(--vdms-border-soft)' }}>{n}</div>)}
             </div>
           )}
         </div>
@@ -730,7 +804,12 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
       {level && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           {/* Customisation mode for this level */}
-          <div role="radiogroup" aria-label={`Customisation mode for ${LABEL[level]}`} style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', fontSize: 13 }}>
+          {internalLevel && (
+            <div style={{ padding: '8px 12px', borderRadius: 8, background: C.blueBg, color: C.text, fontSize: 13 }}>
+              {LABEL[level]} only help read folder paths. They are not SharePoint columns, so they are view-only here.
+            </div>
+          )}
+          {!SIMPLE_UI && <div role="radiogroup" aria-label={`Customisation mode for ${LABEL[level]}`} style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', fontSize: 13 }}>
             <b>Customisation mode:</b>
             <label><input type="radio" name={`mode-${level}`} checked={mode === 'add'} disabled={!isAdmin || !!busy} onChange={() => { setModeFor(level, 'add').catch(() => undefined); }} /> Add to existing</label>
             <label><input type="radio" name={`mode-${level}`} checked={mode === 'replace'} disabled={!isAdmin || !!busy} onChange={() => { setModeFor(level, 'replace').catch(() => undefined); }} /> Replace existing</label>
@@ -738,44 +817,44 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
               {mode === 'add' ? 'Defaults stay; new values are added alongside them.'
                 : 'Your list replaces the current values under the chosen parent. Replaced items are deactivated (never deleted) so existing documents keep their tags.'}
             </span>
-          </div>
+          </div>}
 
           {/* Toolbar */}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <input aria-label="Search" placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)} style={{ ...input, width: 200 }} />
-            {level !== 'domain' && (
+            {!SIMPLE_UI && level !== 'domain' && (
               <select aria-label="Filter by Domain" style={input} value={fDomain === '' ? '' : String(fDomain)} onChange={e => setFDomain(e.target.value ? Number(e.target.value) : '')}>
                 <option value="">All Domains</option>
                 {domains.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
               </select>
             )}
-            <select aria-label="Filter by status" style={input} value={fStatus} onChange={e => setFStatus(e.target.value)}>
+            {!SIMPLE_UI && <select aria-label="Filter by status" style={input} value={fStatus} onChange={e => setFStatus(e.target.value)}>
               <option value="">All statuses</option><option>Active</option><option>Inactive</option><option>Archived</option>
-            </select>
-            <select aria-label="Filter by source" style={input} value={fSource} onChange={e => setFSource(e.target.value)}>
+            </select>}
+            {!SIMPLE_UI && <select aria-label="Filter by source" style={input} value={fSource} onChange={e => setFSource(e.target.value)}>
               <option value="">All sources</option><option>Default</option><option>Custom</option><option>Imported</option>
-            </select>
-            <div role="group" aria-label="View" style={{ display: 'flex' }}>
+            </select>}
+            {!SIMPLE_UI && <div role="group" aria-label="View" style={{ display: 'flex' }}>
               {(['table', 'tree'] as const).map(v => (
                 <button key={v} onClick={() => setView(v)} aria-pressed={view === v}
-                  style={{ ...btn('plain', false), background: view === v ? C.blueBg : '#fff', color: view === v ? C.blue : C.text, borderRadius: v === 'table' ? '6px 0 0 6px' : '0 6px 6px 0' }}>
+                  style={{ ...btn('plain', false), background: view === v ? C.blueBg : 'var(--vdms-surface)', color: view === v ? C.blue : C.text, borderRadius: v === 'table' ? '6px 0 0 6px' : '0 6px 6px 0' }}>
                   {v === 'table' ? 'List' : 'Tree'}
                 </button>
               ))}
-            </div>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-              <button style={btn('primary', !isAdmin || !!busy)} disabled={!isAdmin || !!busy}
+            </div>}
+            {!internalLevel && <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+              <button style={btn('primary', !canEdit || !!busy)} disabled={!canEdit || !!busy}
                 onClick={() => { setEditor({ id: null, name: '', code: '', description: '', parentChain: [] }); setPanel(''); }}>+ Add {SINGULAR[level]}</button>
-              <button style={btn('plain', !isAdmin || !!busy)} disabled={!isAdmin || !!busy}
+              <button style={btn('plain', !canEdit || !!busy)} disabled={!canEdit || !!busy}
                 onClick={() => { setPanel(panel === 'bulk' ? '' : 'bulk'); setEditor(null); setDiff(null); }}>
                 {mode === 'replace' ? 'Replace list…' : 'Add several…'}
               </button>
-            </div>
+            </div>}
           </div>
 
           {/* Add / edit form */}
           {editor && (
-            <div style={{ border: `1px solid ${C.blue}`, borderRadius: 8, padding: 12, background: '#f8fbff', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ border: `1px solid ${C.blue}`, borderRadius: 8, padding: 12, background: clay.accentSoft, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ fontSize: 13, fontWeight: 700 }}>{editor.id === null ? `New ${SINGULAR[level]}` : `Edit ${SINGULAR[level]}`}</div>
               {level !== 'domain' && (
                 <div style={{ fontSize: 12 }}>Parent{editor.id === null ? ' (select from Domain down; levels may be skipped)' : ''}:
@@ -785,10 +864,10 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <input aria-label="Name" placeholder="Name *" maxLength={cfg.folder_name_rules.max_length} value={editor.name}
                   onChange={e => setEditor({ ...editor, name: e.target.value })} style={{ ...input, minWidth: 260 }} />
-                <input aria-label="Code" placeholder="Code (optional)" maxLength={40} value={editor.code}
-                  onChange={e => setEditor({ ...editor, code: e.target.value })} style={{ ...input, width: 140 }} />
-                <input aria-label="Description" placeholder="Description (optional)" value={editor.description}
-                  onChange={e => setEditor({ ...editor, description: e.target.value })} style={{ ...input, flex: 1, minWidth: 200 }} />
+                {!SIMPLE_UI && <input aria-label="Code" placeholder="Code (optional)" maxLength={40} value={editor.code}
+                  onChange={e => setEditor({ ...editor, code: e.target.value })} style={{ ...input, width: 140 }} />}
+                {!SIMPLE_UI && <input aria-label="Description" placeholder="Description (optional)" value={editor.description}
+                  onChange={e => setEditor({ ...editor, description: e.target.value })} style={{ ...input, flex: 1, minWidth: 200 }} />}
               </div>
               <div style={{ fontSize: 11, color: C.sub }}>
                 "&amp;" is allowed in names; the SharePoint folder name maps &amp; → and. Not allowed: {cfg.folder_name_rules.invalid_chars}. Max {cfg.folder_name_rules.max_length} characters.
@@ -823,30 +902,34 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
           )}
 
           {/* List / tree */}
-          {view === 'table' ? (
+          {SIMPLE_UI || view === 'table' ? (
             <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'auto', maxHeight: 520 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
-                  <tr style={{ background: '#f8fafc', position: 'sticky', top: 0 }}>
-                    {['Name', 'Parent path', 'Code', 'Order', 'Status', 'Source', 'Folder name', ''].map(h => (
+                  <tr style={{ background: 'var(--vdms-surface-alt)', position: 'sticky', top: 0 }}>
+                    {(SIMPLE_UI ? ['Name', 'Status', 'In SharePoint', 'Actions'] : ['Name', 'Parent path', 'Code', 'Order', 'Status', 'Source', 'Folder name', '']).map(h => (
                       <th key={h} style={{ textAlign: 'left', padding: '7px 8px', color: C.sub, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {!rows.length && (
-                    <tr><td colSpan={8} style={{ padding: 14, color: C.sub }}>No {LABEL[level].toLowerCase()} match these filters.</td></tr>
+                    <tr><td colSpan={SIMPLE_UI ? 4 : 8} style={{ padding: 14, color: C.sub }}>No {LABEL[level].toLowerCase()} match these filters.</td></tr>
                   )}
                   {rows.map(it => (
-                    <tr key={it.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      <td style={{ padding: '6px 8px', color: it.status === 'Active' ? C.text : C.sub, fontWeight: 600 }} title={it.description || ''}>{it.name}</td>
-                      <td style={{ padding: '6px 8px', color: C.sub }}>{it.path.split(' > ').slice(0, -1).join(' > ') || '—'}</td>
-                      <td style={{ padding: '6px 8px' }}>{it.code || ''}</td>
-                      <td style={{ padding: '6px 8px' }}>{it.sort_order}</td>
+                    <tr key={it.id} style={{ borderBottom: '1px solid var(--vdms-border-soft)' }}>
+                      <td style={{ padding: '6px 8px', color: it.status === 'Active' ? C.text : C.sub, fontWeight: 600 }} title={it.description || ''}>
+                        {it.name}
+                        {SIMPLE_UI && it.path.includes(' > ') && <div style={{ fontSize: 11, fontWeight: 400, color: C.sub }}>{it.path.split(' > ').slice(0, -1).join(' > ')}</div>}
+                      </td>
+                      {!SIMPLE_UI && <td style={{ padding: '6px 8px', color: C.sub }}>{it.path.split(' > ').slice(0, -1).join(' > ') || '—'}</td>}
+                      {!SIMPLE_UI && <td style={{ padding: '6px 8px' }}>{it.code || ''}</td>}
+                      {!SIMPLE_UI && <td style={{ padding: '6px 8px' }}>{it.sort_order}</td>}
                       <td style={{ padding: '6px 8px' }}>{statusPill(it.status)}</td>
-                      <td style={{ padding: '6px 8px', color: C.sub }}>{it.source}</td>
-                      <td style={{ padding: '6px 8px', color: C.sub }}>{it.folder_name}</td>
-                      <td style={{ padding: '6px 8px' }}>{actions(it)}</td>
+                      {SIMPLE_UI && <td style={{ padding: '6px 8px', color: C.sub }}>{sharePointLabel(it.level)}</td>}
+                      {!SIMPLE_UI && <td style={{ padding: '6px 8px', color: C.sub }}>{it.source}</td>}
+                      {!SIMPLE_UI && <td style={{ padding: '6px 8px', color: C.sub }}>{it.folder_name}</td>}
+                      <td style={{ padding: '6px 8px', textAlign: SIMPLE_UI ? 'right' : 'left' }}>{SIMPLE_UI ? simpleActions(it) : actions(it)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -857,6 +940,21 @@ export function TagConfigurationSection({ host }: { host: VesselEmail }): React.
               {renderTree(null, 0)}
             </div>
           )}
+        </div>
+      )}
+
+      {SIMPLE_UI && (
+        <div style={{ marginTop: 4, paddingTop: 12, borderTop: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 12, color: C.sub }}>Renaming keeps the old name, so existing files still match.</div>
+          <button style={btn('plain', !isAdmin || !!busy)} disabled={!isAdmin || !!busy}
+            title="Fix documents tagged with an old value. Opens at Domains, Groups or Categories."
+            onClick={() => {
+              setPanel('sync'); setSync(null); setRetagResult(null);
+              if (syncableLevel) runSync(false).catch(() => undefined); else setTab('domain');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}>
+            Retag existing files (admin)
+          </button>
         </div>
       )}
     </div>

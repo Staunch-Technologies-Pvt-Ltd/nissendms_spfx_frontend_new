@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
+import { Icon } from '@fluentui/react/lib/Icon';
 import { isMobileWidth } from '../responsive';
 
 /** A single dialog supports both one-vessel and bulk temporary deletion. */
@@ -11,13 +12,13 @@ export function renderDeleteModal(host: VesselEmail): React.ReactElement {
   const isSuccess = !!modalMsg && !modalBusy && !modalError;
   const progressEntries = Object.values(deleteVesselProgress || {});
 
-  const getStatusVisual = (status?: 'waiting' | 'deleting' | 'success' | 'pending' | 'failed'): { icon: string; label: string; color: string } => {
+  const getStatusVisual = (status?: 'waiting' | 'deleting' | 'success' | 'pending' | 'failed'): { icon: React.ReactNode; label: string; color: string } => {
     switch (status) {
-      case 'success': return { icon: '✓', label: 'Deleted', color: '#15803d' };
+      case 'success': return { icon: <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} />, label: 'Deleted', color: '#15803d' };
       case 'deleting': return { icon: '…', label: 'Deleting', color: '#0284c7' };
-      case 'pending': return { icon: '⏳', label: 'Pending approval', color: '#b45309' };
-      case 'failed': return { icon: '✗', label: 'Failed', color: '#b91c1c' };
-      default: return { icon: '○', label: 'Waiting', color: '#64748b' };
+      case 'pending': return { icon: <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 12 }} />, label: 'Pending approval', color: '#b45309' };
+      case 'failed': return { icon: <Icon iconName="ErrorBadge" aria-hidden="true" style={{ fontSize: 12 }} />, label: 'Failed', color: '#b91c1c' };
+      default: return { icon: <Icon iconName="CircleRing" aria-hidden="true" style={{ fontSize: 12 }} />, label: 'Waiting', color: '#64748b' };
     }
   };
 
@@ -26,7 +27,7 @@ export function renderDeleteModal(host: VesselEmail): React.ReactElement {
       <div style={{ background: '#fff', borderRadius: 10, padding: isMobile ? '16px' : '24px 28px', width: isMobile ? '95vw' : 520, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }} onClick={e => e.stopPropagation()}>
         {isSuccess ? (
           <div style={{ textAlign: 'center', padding: '16px 0 8px' }}>
-            <div style={{ fontSize: 50, marginBottom: 10 }}>✅</div>
+            <div style={{ fontSize: 50, marginBottom: 10 }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 50 }} /></div>
             <div style={{ fontSize: 20, fontWeight: 700, color: '#059669', marginBottom: 8 }}>{selectedCount > 1 ? 'Vessels Deleted Successfully' : 'Vessel Deleted Successfully'}</div>
             <p style={{ fontSize: 13, color: '#475569', margin: '0 0 20px', lineHeight: 1.5 }}>{modalMsg}</p>
             {progressEntries.length > 0 && (
@@ -34,7 +35,7 @@ export function renderDeleteModal(host: VesselEmail): React.ReactElement {
                 {progressEntries.filter(p => p.status === 'success').map((p, idx) => (
                   <div key={`${p.name}_${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '6px 0', borderBottom: idx === progressEntries.filter(x => x.status === 'success').length - 1 ? 'none' : '1px solid #e2e8f0' }}>
                     <span style={{ fontSize: 13, color: '#0f172a', fontWeight: 600 }}>{p.name}</span>
-                    <span style={{ fontSize: 12, color: '#15803d', fontWeight: 700 }}>✓ Deleted</span>
+                    <span style={{ fontSize: 12, color: '#15803d', fontWeight: 700 }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} /> Deleted</span>
                   </div>
                 ))}
               </div>

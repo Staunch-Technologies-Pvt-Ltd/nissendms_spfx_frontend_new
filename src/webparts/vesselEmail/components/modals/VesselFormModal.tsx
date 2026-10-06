@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
+import { Icon } from '@fluentui/react/lib/Icon';
 import {
   badge, GROUP_COLORS, DATASOURCE_TAGS_MAP, VESSEL_TYPES, cleanName, suggestTagFromFilename,
   INITIAL_MOCK_DOCUMENTS, INITIAL_MOCK_TEMPLATES, INITIAL_MOCK_APPROVALS,
@@ -168,7 +169,7 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
             onClick={handleClose}
             style={{ position: 'absolute', top: 16, right: 16, width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', background: clay.surfaceRaised, border: `1px solid ${clay.accentSoft}`, borderRadius: 9, fontSize: 14, color: clay.textMuted, cursor: 'pointer', zIndex: 2 }}
             title="Close"
-          >✕</button>
+          ><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 14 }} /></button>
         )}
 
         <div style={{
@@ -179,7 +180,7 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
         {/* ── STATE 1: PROVISIONING IN PROGRESS (Timer & Progress Bar) ── */}
         {modalBusy && !isCreate ? (
           <div style={{ textAlign: 'center', padding: '28px 0' }}>
-            <div style={{ fontSize: 44, marginBottom: 12 }}>⏳</div>
+            <div style={{ fontSize: 44, marginBottom: 12 }}><Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 44 }} /></div>
             <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#0284c7' }}>
               Updating Vessel
             </h3>
@@ -189,7 +190,7 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
           </div>
         ) : modalBusy ? (
           <div style={{ textAlign: 'center', padding: '12px 0' }}>
-            <div style={{ fontSize: 44, marginBottom: 12 }}>⏳</div>
+            <div style={{ fontSize: 44, marginBottom: 12 }}><Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 44 }} /></div>
             <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#0284c7' }}>
               Creating Vessel…
             </h3>
@@ -203,7 +204,7 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
               background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd',
               borderRadius: 20, padding: '8px 18px', fontSize: 14, fontWeight: 700, marginBottom: 20,
             }}>
-              <span style={{ fontSize: 16 }}>⏱️</span>
+              <span style={{ fontSize: 16 }}><Icon iconName="Clock" aria-hidden="true" style={{ fontSize: 16 }} /></span>
               <span>Elapsed Time: {formatTimer(elapsed)}</span>
             </div>
 
@@ -219,20 +220,20 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
             {/* Step Progress Checklist */}
             <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: '14px 16px', textAlign: 'left', fontSize: 12 }}>
               <div style={{ color: '#16a34a', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 14 }}>✓</span><span>Vessel record registered in database</span>
+                <span style={{ fontSize: 14 }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 14 }} /></span><span>Vessel record registered in database</span>
               </div>
               <div style={{ color: '#0284c7', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 14 }}>⏳</span><span>Creating the vessel folder and selected custom subfolders…</span>
+                <span style={{ fontSize: 14 }}><Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 14 }} /></span><span>Creating the vessel folder and selected custom subfolders…</span>
               </div>
               <div style={{ color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 14 }}>○</span><span>Linking category subfolders & permissions</span>
+                <span style={{ fontSize: 14 }}><Icon iconName="CircleRing" aria-hidden="true" style={{ fontSize: 14 }} /></span><span>Linking category subfolders & permissions</span>
               </div>
             </div>
           </div>
         ) : isSuccess ? (
           /* ── STATE 2: SUCCESS SCREEN ── */
           <div style={{ textAlign: 'center', padding: '12px 0' }}>
-            <div style={{ fontSize: 52, marginBottom: 12 }}>🎉</div>
+            <div style={{ fontSize: 52, marginBottom: 12 }}><Icon iconName="Completed" aria-hidden="true" style={{ fontSize: 52 }} /></div>
             <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#059669' }}>
               Vessel Successfully Created!
             </h3>
@@ -241,7 +242,7 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
             </p>
 
             <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, padding: '14px 16px', marginBottom: 24, fontSize: 12, color: '#065f46', textAlign: 'left' }}>
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>✅ Vessel Ready</div>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} /> Vessel Ready</div>
               <div>• Registered vessel card added to main grid</div>
               <div>• IMO Number: {form.imo || '—'}</div>
               <div>• Selected SharePoint folder path created</div>
@@ -261,7 +262,7 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
           </div>
         ) : isEditSuccess ? (
           <div style={{ textAlign: 'center', padding: '28px 0' }}>
-            <div style={{ fontSize: 52, marginBottom: 12 }}>✅</div>
+            <div style={{ fontSize: 52, marginBottom: 12 }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 52 }} /></div>
             <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#059669' }}>
               Vessel Updated Successfully
             </h3>
@@ -285,7 +286,7 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
               <div style={{ width: 40, height: 40, flexShrink: 0, borderRadius: 12, background: clay.accentGradient, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 19, boxShadow: clay.shadowIcon, border: `1px solid ${clay.accentSoft}` }}>
-                🚢
+                <Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 19 }} />
               </div>
               <div>
                 <div style={{ fontSize: 17, fontWeight: 800, color: clay.text, letterSpacing: '-0.2px', lineHeight: 1.25 }}>{isCreate ? 'Create a new vessel' : 'Update vessel details'}</div>
@@ -309,7 +310,7 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
                     value={form.name} onChange={setName} placeholder="e.g. MV Pacific Trader" />
                   {formFieldErrors?.name && (
                     <div style={{ marginTop: 5, fontSize: 11, color: '#dc2626', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span>⚠️</span><span>{formFieldErrors.name}</span>
+                      <span><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 11 }} /></span><span>{formFieldErrors.name}</span>
                     </div>
                   )}
                 </div>
@@ -341,7 +342,7 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
                     inputMode="numeric" />
                   {formFieldErrors?.imo && (
                     <div style={{ marginTop: 5, fontSize: 11, color: '#dc2626', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span>⚠️</span><span>{formFieldErrors.imo}</span>
+                      <span><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 11 }} /></span><span>{formFieldErrors.imo}</span>
                     </div>
                   )}
                 </div>
@@ -390,7 +391,7 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
                         style={{ width: '100%', minHeight: 42, padding: '10px 38px 10px 12px', boxSizing: 'border-box', border: `1px solid ${siteMenuOpen ? clay.accent : clay.accentSoft}`, borderRadius: 8, background: clay.surface, color: selectedSiteKey ? clay.text : clay.textMuted, textAlign: 'left', cursor: modalBusy || loadingSites ? 'not-allowed' : 'pointer', position: 'relative', fontSize: 13 }}
                       >
                         {availableSites.find(site => (site.site_key || site.id) === selectedSiteKey)?.display_name || selectedSiteKey || (loadingSites ? 'Loading sites...' : 'Select a SharePoint site')}
-                        <span aria-hidden="true" style={{ position: 'absolute', right: 13, top: '50%', transform: `translateY(-50%) rotate(${siteMenuOpen ? 180 : 0}deg)`, color: clay.accentDark, transition: 'transform 0.15s ease' }}>⌄</span>
+                        <span aria-hidden="true" style={{ position: 'absolute', right: 13, top: '50%', transform: `translateY(-50%) rotate(${siteMenuOpen ? 180 : 0}deg)`, color: clay.accentDark, transition: 'transform 0.15s ease' }}><Icon iconName="ChevronDown" aria-hidden="true" style={{ fontSize: 12 }} /></span>
                       </button>
                       {siteMenuOpen && !modalBusy && !loadingSites && (
                         <div role="listbox" aria-label="SharePoint sites" style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 20, maxHeight: 190, overflowY: 'auto', background: clay.surface, border: `1px solid ${clay.accentSoft}`, borderRadius: 8, padding: 4 }}>
@@ -407,7 +408,7 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
                                 onClick={() => chooseSite(key)}
                                 style={{ width: '100%', minHeight: 36, border: 0, borderRadius: 6, padding: '8px 10px', boxSizing: 'border-box', background: selected ? clay.accentSoft : 'transparent', color: selected ? clay.accentDeep : clay.text, textAlign: 'left', cursor: 'pointer', fontSize: 13, fontWeight: selected ? 700 : 500 }}
                               >
-                                {selected && <span style={{ marginRight: 6, color: clay.accentDark }}>✓</span>}{label}
+                                {selected && <span style={{ marginRight: 6, color: clay.accentDark }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} /></span>}{label}
                               </button>
                             );
                           })}
@@ -438,12 +439,12 @@ function VesselFormContent({ host, mode }: { host: VesselEmail; mode: 'create' |
                       {browserLoading ? <div style={{ padding: 12, color: clay.textMuted, fontSize: 12 }}>Loading folders...</div> : (
                         <div style={{ border: `1px solid ${clay.accentSoft}`, borderRadius: 8, background: clay.surface, maxHeight: 180, overflowY: 'auto' }}>
                           {browserFolders.length === 0 ? <div style={{ padding: 12, color: clay.textMuted, fontSize: 12 }}>No subfolders at this level.</div> : browserFolders.map(folder => (
-                            <button type="button" key={folder.id} onClick={() => setBrowserPath(folder.path)} style={{ width: '100%', textAlign: 'left', padding: '9px 12px', boxSizing: 'border-box', border: 0, borderBottom: `1px solid ${clay.accentSoft}`, background: clay.surface, color: clay.text, cursor: 'pointer' }}>📁 {folder.name}</button>
+                            <button type="button" key={folder.id} onClick={() => setBrowserPath(folder.path)} style={{ width: '100%', textAlign: 'left', padding: '9px 12px', boxSizing: 'border-box', border: 0, borderBottom: `1px solid ${clay.accentSoft}`, background: clay.surface, color: clay.text, cursor: 'pointer' }}><Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 12 }} /> {folder.name}</button>
                           ))}
                         </div>
                       )}
                       <button type="button" onClick={chooseParent} disabled={modalBusy} style={{ marginTop: 8, padding: '8px 12px', border: `1px solid ${form.parent_folder_path === browserPath ? '#059669' : '#0284c7'}`, borderRadius: 7, background: form.parent_folder_path === browserPath ? '#dcfce7' : '#eff6ff', color: form.parent_folder_path === browserPath ? '#15803d' : '#0369a1', cursor: 'pointer', fontWeight: 600, fontSize: 12 }}>
-                        {form.parent_folder_path === browserPath ? '✓ Parent folder selected' : 'Use this folder as parent'}
+                        {form.parent_folder_path === browserPath ? <><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} /> Parent folder selected</> : 'Use this folder as parent'}
                       </button>
                     </div>
                   )}

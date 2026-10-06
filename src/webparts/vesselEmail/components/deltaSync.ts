@@ -325,6 +325,12 @@ export function mergeNodeIntoMap(
   // Update or insert the node itself
   const existing = map.get(node.id);
   if (existing) {
+    // A move keeps the same item id but changes its parent: detach it from
+    // the old parent so it isn't listed under two folders.
+    if (existing.parentId && existing.parentId !== node.parentId) {
+      const oldParent = map.get(existing.parentId);
+      if (oldParent) oldParent.children = oldParent.children.filter(c => c.id !== node.id);
+    }
     // Update name/path in place, preserve children
     existing.name = node.name;
     existing.serverRelativePath = node.serverRelativePath;
@@ -348,6 +354,21 @@ export function mergeNodeIntoMap(
   }
 
   return { missingParentId: null };
+}
+
+/**
+ * After a folder is renamed or moved, Graph's delta feed reports only the
+ * folder itself, so every descendant still carries the old path prefix.
+ * Rewrite it in place.
+ */
+export function repathDescendants(node: SpoFolderNode, oldPath: string, newPath: string): void {
+  if (!oldPath || !newPath || oldPath === newPath) return;
+  for (const child of node.children) {
+    if (child.serverRelativePath === oldPath || child.serverRelativePath.startsWith(`${oldPath}/`)) {
+      child.serverRelativePath = newPath + child.serverRelativePath.substring(oldPath.length);
+    }
+    repathDescendants(child, oldPath, newPath);
+  }
 }
 
 /**

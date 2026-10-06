@@ -20,45 +20,26 @@ import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from '../ve
 import { isMobileWidth, isTabletOrBelow } from '../responsive';
 import { clay } from '../clayTheme';
 
-// Phase 6 — Ocean Clay: previously each module had its own vivid accent +
-// matching dark sidebar background (rainbow wayfinding). Per explicit
-// decision (2026-09-22), the sidebar was fully converted to the single
-// Ocean Clay teal palette — these maps are kept (rather than removed) so
-// every `NAV_ACCENTS[view] || fallback` call site below needs no change,
-// but every module now resolves to the same teal tokens.
-const NAV_ACCENTS: Record<string, string> = {
-  dashboard: '#0284c7', list: '#4f46e5', sites: '#0d9488', vessels: '#0369a1',
-  migration: '#b45309', templates: '#0e7490', users: '#be185d', settings: '#475569',
-  bento_email: '#7c3aed', bento_compose: '#0e7490', recycle: '#dc2626', archive: '#92400e',
-};
-
-// Maritime design (zip prototype): each module keeps its own hue on a 3D icon tile.
+// Enterprise Maritime: a single dark-navy rail (clay.accentDeep, so it still
+// follows Settings → Color Management) with one consistent teal accent for
+// the active item — no per-module colour, no gradients.
 const hexRgb = (hex: string): number[] => {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 };
 const rgbaOf = (hex: string, a: number): string => `rgba(${hexRgb(hex).join(',')},${a})`;
-const lighten = (hex: string, t: number): string =>
-  `rgb(${hexRgb(hex).map(v => Math.round(v + (255 - v) * t)).join(',')})`;
-// Active row / switch highlight = the same blue as the module action buttons (New Folder, Upload, Archive).
-const ACTIVE_BLUE = '#0284c7';
 const SB_FONT_UI = "'Manrope', 'Segoe UI Variable', 'Segoe UI', sans-serif";
 const SB_FONT_DISPLAY = "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif";
 const SB_FONT_MONO = "'JetBrains Mono', Consolas, monospace";
-
-// Deep Harbor uses a dark rail at night and a warm ivory rail in light mode.
-const NAV_SIDEBAR_BG: Record<string, string> = {
-  dashboard: clay.surface, list: clay.surface, sites: clay.surface, vessels: clay.surface,
-  templates: clay.surface, users: clay.surface, settings: clay.surface,
-  bento_email: clay.surface, bento_compose: clay.surface, recycle: clay.surface, archive: clay.surface,
-};
-
-// Inactive icon tint — was a bright per-module hue, now a single muted clay tone.
-const NAV_ICON_COLORS: Record<string, string> = {
-  dashboard: clay.textMuted, list: clay.textMuted, sites: clay.textMuted, vessels: clay.textMuted,
-  templates: clay.textMuted, users: clay.textMuted, settings: clay.textMuted,
-  bento_email: clay.textMuted, bento_compose: clay.textMuted, recycle: clay.textMuted, archive: clay.textMuted,
-};
+// Hex fallback mirroring clayLight.accent — used only where a literal hex is
+// required (rgba() math); `clay.accent` (the CSS-var form) is used everywhere
+// else so Settings → Color Management keeps re-theming this correctly.
+const ACCENT_HEX = '#0e7490';
+// Sidebar text is always light — the rail background (clay.accentDeep) is
+// always dark, in both light and night app themes.
+const SB_TEXT = '#f3f7fb';
+const SB_TEXT_MUTED = 'rgba(243,247,251,0.6)';
+const SB_DIVIDER = 'rgba(243,247,251,0.14)';
 
 export function renderSidebar(host: VesselEmail): React.ReactElement {
   const { view, sidebarCollapsed, windowWidth } = host.state;
@@ -69,7 +50,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
   const desktopCollapsed = !tabletOrBelow && sidebarCollapsed;
   const mobileOpen = tabletOrBelow && !sidebarCollapsed;
   const collapsed = desktopCollapsed;
-  const expandedWidth = phone ? Math.max(250, viewportWidth - 24) : 280;
+  const expandedWidth = phone ? Math.max(250, viewportWidth - 24) : 320;
   const sidebarWidth = collapsed ? 72 : expandedWidth;
 
   const toggleCollapsed = (): void => {
@@ -86,14 +67,14 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
       title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
       style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        width: 38, height: 38, borderRadius: 10,
-        border: `1.5px solid ${clay.accent}60`,
-        background: `${clay.accent}22`,
-        color: clay.accent,
-        cursor: 'pointer', flexShrink: 0, transition: 'all 0.2s',
+        width: 34, height: 34, borderRadius: 8,
+        border: '1px solid rgba(255,255,255,0.18)',
+        background: 'rgba(255,255,255,0.08)',
+        color: '#ffffff',
+        cursor: 'pointer', flexShrink: 0, transition: 'background 0.2s ease',
       }}
-      onMouseEnter={e => { e.currentTarget.style.background = `${clay.accent}44`; }}
-      onMouseLeave={e => { e.currentTarget.style.background = `${clay.accent}22`; }}
+      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.16)'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)'; }}
     >
       <Icon iconName={collapsed ? 'GlobalNavButton' : 'DoubleChevronLeft'} style={{ fontSize: 16 }} />
     </button>
@@ -127,17 +108,9 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
   ];
   const navItems = ALL_NAV_ITEMS.filter(item => item.id === 'settings' || !isHidden(item.id));
 
-  // Colorful icon bg for inactive items
-  const getIconBg = (id: string, active: boolean): string => {
-    if (active) return NAV_ACCENTS[id] || clay.accent;
-    const accent = NAV_ACCENTS[id] || clay.accent;
-    return `${accent}28`; // 16% opacity tint
-  };
-
   // Same reason as ALL_NAV_ITEMS above: annotate the literal directly, then
   // .filter() it into auxLinks, rather than annotating the .filter() result.
   const ALL_AUX_LINKS: Array<{ id: AppView | 'bento_compose'; label: string; iconName: string; onClick: () => void }> = [
-    { id: 'bento_email',    label: 'AI Bento Email', iconName: 'Mail',       onClick: () => host._goToView('bento_email') },
     {
       id: 'bento_compose',
       label: 'Send Email',
@@ -179,7 +152,6 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
     isAux = false,
   ): React.ReactElement => {
     const active = view === id;
-    const accent = NAV_ACCENTS[id] || clay.accent;
 
     return (
       <button
@@ -192,25 +164,24 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
           alignItems: 'center',
           justifyContent: collapsed ? 'center' : 'space-between',
           width: '100%',
-          minHeight: isAux ? 52 : 56,
-          padding: collapsed ? '6px 0' : '6px 12px',
+          minHeight: 50,
+          padding: collapsed ? '6px 0' : '5px 12px 5px 16px',
           marginBottom: 6,
-          borderRadius: 18,
+          borderRadius: 8,
           boxSizing: 'border-box',
-          border: active ? '1px solid rgba(255,255,255,0.35)' : '1px solid transparent',
-          background: active ? `linear-gradient(135deg, ${lighten(ACTIVE_BLUE, 0.12)}, ${ACTIVE_BLUE})` : 'transparent',
-          boxShadow: active ? `0 12px 26px ${rgbaOf(ACTIVE_BLUE, 0.42)}, inset 0 1px 0 rgba(255,255,255,0.4), inset 0 -4px 0 rgba(0,0,0,0.16)` : 'none',
-          color: active ? '#ffffff' : (isNight ? '#eaf6fd' : '#08243a'),
-          fontWeight: active ? 800 : 600,
-          fontSize: isAux ? 15 : 16,
+          border: '1px solid transparent',
+          background: active ? rgbaOf(ACCENT_HEX, 0.22) : 'transparent',
+          color: active ? '#ffffff' : SB_TEXT,
+          fontWeight: active ? 700 : 500,
+          fontSize: 14.5,
           cursor: 'pointer',
           textAlign: 'left',
-          transition: 'background 0.3s ease, border-color 0.3s ease, color 0.3s ease',
+          transition: 'background 150ms ease, color 150ms ease',
           fontFamily: SB_FONT_UI,
         }}
         onMouseEnter={e => {
           if (!active) {
-            e.currentTarget.style.background = isNight ? 'rgba(255,255,255,0.06)' : 'rgba(10,126,168,0.07)';
+            e.currentTarget.style.background = 'rgba(255,255,255,0.07)';
           }
         }}
         onMouseLeave={e => {
@@ -219,29 +190,28 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
           }
         }}
       >
+        {/* Thin left accent indicator — replaces a solid bright fill for the active row */}
+        {active && !collapsed && (
+          <span aria-hidden="true" style={{ position: 'absolute', left: 0, top: 6, bottom: 6, width: 3, borderRadius: '0 3px 3px 0', background: clay.accent }} />
+        )}
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: collapsed ? 0 : 12,
+          gap: collapsed ? 0 : 11,
           minWidth: 0,
           justifyContent: collapsed ? 'center' : 'flex-start',
           width: collapsed ? '100%' : 'auto',
         }}>
-          {/* Icon container — Maritime 3D tile: module hue, white glyph (active: white tile, hue glyph) */}
+          {/* Icon container — flat tile, single accent, no per-module colour */}
           <div style={{
             position: 'relative',
-            width: isAux ? 38 : 42, height: isAux ? 38 : 42, borderRadius: isAux ? 13 : 14, flexShrink: 0,
+            width: 32, height: 32, borderRadius: 8, flexShrink: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: active
-              ? 'linear-gradient(160deg, rgba(255,255,255,0.95), rgba(255,255,255,0.72))'
-              : `linear-gradient(150deg, ${lighten(accent, 0.28)}, ${accent})`,
-            color: active ? ACTIVE_BLUE : '#ffffff',
-            transition: 'all 0.3s ease',
-            boxShadow: active
-              ? '0 4px 10px rgba(0,0,0,0.18), inset 0 -2px 0 rgba(0,0,0,0.08)'
-              : `0 6px 14px ${rgbaOf(accent, 0.38)}, inset 0 2px 0 rgba(255,255,255,0.45), inset 0 -3px 0 rgba(0,0,0,0.2)`,
+            background: active ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.07)',
+            color: '#ffffff',
+            transition: 'background 150ms ease',
           }}>
-            <Icon iconName={iconName} style={{ fontSize: isAux ? 18 : 20 }} />
+            <Icon iconName={iconName} style={{ fontSize: 17 }} />
 
             {/* Badge anchored to icon container when collapsed */}
             {badgeCount !== undefined && collapsed && (
@@ -260,8 +230,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                boxShadow: '0 2px 6px rgba(0,0,0,0.6)',
-                border: `2px solid ${NAV_SIDEBAR_BG[view] || '#1A0A2E'}`,
+                border: `2px solid ${clay.accentDeep}`,
                 boxSizing: 'border-box',
                 lineHeight: 1,
                 zIndex: 2,
@@ -277,9 +246,8 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
             overflow: 'hidden',
             whiteSpace: 'nowrap',
             display: collapsed ? 'none' : 'inline-block',
-            transition: 'max-width 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s ease',
+            transition: 'max-width 0.2s ease, opacity 0.15s ease',
             letterSpacing: '0.1px',
-            textShadow: 'none',
           }}>
             {label}
           </span>
@@ -295,7 +263,6 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
             fontSize: 11,
             fontWeight: 700,
             flexShrink: 0,
-            boxShadow: '0 2px 6px rgba(239, 68, 68, 0.4)',
           }}>
             {badgeCount > 99 ? '99+' : badgeCount}
           </span>
@@ -322,7 +289,10 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
         minWidth: sidebarWidth,
         maxWidth: sidebarWidth,
         height: '100vh',
-        background: isNight ? '#2b211b' : (NAV_SIDEBAR_BG[view] || clay.surface),
+        maxHeight: '100dvh',
+        background: clay.accentDeep,
+        borderRight: '1px solid rgba(255,255,255,0.08)',
+        boxShadow: tabletOrBelow ? '10px 0 28px rgba(2,10,24,0.14)' : 'none',
         display: 'flex',
         flexDirection: 'column',
         padding: '0',
@@ -330,7 +300,6 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
         userSelect: 'none',
         overflow: 'hidden',
         flexShrink: 0,
-        boxShadow: `6px 0 24px rgba(120,190,185,0.28), inset -2px 0 0 rgba(34,134,127,0.35)`,
         position: tabletOrBelow ? 'fixed' : 'relative',
         top: 0,
         left: tabletOrBelow ? 0 : undefined,
@@ -344,44 +313,34 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
         {/* Brand Header */}
         <div style={{
           position: 'relative', zIndex: 1,
-          padding: collapsed ? '16px 0' : '18px 16px',
-          borderBottom: `2px solid ${clay.accentSoft}`,
-          background: isNight ? '#2b211b' : clay.surfaceRaised,
-          boxShadow: 'none',
+          padding: collapsed ? '18px 0' : '20px 18px',
+          borderBottom: `1px solid ${SB_DIVIDER}`,
           display: 'flex', alignItems: 'center',
-          gap: collapsed ? 0 : 12,
+          gap: collapsed ? 0 : 10,
           justifyContent: collapsed ? 'center' : 'space-between',
           flexShrink: 0,
           boxSizing: 'border-box',
           width: '100%',
+          minHeight: 72,
         }}>
           {!collapsed && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
-              {/* Rotating 3D logo cube (zip prototype): Nissenkaiun · Singapore · Nissenkaiun · Singapore */}
-              <div aria-label="Vessel DMS — Nissenkaiun Singapore" role="img" style={{ width: 52, height: 52, flexShrink: 0, perspective: 320 }}>
-                <div style={{ position: 'relative', width: 52, height: 52, transformStyle: 'preserve-3d', animation: 'vdms-cube-spin 12s linear infinite' }}>
-                  {([['rotateY(0deg)', ['NISSEN', 'KAIUN']], ['rotateY(90deg)', ['SINGA', 'PORE']], ['rotateY(180deg)', ['NISSEN', 'KAIUN']], ['rotateY(270deg)', ['SINGA', 'PORE']]] as Array<[string, string[]]>).map(([tf, lines], i) => (
-                    <div key={i} style={{
-                      position: 'absolute', inset: 0, borderRadius: 12, boxSizing: 'border-box',
-                      transform: `${tf} translateZ(26px)`, backfaceVisibility: 'hidden',
-                      background: i % 2 ? `linear-gradient(135deg, #0369a1, ${ACTIVE_BLUE})` : `linear-gradient(135deg, ${ACTIVE_BLUE}, #0369a1)`,
-                      border: '1px solid rgba(255,255,255,0.3)',
-                      boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.5), inset 0 -3px 0 rgba(0,0,0,0.18)',
-                      color: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-                      fontFamily: SB_FONT_DISPLAY, fontWeight: 800, letterSpacing: lines.length > 1 ? '0.02em' : '-0.04em',
-                      fontSize: lines.length > 1 ? 10 : 20, lineHeight: 1.15,
-                    }}>
-                      {lines.map(l => <span key={l}>{l}</span>)}
-                    </div>
-                  ))}
-                </div>
+              {/* Static brand mark — Vessel DMS */}
+              <div
+                aria-label="Vessel DMS"
+                role="img"
+                style={{
+                  width: 38, height: 38, borderRadius: 9, flexShrink: 0,
+                  background: rgbaOf(ACCENT_HEX, 0.28),
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: '#ffffff',
+                }}
+              >
+                <Icon iconName="Ferry" style={{ fontSize: 18 }} />
               </div>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontFamily: SB_FONT_DISPLAY, fontWeight: 800, fontSize: 15, color: isNight ? '#eaf6fd' : '#08243a', lineHeight: 1.15, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', letterSpacing: '-0.025em' }}>
-                  Vessel Documents
-                </div>
-                <div style={{ fontFamily: SB_FONT_MONO, fontSize: 12, color: ACTIVE_BLUE, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', whiteSpace: 'nowrap', marginTop: 4 }}>
-                  Management System
+              <div style={{ minWidth: 0, display: 'flex', alignItems: 'center' }}>
+                <div style={{ fontFamily: SB_FONT_DISPLAY, fontWeight: 700, fontSize: 18, color: SB_TEXT, lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', letterSpacing: '-0.015em' }}>
+                  Vessel DMS
                 </div>
               </div>
             </div>
@@ -395,7 +354,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
           style={{
             position: 'relative', zIndex: 1,
             flex: 1, overflowY: 'auto', overflowX: 'hidden',
-            padding: collapsed ? '12px 6px' : '12px 10px',
+            padding: collapsed ? '16px 8px' : '18px 14px',
             boxSizing: 'border-box',
             scrollbarWidth: 'none',
             msOverflowStyle: 'none',
@@ -403,15 +362,14 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
         >
           {/* Nav section label */}
           {!collapsed && (
-            <div style={{ fontFamily: SB_FONT_MONO, fontSize: 11, fontWeight: 700, color: isNight ? '#8aa7ba' : '#52708a', textTransform: 'uppercase', letterSpacing: '0.22em', padding: '4px 14px 8px', marginBottom: 2 }}>
-              Main Menu
+            <div style={{ fontFamily: SB_FONT_MONO, fontSize: 10, fontWeight: 700, color: 'rgba(243,247,251,0.38)', textTransform: 'uppercase', letterSpacing: '0.12em', padding: '2px 4px 9px', marginBottom: 1 }}>
+              Main
             </div>
           )}
           {navItems.map(item => {
             if (item.id === 'vessels') {
               const isVesselsExpanded = !collapsed && host.state.vesselsNavExpanded;
               const isVesselsActive = view === 'vessels' || !!host.state.vesselSuggestionDialog?.open;
-              const vesselsAccent = NAV_ACCENTS['vessels'] || '#F5C400';
 
               return (
                 <div key="vessels-group" style={{ marginBottom: 6 }}>
@@ -434,24 +392,23 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                       alignItems: 'center',
                       justifyContent: collapsed ? 'center' : 'space-between',
                       width: '100%',
-                      minHeight: 56,
-                      padding: collapsed ? '6px 0' : '6px 12px',
-                      borderRadius: 18,
+                      minHeight: 50,
+                      padding: collapsed ? '6px 0' : '5px 12px 5px 16px',
+                      borderRadius: 8,
                       boxSizing: 'border-box',
-                      border: isVesselsActive ? '1px solid rgba(255,255,255,0.35)' : '1px solid transparent',
-                      background: isVesselsActive ? `linear-gradient(135deg, ${lighten(ACTIVE_BLUE, 0.12)}, ${ACTIVE_BLUE})` : 'transparent',
-                      boxShadow: isVesselsActive ? `0 12px 26px ${rgbaOf(ACTIVE_BLUE, 0.42)}, inset 0 1px 0 rgba(255,255,255,0.4), inset 0 -4px 0 rgba(0,0,0,0.16)` : 'none',
-                      color: isVesselsActive ? '#ffffff' : (isNight ? '#eaf6fd' : '#08243a'),
-                      fontWeight: isVesselsActive ? 800 : 600,
-                      fontSize: 16,
+                      border: '1px solid transparent',
+                      background: isVesselsActive ? rgbaOf(ACCENT_HEX, 0.22) : 'transparent',
+                      color: isVesselsActive ? '#ffffff' : SB_TEXT,
+                      fontWeight: isVesselsActive ? 700 : 500,
+                      fontSize: 14.5,
                       cursor: 'pointer',
                       textAlign: 'left',
-                      transition: 'background 0.3s ease, border-color 0.3s ease, color 0.3s ease',
+                      transition: 'background 150ms ease, color 150ms ease',
                       fontFamily: SB_FONT_UI,
                     }}
                     onMouseEnter={e => {
                       if (!isVesselsActive) {
-                        e.currentTarget.style.background = isNight ? 'rgba(255,255,255,0.06)' : 'rgba(10,126,168,0.07)';
+                        e.currentTarget.style.background = 'rgba(255,255,255,0.07)';
                       }
                     }}
                     onMouseLeave={e => {
@@ -460,28 +417,26 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                       }
                     }}
                   >
+                    {isVesselsActive && !collapsed && (
+                      <span aria-hidden="true" style={{ position: 'absolute', left: 0, top: 6, bottom: 6, width: 3, borderRadius: '0 3px 3px 0', background: clay.accent }} />
+                    )}
                     <div style={{
                       display: 'flex',
                       alignItems: 'center',
-                      gap: collapsed ? 0 : 12,
+                      gap: collapsed ? 0 : 11,
                       minWidth: 0,
                       justifyContent: collapsed ? 'center' : 'flex-start',
                       width: collapsed ? '100%' : 'auto',
                     }}>
-                      {/* Icon container — Maritime 3D tile */}
+                      {/* Icon container — flat tile, matches the rest of the nav */}
                       <div style={{
-                        width: 42, height: 42, borderRadius: 14, flexShrink: 0,
+                        width: 32, height: 32, borderRadius: 8, flexShrink: 0,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        background: isVesselsActive
-                          ? 'linear-gradient(160deg, rgba(255,255,255,0.95), rgba(255,255,255,0.72))'
-                          : `linear-gradient(150deg, ${lighten(vesselsAccent, 0.28)}, ${vesselsAccent})`,
-                        color: isVesselsActive ? ACTIVE_BLUE : '#ffffff',
-                        transition: 'all 0.3s ease',
-                        boxShadow: isVesselsActive
-                          ? '0 4px 10px rgba(0,0,0,0.18), inset 0 -2px 0 rgba(0,0,0,0.08)'
-                          : `0 6px 14px ${rgbaOf(vesselsAccent, 0.38)}, inset 0 2px 0 rgba(255,255,255,0.45), inset 0 -3px 0 rgba(0,0,0,0.2)`,
+                        background: isVesselsActive ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.07)',
+                        color: '#ffffff',
+                        transition: 'background 150ms ease',
                       }}>
-                        <Icon iconName="Ferry" style={{ fontSize: 20 }} />
+                        <Icon iconName="Ferry" style={{ fontSize: 17 }} />
                       </div>
 
                       <span style={{
@@ -490,9 +445,8 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                         overflow: 'hidden',
                         whiteSpace: 'nowrap',
                         display: collapsed ? 'none' : 'inline-block',
-                        transition: 'max-width 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s ease',
+                        transition: 'max-width 0.2s ease, opacity 0.15s ease',
                         letterSpacing: '0.1px',
-                        textShadow: 'none',
                       }}>
                         Vessels
                       </span>
@@ -501,7 +455,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                     {!collapsed && (
                       <div style={{
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        color: isVesselsActive ? '#ffffff' : (isNight ? '#b2cadb' : '#34536a'),
+                        color: isVesselsActive ? '#ffffff' : SB_TEXT_MUTED,
                         transform: isVesselsExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
                         transition: 'transform 0.2s ease',
                         fontSize: 12,
@@ -512,12 +466,19 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                     )}
                   </button>
 
-                  {/* Submenu Drilldown: Vessels Management */}
-                  {!collapsed && isVesselsExpanded && (
+                  {/* Submenu Drilldown: Vessels Management — always mounted while the
+                      sidebar is expanded, animated via max-height/opacity so it slides
+                      shut smoothly instead of popping in/out. */}
+                  {!collapsed && (
                     <div style={{
-                      display: 'flex', flexDirection: 'column', gap: 4,
-                      marginTop: 6, marginLeft: 32, paddingLeft: 12,
-                      borderLeft: `2px dashed ${isNight ? 'rgba(140,210,240,0.28)' : 'rgba(16,84,138,0.26)'}`,
+                      display: 'flex', flexDirection: 'column', gap: 2,
+                      marginLeft: 30, paddingLeft: 12,
+                      borderLeft: `1px solid ${SB_DIVIDER}`,
+                      maxHeight: isVesselsExpanded ? 44 : 0,
+                      opacity: isVesselsExpanded ? 1 : 0,
+                      marginTop: isVesselsExpanded ? 4 : 0,
+                      overflow: 'hidden',
+                      transition: 'max-height 200ms ease, opacity 150ms ease, margin-top 200ms ease',
                     }}>
                       {/* 1. Vessels Management */}
                       <button
@@ -528,25 +489,21 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                           host._goToView('vessels');
                         }}
                         style={{
-                          display: 'flex', alignItems: 'center', gap: 10,
-                          padding: '10px 12px', borderRadius: 12,
-                          background: isNight ? 'rgba(255,255,255,0.08)' : 'linear-gradient(180deg, #ffffff, #eef7fe)',
-                          border: `1px solid ${isNight ? 'rgba(140,210,240,0.22)' : 'rgba(255,255,255,0.95)'}`,
-                          boxShadow: isNight ? 'none' : '0 3px 8px rgba(10,60,110,0.1), inset 0 1px 0 rgba(255,255,255,0.7)',
-                          color: isNight ? '#eaf6fd' : '#08243a',
-                          fontWeight: 700,
-                          fontSize: 15, cursor: 'pointer', textAlign: 'left',
-                          transition: 'all 0.2s ease',
+                          position: 'relative',
+                          display: 'flex', alignItems: 'center', gap: 9,
+                          padding: '8px 10px', borderRadius: 7,
+                          background: view === 'vessels' ? rgbaOf(ACCENT_HEX, 0.18) : 'transparent',
+                          border: 'none',
+                          color: view === 'vessels' ? '#ffffff' : SB_TEXT_MUTED,
+                          fontWeight: view === 'vessels' ? 700 : 600,
+                          fontSize: 13, cursor: 'pointer', textAlign: 'left',
+                          transition: 'background 150ms ease, color 150ms ease',
                           fontFamily: SB_FONT_UI,
                         }}
-                        onMouseEnter={e => {
-                          e.currentTarget.style.transform = 'translateX(3px)';
-                        }}
-                        onMouseLeave={e => {
-                          e.currentTarget.style.transform = 'translateX(0)';
-                        }}
+                        onMouseEnter={e => { if (view !== 'vessels') e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
+                        onMouseLeave={e => { if (view !== 'vessels') e.currentTarget.style.background = 'transparent'; }}
                       >
-                        <span style={{ fontSize: 15 }}>📋</span>
+                        <Icon iconName="BulletedList" style={{ fontSize: 13 }} />
                         <span>Vessels Management</span>
                       </button>
 
@@ -561,11 +518,11 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
 
           {/* Aux section */}
           <div style={{
-            marginTop: 14, paddingTop: 12,
-            borderTop: `1px solid ${clay.accentSoft}`,
+            marginTop: 12, paddingTop: 12,
+            borderTop: `1px solid ${SB_DIVIDER}`,
           }}>
             {!collapsed && (
-              <div style={{ fontFamily: SB_FONT_MONO, fontSize: 11, fontWeight: 700, color: isNight ? '#8aa7ba' : '#52708a', textTransform: 'uppercase', letterSpacing: '0.22em', padding: '4px 14px 8px' }}>
+              <div style={{ fontFamily: SB_FONT_MONO, fontSize: 10, fontWeight: 700, color: 'rgba(243,247,251,0.38)', textTransform: 'uppercase', letterSpacing: '0.12em', padding: '2px 4px 9px' }}>
                 Tools
               </div>
             )}
@@ -575,97 +532,27 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
           </div>
         </div>
 
-        {/* Theme switch — knob LEFT = night (dark), knob RIGHT = light */}
-        {(() => {
-          const isLight = host.state.themeMode !== 'night';
-          const label = isLight ? 'Light mode' : 'Night mode';
-          const onKey = (e: React.KeyboardEvent<HTMLButtonElement>): void => {
-            // Arrow keys follow the switch direction: left = night, right = light.
-            if (e.key === 'ArrowLeft' && isLight) { e.preventDefault(); host._toggleThemeMode(); }
-            if (e.key === 'ArrowRight' && !isLight) { e.preventDefault(); host._toggleThemeMode(); }
-          };
-          const keyBg = isNight ? 'rgba(255,255,255,0.08)' : 'linear-gradient(180deg, #ffffff, #eef7fe)';
-          const keyEdge = isNight ? 'rgba(140,210,240,0.22)' : 'rgba(255,255,255,0.95)';
-          return (
-            <button
-              type="button"
-              role="switch"
-              aria-checked={isLight}
-              aria-label={`Theme: ${label}. Left for night mode, right for light mode.`}
-              title={isLight ? 'Switch to night mode' : 'Switch to light mode'}
-              onClick={host._toggleThemeMode}
-              onKeyDown={onKey}
-              style={collapsed ? {
-                position: 'relative', zIndex: 1,
-                width: 44, height: 44, margin: '10px auto', flexShrink: 0,
-                borderRadius: 14, border: `1px solid ${keyEdge}`, background: keyBg, color: clay.accent,
-                display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-                boxShadow: '0 4px 10px rgba(10,60,110,0.14), inset 0 1px 0 rgba(255,255,255,0.8)',
-              } : {
-                position: 'relative', zIndex: 1,
-                margin: '10px 12px', padding: 5, flexShrink: 0,
-                display: 'grid', gridTemplateColumns: '1fr 1fr',
-                borderRadius: 16, border: `1px solid ${keyEdge}`,
-                background: isNight ? 'rgba(0,0,0,0.25)' : 'rgba(10,90,150,0.07)',
-                boxShadow: 'inset 0 2px 5px rgba(10,60,110,0.16)',
-                cursor: 'pointer', fontFamily: SB_FONT_UI, fontSize: 14, fontWeight: 700,
-              }}
-            >
-              {collapsed ? (
-                <Icon iconName={isLight ? 'Sunny' : 'ClearNight'} style={{ fontSize: 16 }} />
-              ) : (
-                <>
-                  <span
-                    aria-hidden="true"
-                    style={{
-                      position: 'absolute', top: 5, bottom: 5, left: 5, width: 'calc(50% - 5px)',
-                      borderRadius: 12,
-                      background: `linear-gradient(135deg, ${ACTIVE_BLUE}, #0369a1)`,
-                      boxShadow: `0 6px 16px ${rgbaOf(ACTIVE_BLUE, 0.4)}, inset 0 1px 0 rgba(255,255,255,0.4), inset 0 -3px 0 rgba(0,0,0,0.15)`,
-                      transform: isLight ? 'translateX(100%)' : 'translateX(0)',
-                      transition: 'transform 0.45s cubic-bezier(.3,1.35,.5,1)',
-                    }}
-                  />
-                  <span style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 0', color: isLight ? (isNight ? '#b2cadb' : '#34536a') : '#ffffff', transition: 'color 0.3s ease' }}>
-                    <Icon iconName="ClearNight" style={{ fontSize: 14 }} />Night
-                  </span>
-                  <span style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 0', color: isLight ? '#ffffff' : '#b2cadb', transition: 'color 0.3s ease' }}>
-                    <Icon iconName="Sunny" style={{ fontSize: 14 }} />Light
-                  </span>
-                </>
-              )}
-            </button>
-          );
-        })()}
-
         {collapsed && !tabletOrBelow && (
           <div
             title="Vessel DMS v2.0"
             style={{
               position: 'relative', zIndex: 1,
-              padding: '16px 0', borderTop: `2px solid ${clay.accentSoft}`,
-              background: isNight ? '#2b211b' : clay.surfaceRaised,
+              padding: '11px 0', borderTop: `1px solid ${SB_DIVIDER}`,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               flexShrink: 0,
             }}
           >
-            <span style={{
-              width: 10, height: 10, borderRadius: '50%',
-              background: clay.accent,
-              display: 'inline-block',
-              boxShadow: `0 0 10px ${clay.accent}, 0 0 20px ${clay.accent}88`,
-            }} />
+            <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#2dd4bf', display: 'inline-block' }} />
           </div>
         )}
         {!collapsed && !tabletOrBelow && (
           <div style={{
             position: 'relative', zIndex: 1,
-            padding: '14px 18px', borderTop: `2px solid ${clay.accentSoft}`,
-            background: isNight ? '#2b211b' : clay.surfaceRaised,
-            fontFamily: SB_FONT_MONO, fontSize: 12, color: isNight ? '#8aa7ba' : '#52708a', flexShrink: 0, fontWeight: 600,
-            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '9px 16px', borderTop: `1px solid ${SB_DIVIDER}`,
+            fontFamily: SB_FONT_MONO, fontSize: 10.5, color: 'rgba(243,247,251,0.45)', flexShrink: 0, fontWeight: 600,
+            display: 'flex', alignItems: 'center', gap: 7,
           }}>
-            <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#12a05c', display: 'inline-block', boxShadow: '0 0 10px rgba(18,160,92,0.7)' }} />
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#2dd4bf', display: 'inline-block', flexShrink: 0 }} />
             Vessel DMS v2.0
           </div>
         )}

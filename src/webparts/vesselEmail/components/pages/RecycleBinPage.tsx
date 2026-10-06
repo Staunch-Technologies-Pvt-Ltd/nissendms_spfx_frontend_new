@@ -2,6 +2,12 @@ import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import type { DeletedNode } from '../types/ui';
 import { isMobileWidth } from '../responsive';
+import { Icon } from '@fluentui/react/lib/Icon';
+import { clay } from '../clayTheme';
+import {
+  DmsPageHeader, dmsBtn, dmsRowBtn, dmsControlStyle, DMS_ON_ACCENT,
+  DMS_TABLE_CARD, DMS_TABLE, DMS_TH, DMS_TR, DMS_TD,
+} from '../dmsDesignSystem';
 
 type LocationDetails = {
   folderPath: string;
@@ -304,28 +310,28 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
           aria-labelledby="restore-modal-title"
           onClick={event => event.stopPropagation()}
           style={{
-            width: 520, maxWidth: '100%', background: '#fff',
-            borderRadius: 16, boxShadow: '0 25px 60px rgba(15, 23, 42, 0.35)',
-            overflow: 'hidden', border: '1px solid #d1fae5', maxHeight: '90vh',
+            width: 520, maxWidth: '100%', background: 'var(--vdms-surface)',
+            borderRadius: 16, boxShadow: clay.shadowRaised,
+            overflow: 'hidden', border: '1px solid var(--vdms-line)', maxHeight: '90vh',
           }}
         >
           {/* Header */}
           <div style={{
             padding: '20px 24px 16px',
-            background: completed ? '#ecfdf5' : restoreBusy ? '#f0fdf4' : '#f8fafc',
-            borderBottom: '1px solid #e2e8f0',
+            background: completed ? (failedCount ? clay.pillWarnBg : clay.pillActiveBg) : restoreBusy ? clay.accentSoft : 'var(--vdms-surface-alt)',
+            borderBottom: '1px solid var(--vdms-line)',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 24 }}>{completed ? (failedCount ? '⚠️' : '🎉') : restoreBusy ? '⏳' : '♻️'}</span>
+              <span style={{ fontSize: 24 }}>{completed ? (failedCount ? <Icon iconName="Warning" aria-hidden="true" /> : <Icon iconName="Completed" aria-hidden="true" />) : restoreBusy ? <Icon iconName="Sync" aria-hidden="true" /> : <Icon iconName="RecycleBin" aria-hidden="true" />}</span>
               <div>
-                <div style={{ fontSize: 18, fontWeight: 700, color: completed ? (failedCount ? '#b45309' : '#059669') : '#0f172a' }} id="restore-modal-title">
+                <div style={{ fontSize: 18, fontWeight: 700, color: completed ? (failedCount ? clay.pillWarnText : clay.pillActiveText) : 'var(--vdms-text)' }} id="restore-modal-title">
                   {completed
                     ? (failedCount ? 'Restored with Some Warnings' : 'Restored Successfully!')
                     : restoreBusy
                     ? `Restoring ${itemCount} Item${itemCount === 1 ? '' : 's'}…`
                     : `Restore ${itemCount} Item${itemCount === 1 ? '' : 's'} to SharePoint?`}
                 </div>
-                <p style={{ margin: '4px 0 0', color: '#475569', fontSize: 13, lineHeight: 1.4 }}>
+                <p style={{ margin: '4px 0 0', color: 'var(--vdms-text-muted)', fontSize: 13, lineHeight: 1.4 }}>
                   {completed
                     ? `${successCount} item${successCount === 1 ? '' : 's'} moved from SharePoint Recycle Bin back to original folder path.`
                     : restoreBusy
@@ -338,24 +344,24 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
 
           {/* Body / Item List */}
           {restoreProgress.length ? (
-            <div style={{ margin: '16px 24px', maxHeight: 210, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 10 }}>
+            <div style={{ margin: '16px 24px', maxHeight: 210, overflowY: 'auto', border: '1px solid var(--vdms-line)', borderRadius: 10 }}>
               {restoreProgress.map(p => (
-                <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid #f1f5f9', fontSize: 13 }}>
+                <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid var(--vdms-border-soft)', fontSize: 13 }}>
                   <span style={{
                     width: 22, height: 22, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    background: p.status === 'success' ? '#dcfce7' : p.status === 'failed' ? '#fee2e2' : p.status === 'restoring' ? '#e0f2fe' : '#f1f5f9',
-                    color: p.status === 'success' ? '#15803d' : p.status === 'failed' ? '#dc2626' : p.status === 'restoring' ? '#0284c7' : '#94a3b8',
+                    background: p.status === 'success' ? clay.pillActiveBg : p.status === 'failed' ? clay.pillDangerBg : p.status === 'restoring' ? clay.accentSoft : 'var(--vdms-surface-alt)',
+                    color: p.status === 'success' ? clay.pillActiveText : p.status === 'failed' ? clay.pillDangerText : p.status === 'restoring' ? clay.accent : 'var(--vdms-text-faint)',
                     fontWeight: 700, fontSize: 12,
                   }}>
-                    {p.status === 'success' ? '✓' : p.status === 'failed' ? '✗' : p.status === 'restoring' ? '⏳' : '○'}
+                    {p.status === 'success' ? <Icon iconName="CheckMark" aria-hidden="true" /> : p.status === 'failed' ? <Icon iconName="ErrorBadge" aria-hidden="true" /> : p.status === 'restoring' ? <Icon iconName="Sync" aria-hidden="true" /> : <Icon iconName="CircleRing" aria-hidden="true" />}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ color: '#1e293b', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
-                    {p.message && <div style={{ fontSize: 11, color: p.status === 'success' ? '#059669' : '#b91c1c' }}>{p.message}</div>}
+                    <div style={{ color: 'var(--vdms-text)', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
+                    {p.message && <div style={{ fontSize: 11, color: p.status === 'success' ? clay.pillActiveText : clay.pillDangerText }}>{p.message}</div>}
                   </div>
                   <span style={{
                     fontSize: 12, fontWeight: 600,
-                    color: p.status === 'success' ? '#15803d' : p.status === 'failed' ? '#dc2626' : p.status === 'restoring' ? '#0284c7' : '#94a3b8',
+                    color: p.status === 'success' ? clay.pillActiveText : p.status === 'failed' ? clay.pillDangerText : p.status === 'restoring' ? clay.accent : 'var(--vdms-text-faint)',
                   }}>
                     {p.status === 'success' ? 'Restored' : p.status === 'failed' ? 'Failed' : p.status === 'restoring' ? 'Restoring…' : 'Waiting'}
                   </span>
@@ -367,15 +373,15 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
               {restoreItems.map(item => {
                 const location = getLocationDetails(item);
                 return (
-                  <div key={item.id} style={{ padding: '10px 14px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, marginBottom: 8, fontSize: 12 }}>
+                  <div key={item.id} style={{ padding: '10px 14px', background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-line)', borderRadius: 10, marginBottom: 8, fontSize: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <strong style={{ fontSize: 13, color: '#0f172a' }}>{item.name}</strong>
-                      <span style={{ background: '#dbeafe', color: '#1d4ed8', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700, textTransform: 'capitalize' }}>
+                      <strong style={{ fontSize: 13, color: 'var(--vdms-text)' }}>{item.name}</strong>
+                      <span style={{ background: clay.accentSoft, color: clay.accentDark, borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700, textTransform: 'capitalize' }}>
                         {item.kind || item.item_type}
                       </span>
                     </div>
-                    <div style={{ color: '#64748b' }}>
-                      <strong>Original Location:</strong> <span style={{ color: '#0369a1' }}>{location.folderPath}</span>
+                    <div style={{ color: 'var(--vdms-text-muted)' }}>
+                      <strong>Original Location:</strong> <span style={{ color: clay.accent }}>{location.folderPath}</span>
                     </div>
                   </div>
                 );
@@ -384,16 +390,11 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
           )}
 
           {/* Footer Buttons */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '12px 24px 20px', background: '#fff' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '12px 24px 20px', background: 'var(--vdms-surface)' }}>
             {completed ? (
               <button
                 onClick={cancelRestore}
-                style={{
-                  background: 'linear-gradient(135deg,#10b981,#059669)',
-                  color: '#fff', border: 'none', borderRadius: 8, padding: '9px 20px',
-                  fontSize: 13, fontWeight: 700, cursor: 'pointer',
-                  boxShadow: '0 3px 8px rgba(16,185,129,0.3)',
-                }}
+                style={dmsBtn('primary', true)}
               >
                 Close now{restoreAutoCloseSeconds !== null ? ` (${restoreAutoCloseSeconds}s)` : ''}
               </button>
@@ -402,22 +403,16 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
                 <button
                   onClick={cancelRestore}
                   disabled={restoreBusy}
-                  style={buttonStyle('#fff', '#475569', '#cbd5e1')}
+                  style={dmsBtn('secondary', !restoreBusy)}
                 >
                   Cancel
                 </button>
                 <button
                   onClick={confirmRestore}
                   disabled={restoreBusy}
-                  style={{
-                    background: 'linear-gradient(135deg,#10b981,#059669)',
-                    color: '#fff', border: 'none', borderRadius: 8, padding: '8px 20px',
-                    fontSize: 13, fontWeight: 700, cursor: restoreBusy ? 'not-allowed' : 'pointer',
-                    boxShadow: '0 3px 8px rgba(16,185,129,0.3)',
-                    opacity: restoreBusy ? 0.65 : 1,
-                  }}
+                  style={dmsBtn('primary', !restoreBusy)}
                 >
-                  {restoreBusy ? 'Restoring…' : `♻️ Restore ${itemCount === 1 ? 'Item' : `${itemCount} Items`}`}
+                  {restoreBusy ? 'Restoring…' : <><Icon iconName="RecycleBin" aria-hidden="true" style={{ fontSize: 13 }} /> {`Restore ${itemCount === 1 ? 'Item' : `${itemCount} Items`}`}</>}
                 </button>
               </>
             )}
@@ -442,26 +437,26 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
         onClick={cancelPermanentDelete}
         style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(15, 23, 42, 0.52)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
       >
-        <div role="dialog" aria-modal="true" aria-labelledby="permanent-delete-title" onClick={event => event.stopPropagation()} style={{ width: 500, maxWidth: '100%', maxHeight: '90vh', background: '#fff', borderRadius: 12, boxShadow: '0 20px 50px rgba(15, 23, 42, 0.3)', overflow: 'hidden' }}>
-          <div style={{ padding: '20px 22px 14px', borderBottom: '1px solid #fee2e2' }}>
-            <div style={{ fontSize: 17, fontWeight: 700, color: completed ? '#107c10' : '#991b1b' }} id="permanent-delete-title">
+        <div role="dialog" aria-modal="true" aria-labelledby="permanent-delete-title" onClick={event => event.stopPropagation()} style={{ width: 500, maxWidth: '100%', maxHeight: '90vh', background: 'var(--vdms-surface)', borderRadius: 12, boxShadow: clay.shadowRaised, overflow: 'hidden', border: '1px solid var(--vdms-line)' }}>
+          <div style={{ padding: '20px 22px 14px', borderBottom: `1px solid ${clay.pillDangerBg}` }}>
+            <div style={{ fontSize: 17, fontWeight: 700, color: completed ? clay.pillActiveText : clay.pillDangerText }} id="permanent-delete-title">
               {completed ? 'Permanent deletion completed' : permanentDeleteBusy ? 'Permanently deleting items' : `Permanently delete ${itemCount} item${itemCount === 1 ? '' : 's'}?`}
             </div>
-            <p style={{ margin: '10px 0 0', color: '#475569', fontSize: 13, lineHeight: 1.5 }}>
+            <p style={{ margin: '10px 0 0', color: 'var(--vdms-text-muted)', fontSize: 13, lineHeight: 1.5 }}>
               {completed ? `${successCount} item${successCount === 1 ? '' : 's'} permanently deleted${failedCount ? `; ${failedCount} could not be deleted.` : '.'}` : permanentDeleteBusy ? `Deleting one item at a time. Elapsed time: ${deleteElapsedSeconds}s.` : `This action cannot be undone. The selected item${itemCount === 1 ? '' : 's'} will be permanently removed from the Recycle Bin.`}
             </p>
           </div>
           {permanentDeleteProgress.length ? (
-            <div style={{ margin: '14px 22px', maxHeight: 190, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 7 }}>
-              {permanentDeleteProgress.map(progress => <div key={progress.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '9px 10px', borderBottom: '1px solid #f1f5f9', fontSize: 12 }}>
-                <span style={{ width: 18, textAlign: 'center' }}>{progress.status === 'success' ? '✓' : progress.status === 'failed' ? '!' : progress.status === 'deleting' ? '…' : '○'}</span>
-                <span style={{ flex: 1, color: '#334155' }}>{progress.name}</span>
-                <span style={{ color: progress.status === 'success' ? '#107c10' : progress.status === 'failed' ? '#a4262c' : '#64748b' }}>{progress.status === 'success' ? 'Deleted' : progress.status === 'failed' ? progress.message || 'Failed' : progress.status === 'deleting' ? 'Deleting...' : 'Waiting'}</span>
+            <div style={{ margin: '14px 22px', maxHeight: 190, overflowY: 'auto', border: '1px solid var(--vdms-line)', borderRadius: 7 }}>
+              {permanentDeleteProgress.map(progress => <div key={progress.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '9px 10px', borderBottom: '1px solid var(--vdms-border-soft)', fontSize: 12 }}>
+                <span style={{ width: 18, textAlign: 'center' }}>{progress.status === 'success' ? <Icon iconName="CheckMark" aria-hidden="true" /> : progress.status === 'failed' ? '!' : progress.status === 'deleting' ? '…' : <Icon iconName="CircleRing" aria-hidden="true" />}</span>
+                <span style={{ flex: 1, color: 'var(--vdms-text)' }}>{progress.name}</span>
+                <span style={{ color: progress.status === 'success' ? clay.pillActiveText : progress.status === 'failed' ? clay.pillDangerText : 'var(--vdms-text-muted)' }}>{progress.status === 'success' ? 'Deleted' : progress.status === 'failed' ? progress.message || 'Failed' : progress.status === 'deleting' ? 'Deleting...' : 'Waiting'}</span>
               </div>)}
             </div>
-          ) : <div style={{ margin: '14px 22px', padding: '10px 12px', background: '#f8fafc', borderRadius: 7, color: '#475569', fontSize: 12 }}><strong style={{ color: '#334155' }}>{itemNames.join(', ')}</strong>{extraCount > 0 ? ` and ${extraCount} more` : ''}</div>}
+          ) : <div style={{ margin: '14px 22px', padding: '10px 12px', background: 'var(--vdms-surface-alt)', borderRadius: 7, color: 'var(--vdms-text-muted)', fontSize: 12 }}><strong style={{ color: 'var(--vdms-text)' }}>{itemNames.join(', ')}</strong>{extraCount > 0 ? ` and ${extraCount} more` : ''}</div>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '0 22px 20px' }}>
-            {completed ? <button onClick={cancelPermanentDelete} style={buttonStyle('#fff', '#475569', '#cbd5e1')}>Close now{autoCloseSeconds !== null ? ` (${autoCloseSeconds}s)` : ''}</button> : <><button onClick={cancelPermanentDelete} disabled={permanentDeleteBusy} style={buttonStyle('#fff', '#475569', '#cbd5e1')}>Cancel</button><button onClick={confirmPermanentDelete} disabled={permanentDeleteBusy} style={{ ...buttonStyle('#dc2626', '#fff', '#dc2626'), opacity: permanentDeleteBusy ? 0.65 : 1 }}>{permanentDeleteBusy ? 'Deleting...' : 'Delete permanently'}</button></>}
+            {completed ? <button onClick={cancelPermanentDelete} style={dmsBtn('secondary', true)}>Close now{autoCloseSeconds !== null ? ` (${autoCloseSeconds}s)` : ''}</button> : <><button onClick={cancelPermanentDelete} disabled={permanentDeleteBusy} style={dmsBtn('secondary', !permanentDeleteBusy)}>Cancel</button><button onClick={confirmPermanentDelete} disabled={permanentDeleteBusy} style={dmsBtn('danger', !permanentDeleteBusy)}>{permanentDeleteBusy ? 'Deleting...' : 'Delete permanently'}</button></>}
           </div>
         </div>
       </div>
@@ -470,8 +465,8 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
 
   const actionCell = (item: DeletedNode): React.ReactElement => (
     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-      <button onClick={() => openRestoreModal([item])} style={buttonStyle('#dff6dd', '#107c10', '#86efac')}>Restore</button>
-      <button onClick={() => openPermanentDeleteModal([item])} style={buttonStyle('#fde7e9', '#a4262c', '#fca5a5')}>Delete permanently</button>
+      <button onClick={() => openRestoreModal([item])} style={dmsRowBtn('success')}>Restore</button>
+      <button onClick={() => openPermanentDeleteModal([item])} style={dmsRowBtn('danger')}>Delete permanently</button>
     </div>
   );
 
@@ -498,7 +493,7 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
     return (
       <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: '#1e293b' }}>
+          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: 'var(--vdms-text)' }}>
             {title} ({filteredItems.length}{searchQuery.trim() && filteredItems.length !== items.length ? ` of ${items.length}` : ''})
           </h3>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -507,38 +502,32 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
               placeholder={`Search ${title.toLowerCase()}...`}
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              style={{
-                padding: '6px 12px', borderRadius: 8, border: '1px solid #cbd5e1',
-                fontSize: 12, width: 220, outline: 'none',
-              }}
+              style={{ ...dmsControlStyle(), width: 220 }}
             />
             <input
               type="text"
               placeholder="Filter by Deleted By..."
               value={deletedByFilter}
               onChange={e => setDeletedByFilter(e.target.value)}
-              style={{
-                padding: '6px 12px', borderRadius: 8, border: '1px solid #cbd5e1',
-                fontSize: 12, width: 180, outline: 'none',
-              }}
+              style={{ ...dmsControlStyle(), width: 180 }}
             />
           </div>
         </div>
 
-        <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, overflowX: 'auto', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
+        <div style={{ ...DMS_TABLE_CARD, overflowX: 'auto' }}>
           {isMobile ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 10 }}>
               {!filteredItems.length ? (
-                <div style={{ padding: 24, color: '#94a3b8', textAlign: 'center', fontSize: 13 }}>{empty}</div>
+                <div style={{ padding: 24, color: 'var(--vdms-text-faint)', textAlign: 'center', fontSize: 13 }}>{empty}</div>
               ) : filteredItems.map(item => {
                 const location = getLocationDetails(item);
                 return (
-                  <div key={item.id} style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, background: selectedIds.has(item.id) ? '#f0f9ff' : '#fff' }}>
+                  <div key={item.id} style={{ border: '1px solid var(--vdms-line)', borderRadius: 10, padding: 12, background: selectedIds.has(item.id) ? clay.accentSoft : 'var(--vdms-surface)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                      <div style={{ fontWeight: 700, color: '#0f172a', fontSize: 13 }}>{item.name}</div>
+                      <div style={{ fontWeight: 700, color: 'var(--vdms-text)', fontSize: 13 }}>{item.name}</div>
                       <input type="checkbox" checked={selectedIds.has(item.id)} onChange={() => toggleOne(item.id)} />
                     </div>
-                    <div style={{ marginTop: 8, fontSize: 12, color: '#475569', lineHeight: 1.5 }}>
+                    <div style={{ marginTop: 8, fontSize: 12, color: 'var(--vdms-text-muted)', lineHeight: 1.5 }}>
                       <div><strong>Path:</strong> {location.folderPath}</div>
                       <div><strong>Site:</strong> {item.site_name || item.site_key || '—'}</div>
                       <div><strong>Vessel:</strong> {location.vessel}</div>
@@ -548,40 +537,40 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
                       {item.reason && <div><strong>Reason:</strong> {item.reason}</div>}
                     </div>
                     <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                      <button onClick={() => openRestoreModal([item])} style={buttonStyle('#dff6dd', '#107c10', '#86efac')}>Restore</button>
-                      <button onClick={() => openPermanentDeleteModal([item])} style={buttonStyle('#fde7e9', '#a4262c', '#fca5a5')}>Delete</button>
+                      <button onClick={() => openRestoreModal([item])} style={dmsRowBtn('success')}>Restore</button>
+                      <button onClick={() => openPermanentDeleteModal([item])} style={dmsRowBtn('danger')}>Delete</button>
                     </div>
                   </div>
                 );
               })}
             </div>
           ) : (
-          <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead><tr style={{ background: '#f8fafc', color: '#64748b', fontSize: 11, textTransform: 'uppercase', textAlign: 'left', borderBottom: '1px solid #e2e8f0' }}>
-              <th style={{ padding: 12, width: 34, textAlign: 'center' }}>
+          <table style={{ ...DMS_TABLE, minWidth: 760 }}>
+            <thead><tr>
+              <th style={{ ...DMS_TH, width: 34, textAlign: 'center' }}>
                 <input type="checkbox" checked={sectionAllSelected} onChange={() => toggleAllInSection(filteredItems)} disabled={!filteredItems.length} />
               </th>
-              {columns.map(column => <th key={column} style={{ padding: 12 }}>{column}</th>)}
-              <th style={{ padding: 12 }}>Deleted By</th>
-              <th style={{ padding: 12 }}>Reason for deletion</th>
-              <th style={{ padding: 12, textAlign: 'right' }}>Actions</th>
+              {columns.map(column => <th key={column} style={DMS_TH}>{column}</th>)}
+              <th style={DMS_TH}>Deleted By</th>
+              <th style={DMS_TH}>Reason for deletion</th>
+              <th style={{ ...DMS_TH, textAlign: 'right' }}>Actions</th>
             </tr></thead>
             <tbody>
               {!filteredItems.length ? (
-                <tr><td colSpan={columns.length + 4} style={{ padding: 36, color: '#94a3b8', textAlign: 'center', fontSize: 13 }}>{empty}</td></tr>
+                <tr><td colSpan={columns.length + 4} style={{ padding: 36, color: 'var(--vdms-text-faint)', textAlign: 'center', fontSize: 13 }}>{empty}</td></tr>
               ) : filteredItems.map(item => (
-                <tr key={item.id} style={{ borderTop: '1px solid #f1f5f9', background: selectedIds.has(item.id) ? '#f0f9ff' : '#fff' }}>
-                  <td style={{ padding: 12, textAlign: 'center' }}>
+                <tr key={item.id} style={{ ...DMS_TR, background: selectedIds.has(item.id) ? clay.accentSoft : 'transparent' }}>
+                  <td style={{ ...DMS_TD, textAlign: 'center' }}>
                     <input type="checkbox" checked={selectedIds.has(item.id)} onChange={() => toggleOne(item.id)} />
                   </td>
-                  {cells(item).map((cell, index) => <td key={index} style={{ padding: 12, color: index === 0 ? '#0f172a' : '#475569', fontWeight: index === 0 ? 600 : 400 }}>{cell}</td>)}
-                  <td style={{ padding: 12, color: '#475569' }} title={item.deleted_by_email || ''}>
+                  {cells(item).map((cell, index) => <td key={index} style={{ padding: '10px 14px', color: index === 0 ? 'var(--vdms-text)' : 'var(--vdms-text-muted)', fontWeight: index === 0 ? 600 : 400, fontSize: 12.5 }}>{cell}</td>)}
+                  <td style={DMS_TD} title={item.deleted_by_email || ''}>
                     {item.deleted_by_name || item.deleted_by_email || '—'}
                   </td>
-                  <td style={{ padding: 12, color: item.reason ? '#475569' : '#cbd5e1', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.reason || ''}>
+                  <td style={{ ...DMS_TD, color: item.reason ? 'var(--vdms-text-muted)' : 'var(--vdms-text-faint)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.reason || ''}>
                     {item.reason || '—'}
                   </td>
-                  <td style={{ padding: 12 }}>{actionCell(item)}</td>
+                  <td style={DMS_TD}>{actionCell(item)}</td>
                 </tr>
               ))}
             </tbody>
@@ -594,80 +583,59 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Header Banner */}
-      <div style={{ background: '#fffbe6', border: '1px solid #f59e0b', borderRadius: 12, padding: '18px 22px', display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <div>
-          <h2 style={{ margin: 0, fontSize: 20, color: '#92400e', fontWeight: 800 }}>Recycle Bin</h2>
-          <p style={{ margin: '4px 0 0', color: '#92400e', fontSize: 13 }}>Deleted vessels, folders and files remain here until restored or permanently deleted.</p>
-        </div>
-        <button onClick={() => host._goToView('recycle').catch(() => undefined)} style={buttonStyle('#fff', '#475569', '#cbd5e1')}>🔄 Refresh</button>
-      </div>
+      {/* Header */}
+      <DmsPageHeader title="Recycle Bin" subtitle="Deleted vessels, folders and files remain here until restored or permanently deleted.">
+        <button onClick={() => host._goToView('recycle').catch(() => undefined)} style={dmsBtn('secondary', true)}><Icon iconName="Refresh" aria-hidden="true" style={{ fontSize: 12 }} /> Refresh</button>
+      </DmsPageHeader>
 
       {/* Compact Section Tabs */}
       <div style={{
         display: 'flex',
         flexWrap: 'wrap',
         gap: 8,
-        background: '#fff',
-        border: '1px solid #e2e8f0',
+        background: 'var(--vdms-surface)',
+        border: '1px solid var(--vdms-line)',
         borderRadius: 12,
         padding: 8,
+        boxShadow: clay.shadowRaised,
       }}>
         <button
           onClick={() => { setActiveTab('vessels'); setSearchQuery(''); }}
-          style={{
-            ...buttonStyle(activeTab === 'vessels' ? '#0284c7' : '#fff', activeTab === 'vessels' ? '#fff' : '#334155', activeTab === 'vessels' ? '#0284c7' : '#cbd5e1'),
-            padding: '8px 12px',
-            borderRadius: 10,
-            fontSize: 12,
-            fontWeight: 700,
-          }}
+          style={{ ...dmsBtn('primary', true), background: activeTab === 'vessels' ? clay.accent : 'transparent', color: activeTab === 'vessels' ? DMS_ON_ACCENT : 'var(--vdms-text)', boxShadow: activeTab === 'vessels' ? clay.shadowButton : 'none', borderRadius: 10 }}
         >
-          🚢 Deleted Vessels ({vesselItems.length})
+          <Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 12 }} /> Deleted Vessels ({vesselItems.length})
         </button>
 
         <button
           onClick={() => { setActiveTab('folders'); setSearchQuery(''); }}
-          style={{
-            ...buttonStyle(activeTab === 'folders' ? '#0284c7' : '#fff', activeTab === 'folders' ? '#fff' : '#334155', activeTab === 'folders' ? '#0284c7' : '#cbd5e1'),
-            padding: '8px 12px',
-            borderRadius: 10,
-            fontSize: 12,
-            fontWeight: 700,
-          }}
+          style={{ ...dmsBtn('primary', true), background: activeTab === 'folders' ? clay.accent : 'transparent', color: activeTab === 'folders' ? DMS_ON_ACCENT : 'var(--vdms-text)', boxShadow: activeTab === 'folders' ? clay.shadowButton : 'none', borderRadius: 10 }}
         >
-          📁 Deleted Normal Folders ({folderItems.length})
+          <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 12 }} /> Deleted Normal Folders ({folderItems.length})
         </button>
 
         <button
           onClick={() => { setActiveTab('files'); setSearchQuery(''); }}
-          style={{
-            ...buttonStyle(activeTab === 'files' ? '#0284c7' : '#fff', activeTab === 'files' ? '#fff' : '#334155', activeTab === 'files' ? '#0284c7' : '#cbd5e1'),
-            padding: '8px 12px',
-            borderRadius: 10,
-            fontSize: 12,
-            fontWeight: 700,
-          }}
+          style={{ ...dmsBtn('primary', true), background: activeTab === 'files' ? clay.accent : 'transparent', color: activeTab === 'files' ? DMS_ON_ACCENT : 'var(--vdms-text)', boxShadow: activeTab === 'files' ? clay.shadowButton : 'none', borderRadius: 10 }}
         >
-          📄 Deleted Individual Files ({fileItems.length})
+          <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 12 }} /> Deleted Individual Files ({fileItems.length})
         </button>
       </div>
 
       {/* Bulk Action Bar */}
       {selectedIds.size > 0 && (
-        <div style={{ background: '#0f172a', color: '#fff', borderRadius: 10, padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ background: clay.accentDeep, color: DMS_ON_ACCENT, borderRadius: 10, padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 600 }}>{selectedIds.size} item{selectedIds.size === 1 ? '' : 's'} selected</span>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={restoreSelected} style={buttonStyle('#10b981', '#fff', '#10b981')}>♻️ Restore selected</button>
-            <button onClick={permanentlyDeleteSelected} style={buttonStyle('#ef4444', '#fff', '#ef4444')}>🗑️ Delete permanently</button>
+            <button onClick={restoreSelected} style={dmsRowBtn('success')}><Icon iconName="RecycleBin" aria-hidden="true" style={{ fontSize: 12 }} /> Restore selected</button>
+            <button onClick={permanentlyDeleteSelected} style={dmsRowBtn('danger')}><Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 12 }} /> Delete permanently</button>
           </div>
         </div>
       )}
 
       {/* Active Section Table */}
       {panelLoading ? (
-        <div style={{ padding: 48, textAlign: 'center', color: '#64748b', fontSize: 14 }}>
-          ⏳ Loading Recycle Bin items...
+        <div style={{ padding: 48, textAlign: 'center', color: 'var(--vdms-text-muted)', fontSize: 14 }}>
+          <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 14 }} /> Loading Recycle Bin items...
         </div>
       ) : (
         <>
@@ -707,9 +675,5 @@ function RecycleBinContent({ host }: { host: VesselEmail }): React.ReactElement 
       {renderPermanentDeleteModal()}
     </div>
   );
-}
-
-function buttonStyle(background: string, color: string, border: string): React.CSSProperties {
-  return { background, color, border: `1px solid ${border}`, borderRadius: 6, minHeight: 44, padding: '6px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' };
 }
 

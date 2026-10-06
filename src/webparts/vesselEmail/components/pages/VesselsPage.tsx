@@ -22,6 +22,10 @@ import { KAIZEN_KNOWLEDGE_BANK_TREE, MAIN_FOLDERS } from '../vesselFolderTemplat
 import { isMobileWidth } from '../responsive';
 import { clay } from '../clayTheme';
 import { vdmsFont } from '../futuristicTheme';
+import {
+  DmsPageHeader, dmsControlStyle, dmsBtn, dmsTone, DmsLoadingState, DmsEmptyState,
+  DMS_SECTION_CARD, DMS_TILE, DMS_TILE_TITLE, dmsGrid, DMS_ON_ACCENT,
+} from '../dmsDesignSystem';
 
 
 function getSpoVesselFolderUrl(
@@ -287,34 +291,34 @@ export function renderDismissConfirmDialog(host: VesselEmail): React.ReactElemen
       onClick={e => { if (e.target === e.currentTarget) host.setState({ spoAnomalyDismissConfirm: null }); }}
     >
       <div style={{
-        background: '#fff', borderRadius: 16, boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
+        background: clay.surface, borderRadius: 16, boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
         padding: isMobile ? 16 : 32, width: '100%', maxWidth: 440, maxHeight: '90vh', overflowY: 'auto', position: 'relative',
       }}>
         {/* Close */}
         <button
           onClick={() => host.setState({ spoAnomalyDismissConfirm: null })}
-          style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
+          style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: 'var(--vdms-text-faint)' }}
           title="Cancel"
-        >✕</button>
+        ><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 18 }} /></button>
 
         {/* Icon + title */}
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <div style={{ fontSize: 44, marginBottom: 10 }}>🗑️</div>
-          <h3 style={{ margin: '0 0 8px', fontSize: 17, fontWeight: 700, color: '#0f172a' }}>
+          <div style={{ fontSize: 44, marginBottom: 10 }}><Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 44 }} /></div>
+          <h3 style={{ margin: '0 0 8px', fontSize: 17, fontWeight: 700, color: 'var(--vdms-text)' }}>
             What would you like to do?
           </h3>
-          <p style={{ margin: 0, fontSize: 13, color: '#64748b', lineHeight: 1.5 }}>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--vdms-text-muted)', lineHeight: 1.5 }}>
             The {anomaly.item_type} <strong>"{anomaly.name}"</strong> was found outside the expected SharePoint structure.
           </p>
         </div>
 
         {/* Path */}
         <div style={{
-          background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8,
-          padding: '8px 12px', marginBottom: 22, fontSize: 11, color: '#475569',
+          background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-line)', borderRadius: 8,
+          padding: '8px 12px', marginBottom: 22, fontSize: 11, color: 'var(--vdms-text-muted)',
           fontFamily: 'monospace', wordBreak: 'break-all',
         }}>
-          📂 {anomaly.spo_path}
+          <Icon iconName="OpenFolderHorizontal" aria-hidden="true" style={{ fontSize: 11 }} /> {anomaly.spo_path}
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -322,16 +326,16 @@ export function renderDismissConfirmDialog(host: VesselEmail): React.ReactElemen
           <button
             onClick={() => host.setState({ spoAnomalyDismissConfirm: null })}
             style={{
-              background: '#f8fafc', color: '#334155',
-              border: '2px solid #e2e8f0', borderRadius: 10, padding: '14px 18px', minHeight: 44,
+              background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text)',
+              border: '2px solid var(--vdms-line)', borderRadius: 10, padding: '14px 18px', minHeight: 44,
               cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left',
               transition: 'border-color 0.15s',
             }}
           >
-            <span style={{ fontSize: 26 }}>📌</span>
+            <Icon iconName="Pin" aria-hidden="true" style={{ fontSize: 26 }} />
             <div>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 2, color: '#0f172a' }}>Keep it here</div>
-              <div style={{ fontSize: 12, color: '#64748b' }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 2, color: 'var(--vdms-text)' }}>Keep it here</div>
+              <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>
                 Leave this item listed in the warning section for now. You can classify or dismiss it later.
               </div>
             </div>
@@ -341,13 +345,13 @@ export function renderDismissConfirmDialog(host: VesselEmail): React.ReactElemen
           <button
             onClick={() => host._moveAnomalyToRecycleBin(anomaly)}
             style={{
-              background: 'linear-gradient(135deg, #ef4444, #dc2626)',
-              color: '#fff', border: 'none', borderRadius: 10, padding: '14px 18px', minHeight: 44,
+              background: clay.pillDangerText,
+              color: DMS_ON_ACCENT, border: 'none', borderRadius: 10, padding: '14px 18px', minHeight: 44,
               cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left',
               transition: 'opacity 0.15s',
             }}
           >
-            <span style={{ fontSize: 26 }}>🗑️</span>
+            <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 26 }} />
             <div>
               <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 2 }}>Move to Recycle Bin</div>
               <div style={{ fontSize: 12, opacity: 0.9 }}>
@@ -386,23 +390,23 @@ export function renderVesselFieldConfirmDialog(host: VesselEmail): React.ReactEl
       onClick={e => { if (e.target === e.currentTarget) host._cancelSaveVesselField(); }}
     >
       <div style={{
-        background: '#fff', borderRadius: 16, boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
+        background: clay.surface, borderRadius: 16, boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
         padding: isMobile ? 16 : 32, width: '100%', maxWidth: 420, maxHeight: '90vh', overflowY: 'auto', position: 'relative',
       }}>
         {/* Close */}
         <button
           onClick={() => host._cancelSaveVesselField()}
-          style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
+          style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: 'var(--vdms-text-faint)' }}
           title="Cancel"
-        >✕</button>
+        ><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 18 }} /></button>
 
         {/* Icon + title */}
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
-          <div style={{ fontSize: 44, marginBottom: 10 }}>💾</div>
-          <h3 style={{ margin: '0 0 8px', fontSize: 17, fontWeight: 700, color: '#0f172a' }}>
+          <div style={{ fontSize: 44, marginBottom: 10 }}><Icon iconName="Save" aria-hidden="true" style={{ fontSize: 44 }} /></div>
+          <h3 style={{ margin: '0 0 8px', fontSize: 17, fontWeight: 700, color: 'var(--vdms-text)' }}>
             Save {pending.fieldLabel}?
           </h3>
-          <p style={{ margin: 0, fontSize: 13, color: '#64748b', lineHeight: 1.5 }}>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--vdms-text-muted)', lineHeight: 1.5 }}>
             This sets <strong>{pending.fieldLabel}</strong> for <strong>{pending.vesselName}</strong> to the value below.
             Once saved, this field can't be edited again from this card.
           </p>
@@ -410,8 +414,8 @@ export function renderVesselFieldConfirmDialog(host: VesselEmail): React.ReactEl
 
         {/* Value */}
         <div style={{
-          background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8,
-          padding: '8px 12px', marginBottom: 22, fontSize: 14, fontWeight: 700, color: '#0f172a',
+          background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-line)', borderRadius: 8,
+          padding: '8px 12px', marginBottom: 22, fontSize: 14, fontWeight: 700, color: 'var(--vdms-text)',
           textAlign: 'center', wordBreak: 'break-word',
         }}>
           {pending.value}
@@ -421,8 +425,8 @@ export function renderVesselFieldConfirmDialog(host: VesselEmail): React.ReactEl
           <button
             onClick={() => host._cancelSaveVesselField()}
             style={{
-              flex: 1, background: '#f8fafc', color: '#334155',
-              border: '2px solid #e2e8f0', borderRadius: 10, padding: '12px 18px', minHeight: 44,
+              flex: 1, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text)',
+              border: '2px solid var(--vdms-line)', borderRadius: 10, padding: '12px 18px', minHeight: 44,
               cursor: 'pointer', fontWeight: 700, fontSize: 13,
             }}
           >
@@ -431,8 +435,8 @@ export function renderVesselFieldConfirmDialog(host: VesselEmail): React.ReactEl
           <button
             onClick={() => host._confirmSaveVesselField()}
             style={{
-              flex: 1, background: 'linear-gradient(135deg, #22c55e, #16a34a)',
-              color: '#fff', border: 'none', borderRadius: 10, padding: '12px 18px', minHeight: 44,
+              flex: 1, background: clay.pillActiveText,
+              color: DMS_ON_ACCENT, border: 'none', borderRadius: 10, padding: '12px 18px', minHeight: 44,
               cursor: 'pointer', fontWeight: 700, fontSize: 13,
             }}
           >
@@ -608,32 +612,27 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
     if (doneNormal) {
       return (
         <div style={{ textAlign: 'center', padding: '12px 0' }}>
-          <div style={{ fontSize: 52, marginBottom: 12 }}>📁</div>
-          <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#0f172a' }}>
+          <div style={{ fontSize: 52, marginBottom: 12 }}><Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 52 }} /></div>
+          <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: 'var(--vdms-text)' }}>
             {alreadyExisted ? 'Folder Already Registered' : 'Folder Added to the DMS'}
           </h3>
-          <p style={{ margin: '0 0 20px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+          <p style={{ margin: '0 0 20px', fontSize: 13, color: 'var(--vdms-text-muted)', lineHeight: 1.5 }}>
             <strong>"{anomaly.name}"</strong> {alreadyExisted
               ? 'was already listed as a Normal Folder in the system.'
               : 'has been saved in the selected DMS location.'}
           </p>
-          <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 10, padding: '12px 16px', marginBottom: 24, fontSize: 12, color: '#0369a1', textAlign: 'left' }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>📋 Saved to Normal Folders</div>
+          <div style={{ background: clay.accentSoft, border: `1px solid ${clay.accentSoft}`, borderRadius: 10, padding: '12px 16px', marginBottom: 24, fontSize: 12, color: clay.accentDark, textAlign: 'left' }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}><Icon iconName="ClipboardList" aria-hidden="true" style={{ fontSize: 12 }} /> Saved to Normal Folders</div>
             <div>• Anomaly warning dismissed</div>
             <div>• Folder linked to the DMS</div>
             <div>• Record stored in database</div>
           </div>
-          <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--vdms-text-faint)', marginBottom: 12 }}>
             Auto-closing in {autoClose}s…
           </div>
           <button
             onClick={handleClose}
-            style={{
-              background: 'linear-gradient(135deg, #475569, #334155)',
-              color: '#fff', border: 'none', borderRadius: 10,
-              padding: '12px 32px', fontSize: 14, fontWeight: 700, cursor: 'pointer',
-              boxShadow: '0 4px 12px rgba(71,85,105,0.3)',
-            }}
+            style={{ ...dmsBtn('primary'), padding: '12px 32px', fontSize: 14, borderRadius: 10 }}
           >
             Done / View Vessels
           </button>
@@ -644,11 +643,11 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
     if (provisioning) {
       return (
         <div style={{ textAlign: 'center', padding: '8px 0' }}>
-          <div style={{ fontSize: 44, marginBottom: 12 }}>⏳</div>
+          <div style={{ fontSize: 44, marginBottom: 12 }}><Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 44 }} /></div>
           <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: clay.accentDark }}>
             Provisioning DMS Folder Structure…
           </h3>
-          <p style={{ margin: '0 0 16px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--vdms-text-muted)', lineHeight: 1.5 }}>
             Creating standard DMS folder hierarchy for <strong>"{anomaly.name}"</strong> in SharePoint Online. Please wait.
           </p>
 
@@ -658,12 +657,12 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
             background: clay.accentSoft, color: clay.accentDark, border: `1px solid ${clay.accentSoft}`,
             borderRadius: 20, padding: '8px 18px', fontSize: 14, fontWeight: 700, marginBottom: 20,
           }}>
-            <span style={{ fontSize: 16 }}>⏱️</span>
+            <Icon iconName="Clock" aria-hidden="true" style={{ fontSize: 16 }} />
             <span>Elapsed Time: {formatTimer(elapsed)}</span>
           </div>
 
           {/* Animated Progress Bar */}
-          <div style={{ background: '#e2e8f0', borderRadius: 10, height: 8, overflow: 'hidden', marginBottom: 20 }}>
+          <div style={{ background: 'var(--vdms-line)', borderRadius: 10, height: 8, overflow: 'hidden', marginBottom: 20 }}>
             <div style={{
               background: clay.accentGradient,
               height: '100%', width: `${Math.min(96, 15 + elapsed * 12)}%`,
@@ -672,21 +671,24 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
           </div>
 
     {/* Step Progress Checklist */}
-          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: '14px 16px', textAlign: 'left', fontSize: 12 }}>
-            <div style={{ color: '#16a34a', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 14 }}>✓</span><span>Vessel record confirmed in database</span>
+          <div style={{ background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-line)', borderRadius: 12, padding: '14px 16px', textAlign: 'left', fontSize: 12 }}>
+            <div style={{ color: clay.pillActiveText, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 14 }} /><span>Vessel record confirmed in database</span>
             </div>
             <div style={{ color: clay.accentDark, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 14 }}>⏳</span><span>Creating SharePoint DMS folder tree (Technical &amp; Crewing, Month End, Certificates)…</span>
+              <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 14 }} /><span>Creating SharePoint DMS folder tree (Technical &amp; Crewing, Month End, Certificates)…</span>
             </div>
-            <div style={{ color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 14 }}>○</span><span>Linking category subfolders &amp; permissions</span>
+            <div style={{ color: 'var(--vdms-text-faint)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Icon iconName="CircleRing" aria-hidden="true" style={{ fontSize: 14 }} /><span>Linking category subfolders &amp; permissions</span>
             </div>
           </div>
 
           {/* Live folder-creation feed — one line per folder as Graph confirms it */}
           {!!(host.state.folderCreationResults && host.state.folderCreationResults.length) && (
             <div style={{
+              // Fixed dark console surface (like a terminal/log pane) —
+              // intentionally not theme-reactive so the live folder-creation
+              // feed stays legible regardless of light/night mode.
               background: '#0f172a', borderRadius: 10, padding: '10px 12px', marginTop: 12,
               textAlign: 'left', fontSize: 11, fontFamily: 'monospace', maxHeight: 140,
               overflowY: 'auto', color: '#cbd5e1',
@@ -694,10 +696,10 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
               {host.state.folderCreationResults.map((r, i) => (
                 <div key={`${r.path}-${i}`} style={{ display: 'flex', gap: 6, padding: '2px 0' }}>
                   <span>
-                    {r.status === 'failed' ? '✗' : r.status === 'existed' ? '↩' : '✓'}
+                    {r.status === 'failed' ? <Icon iconName="ErrorBadge" aria-hidden="true" style={{ fontSize: 11 }} /> : r.status === 'existed' ? '↩' : <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 11 }} />}
                   </span>
                   <span style={{
-                    color: r.status === 'failed' ? '#f87171' : r.status === 'existed' ? '#94a3b8' : '#4ade80',
+                    color: r.status === 'failed' ? '#f87171' : r.status === 'existed' ? 'var(--vdms-text-faint)' : '#4ade80',
                     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                   }}>
                     {r.path}
@@ -714,30 +716,30 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
       const failedCount = (host.state.folderCreationResults || []).filter(r => r.status === 'failed').length;
       return (
         <div style={{ textAlign: 'center', padding: '12px 0' }}>
-          <div style={{ fontSize: 52, marginBottom: 12 }}>{failedCount ? '⚠️' : '🎉'}</div>
-          <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: failedCount ? '#b45309' : '#059669' }}>
+          <div style={{ fontSize: 52, marginBottom: 12 }}>{failedCount ? <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 52 }} /> : <Icon iconName="Completed" aria-hidden="true" style={{ fontSize: 52 }} />}</div>
+          <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: failedCount ? clay.pillWarnText : clay.pillActiveText }}>
             {failedCount ? 'Vessel Provisioned With Some Issues' : 'Vessel Successfully Provisioned & Classified!'}
           </h3>
-          <p style={{ margin: '0 0 20px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+          <p style={{ margin: '0 0 20px', fontSize: 13, color: 'var(--vdms-text-muted)', lineHeight: 1.5 }}>
             <strong>"{anomaly.name}"</strong> has been registered in the DMS database{failedCount ? ', but ' + failedCount + ' folder' + (failedCount === 1 ? '' : 's') + ' could not be created — see the log above.' : ' and its full SharePoint DMS folder tree has been created.'}
           </p>
 
-          <div style={{ background: failedCount ? '#fffbeb' : '#ecfdf5', border: `1px solid ${failedCount ? '#fde68a' : '#a7f3d0'}`, borderRadius: 10, padding: '12px 16px', marginBottom: 24, fontSize: 12, color: failedCount ? '#92400e' : '#065f46', textAlign: 'left' }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>{failedCount ? '⚠️ Provisioning Finished' : '✅ Provisioning Complete'}</div>
+          <div style={{ background: failedCount ? clay.pillWarnBg : clay.pillActiveBg, border: `1px solid ${failedCount ? clay.pillWarnBg : clay.pillActiveBg}`, borderRadius: 10, padding: '12px 16px', marginBottom: 24, fontSize: 12, color: failedCount ? clay.pillWarnText : clay.pillActiveText, textAlign: 'left' }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>{failedCount ? <><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> Provisioning Finished</> : <><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} /> Provisioning Complete</>}</div>
             <div>• Registered vessel card added to main grid</div>
             <div>• SharePoint DMS department subfolders created{failedCount ? ` (${failedCount} failed)` : ''}</div>
             <div>• Unrecognised warning dismissed</div>
           </div>
 
-          <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--vdms-text-faint)', marginBottom: 12 }}>
             Auto-closing in {autoClose}s…
           </div>
 
           <button
             onClick={handleClose}
             style={{
-              background: 'linear-gradient(135deg, #10b981, #059669)',
-              color: '#fff', border: 'none', borderRadius: 10,
+              background: clay.pillActiveText,
+              color: DMS_ON_ACCENT, border: 'none', borderRadius: 10,
               padding: '12px 32px', fontSize: 14, fontWeight: 700, cursor: 'pointer',
               boxShadow: '0 4px 12px rgba(16,185,129,0.3)',
             }}
@@ -751,42 +753,42 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
     return (
       <>
         <div style={{ fontSize: 42, textAlign: 'center', marginBottom: 12 }}>
-          {anomaly.item_type === 'folder' ? '📁' : '📄'}
+          {anomaly.item_type === 'folder' ? <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 42 }} /> : <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 42 }} />}
         </div>
 
-        <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#0f172a', textAlign: 'center' }}>
+        <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: 'var(--vdms-text)', textAlign: 'center' }}>
           Unclassified SharePoint {anomaly.item_type === 'folder' ? 'Folder' : 'File'}
         </h3>
-        <p style={{ margin: '0 0 20px', fontSize: 13, color: '#64748b', textAlign: 'center' }}>
+        <p style={{ margin: '0 0 20px', fontSize: 13, color: 'var(--vdms-text-muted)', textAlign: 'center' }}>
           We found an {anomaly.item_type === 'folder' ? 'folder' : 'file'} in SharePoint that is not currently linked to the DMS. Please choose how you would like to organize it.
         </p>
 
         {/* Path */}
-        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px', marginBottom: 20, fontSize: 11, color: '#475569', fontFamily: 'monospace', wordBreak: 'break-all' }}>
-          <strong>Current location:</strong><br />📂 {anomaly.spo_path}
+        <div style={{ background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-line)', borderRadius: 8, padding: '10px 14px', marginBottom: 20, fontSize: 11, color: 'var(--vdms-text-muted)', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+          <strong>Current location:</strong><br /><Icon iconName="OpenFolderHorizontal" aria-hidden="true" style={{ fontSize: 11 }} /> {anomaly.spo_path}
         </div>
 
         {error && (
-          <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#dc2626', display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span>⚠️</span><span>{error}</span>
+          <div style={{ background: clay.pillDangerBg, border: `1px solid ${clay.pillDangerBg}`, borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: clay.pillDangerText, display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /><span>{error}</span>
           </div>
         )}
 
         {anomaly.item_type === 'folder' ? (
           <>
-            <p style={{ margin: '0 0 16px', fontSize: 13, fontWeight: 600, color: '#0f172a', textAlign: 'center' }}>Choose how to organize this folder</p>
+            <p style={{ margin: '0 0 16px', fontSize: 13, fontWeight: 600, color: 'var(--vdms-text)', textAlign: 'center' }}>Choose how to organize this folder</p>
             <div style={{ display: 'flex', gap: 12, flexDirection: 'column' }}>
               {/* Vessel option */}
               <button
                 onClick={() => handleVessel()}
                 style={{
                   background: clay.accentGradient,
-                  color: '#fff', border: 'none', borderRadius: 12, padding: '16px 20px',
+                  color: DMS_ON_ACCENT, border: 'none', borderRadius: 12, padding: '16px 20px',
                   cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, textAlign: 'left',
                   transition: 'opacity 0.2s', boxShadow: clay.shadowButton,
                 }}
               >
-                <span style={{ fontSize: 28 }}>🚢</span>
+                <Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 28 }} />
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>
                     This is a Vessel
@@ -797,28 +799,28 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
                 </div>
               </button>
 
-              <div style={{ background: '#fff', color: '#334155', border: '2px solid #e2e8f0', borderRadius: 12, padding: '16px 20px' }}>
+              <div style={{ background: clay.surface, color: 'var(--vdms-text)', border: '2px solid var(--vdms-line)', borderRadius: 12, padding: '16px 20px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <span style={{ fontSize: 28 }}>📁</span>
+                  <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 28 }} />
                   <div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', marginBottom: 2 }}>Place Under a DMS Category</div>
-                    <div style={{ fontSize: 12, color: '#64748b' }}>Choose the document area and destination where this folder should be placed.</div>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', marginBottom: 2 }}>Place Under a DMS Category</div>
+                    <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>Choose the document area and destination where this folder should be placed.</div>
                   </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 8, marginTop: 14 }}>
-                  <select value={documentScope} onChange={e => setDocumentScope(e.target.value as 'vessels' | 'common' | 'kaizen')} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}>
+                  <select value={documentScope} onChange={e => setDocumentScope(e.target.value as 'vessels' | 'common' | 'kaizen')} style={{ padding: 9, border: '1px solid var(--vdms-line-strong)', borderRadius: 7, background: clay.surface }}>
                     <option value="vessels">Vessels</option>
                     <option value="common">Common for all vessels</option>
                     <option value="kaizen">Kaizen - Knowledge Bank</option>
                   </select>
                   {documentScope === 'vessels' ? (
-                    <select value={selectedVessel} onChange={e => setSelectedVessel(e.target.value)} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}>
+                    <select value={selectedVessel} onChange={e => setSelectedVessel(e.target.value)} style={{ padding: 9, border: '1px solid var(--vdms-line-strong)', borderRadius: 7, background: clay.surface }}>
                       <option value="">Select Vessel</option>
                       {host.state.vessels.map(vessel => <option key={vessel.id} value={vessel.name}>{vessel.name}</option>)}
                     </select>
                   ) : <div />}
                   {documentScope !== 'kaizen' && (
-                    <select value={selectedMainFolder} onChange={e => setSelectedMainFolder(e.target.value)} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}>
+                    <select value={selectedMainFolder} onChange={e => setSelectedMainFolder(e.target.value)} style={{ padding: 9, border: '1px solid var(--vdms-line-strong)', borderRadius: 7, background: clay.surface }}>
                       <option value="">Select Main Folder</option>
                       {MAIN_FOLDERS.map(main => <option key={main.name} value={main.name}>{main.name}</option>)}
                     </select>
@@ -832,35 +834,35 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
                         if (e.target.value) nextPath.push(e.target.value);
                         setSelectedFolderPath(nextPath);
                       }}
-                      style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}
+                      style={{ padding: 9, border: '1px solid var(--vdms-line-strong)', borderRadius: 7, background: clay.surface }}
                     >
                       <option value="">Select {level === 0 ? categoryLabel : `Sub-category ${level}`}</option>
                       {options.map(folder => <option key={folder.name} value={folder.name}>{folder.name}</option>)}
                     </select>
                   ))}
                 </div>
-                <div style={{ marginTop: 10, fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>
+                <div style={{ marginTop: 10, fontSize: 11, color: 'var(--vdms-text-muted)', fontFamily: 'monospace' }}>
                   {(documentScope === 'vessels' ? `${selectedMainFolder || '[Main Folder]'} / ${selectedVessel || '[Vessel]'}` : documentScope === 'common' ? `${selectedMainFolder || '[Main Folder]'} / Common for all ships` : 'Kaizen - Knowledge Bank')}
                   {` / ${selectedFolderPath.join(' / ') || '[Category]'}`} / {anomaly.name}
                 </div>
-                <button onClick={handlePlaceInCategory} disabled={!canPlaceInCategory} style={{ marginTop: 12, minHeight: 44, width: isMobile ? '100%' : 'auto', background: canPlaceInCategory ? '#eff6ff' : '#f1f5f9', color: canPlaceInCategory ? '#0369a1' : '#94a3b8', border: '1px solid #bae6fd', borderRadius: 8, padding: '9px 14px', fontWeight: 700, cursor: canPlaceInCategory ? 'pointer' : 'not-allowed' }}>Place in Category</button>
+                <button onClick={handlePlaceInCategory} disabled={!canPlaceInCategory} style={{ marginTop: 12, minHeight: 44, width: isMobile ? '100%' : 'auto', background: canPlaceInCategory ? clay.accentSoft : 'var(--vdms-surface-alt)', color: canPlaceInCategory ? clay.accentDark : 'var(--vdms-text-faint)', border: `1px solid ${clay.accentSoft}`, borderRadius: 8, padding: '9px 14px', fontWeight: 700, cursor: canPlaceInCategory ? 'pointer' : 'not-allowed' }}>Place in Category</button>
               </div>
 
               <button
                 onClick={handleNormal}
                 style={{
-                  background: '#f8fafc', color: '#334155',
-                  border: '2px solid #e2e8f0', borderRadius: 12, padding: '16px 20px',
+                  background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text)',
+                  border: '2px solid var(--vdms-line)', borderRadius: 12, padding: '16px 20px',
                   cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, textAlign: 'left',
                   transition: 'opacity 0.2s',
                 }}
               >
-                <span style={{ fontSize: 28 }}>📁</span>
+                <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 28 }} />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2, color: '#0f172a' }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2, color: 'var(--vdms-text)' }}>
                     Keep Current Folder Location
                   </div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                  <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>
                     Keep this folder in its current SharePoint location and add it to the DMS without changing its folder path.
                   </div>
                 </div>
@@ -871,28 +873,28 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
           /* File item — provide classify + recycle options */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {/* Place Under DMS Category */}
-            <div style={{ background: '#fff', color: '#334155', border: '2px solid #e2e8f0', borderRadius: 12, padding: '16px 20px' }}>
+            <div style={{ background: clay.surface, color: 'var(--vdms-text)', border: '2px solid var(--vdms-line)', borderRadius: 12, padding: '16px 20px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
-                <span style={{ fontSize: 28 }}>📁</span>
+                <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 28 }} />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', marginBottom: 2 }}>Place Under a DMS Category</div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>Move this file to a DMS document folder.</div>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', marginBottom: 2 }}>Place Under a DMS Category</div>
+                  <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>Move this file to a DMS document folder.</div>
                 </div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 8 }}>
-                <select value={documentScope} onChange={e => setDocumentScope(e.target.value as 'vessels' | 'common' | 'kaizen')} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}>
+                <select value={documentScope} onChange={e => setDocumentScope(e.target.value as 'vessels' | 'common' | 'kaizen')} style={{ padding: 9, border: '1px solid var(--vdms-line-strong)', borderRadius: 7, background: clay.surface }}>
                   <option value="vessels">Vessels</option>
                   <option value="common">Common for all vessels</option>
                   <option value="kaizen">Kaizen - Knowledge Bank</option>
                 </select>
                 {documentScope === 'vessels' ? (
-                  <select value={selectedVessel} onChange={e => setSelectedVessel(e.target.value)} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}>
+                  <select value={selectedVessel} onChange={e => setSelectedVessel(e.target.value)} style={{ padding: 9, border: '1px solid var(--vdms-line-strong)', borderRadius: 7, background: clay.surface }}>
                     <option value="">Select Vessel</option>
                     {host.state.vessels.map(vessel => <option key={vessel.id} value={vessel.name}>{vessel.name}</option>)}
                   </select>
                 ) : <div />}
                 {documentScope !== 'kaizen' && (
-                  <select value={selectedMainFolder} onChange={e => setSelectedMainFolder(e.target.value)} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}>
+                  <select value={selectedMainFolder} onChange={e => setSelectedMainFolder(e.target.value)} style={{ padding: 9, border: '1px solid var(--vdms-line-strong)', borderRadius: 7, background: clay.surface }}>
                     <option value="">Select Main Folder</option>
                     {MAIN_FOLDERS.map(main => <option key={main.name} value={main.name}>{main.name}</option>)}
                   </select>
@@ -906,30 +908,30 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
                       if (e.target.value) nextPath.push(e.target.value);
                       setSelectedFolderPath(nextPath);
                     }}
-                    style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 7, background: '#fff' }}
+                    style={{ padding: 9, border: '1px solid var(--vdms-line-strong)', borderRadius: 7, background: clay.surface }}
                   >
                     <option value="">Select {level === 0 ? categoryLabel : `Sub-category ${level}`}</option>
                     {options.map(folder => <option key={folder.name} value={folder.name}>{folder.name}</option>)}
                   </select>
                 ))}
               </div>
-              <div style={{ marginTop: 10, fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>
+              <div style={{ marginTop: 10, fontSize: 11, color: 'var(--vdms-text-muted)', fontFamily: 'monospace' }}>
                 {(documentScope === 'vessels' ? `${selectedMainFolder || '[Main Folder]'} / ${selectedVessel || '[Vessel]'}` : documentScope === 'common' ? `${selectedMainFolder || '[Main Folder]'} / Common for all ships` : 'Kaizen - Knowledge Bank')}
                 {` / ${selectedFolderPath.join(' / ') || '[Category]'}`} / {anomaly.name}
               </div>
-              <button onClick={handlePlaceInCategory} disabled={!canPlaceInCategory} style={{ marginTop: 12, minHeight: 44, width: isMobile ? '100%' : 'auto', background: canPlaceInCategory ? '#eff6ff' : '#f1f5f9', color: canPlaceInCategory ? '#0369a1' : '#94a3b8', border: '1px solid #bae6fd', borderRadius: 8, padding: '9px 14px', fontWeight: 700, cursor: canPlaceInCategory ? 'pointer' : 'not-allowed' }}>Place in Category</button>
+              <button onClick={handlePlaceInCategory} disabled={!canPlaceInCategory} style={{ marginTop: 12, minHeight: 44, width: isMobile ? '100%' : 'auto', background: canPlaceInCategory ? clay.accentSoft : 'var(--vdms-surface-alt)', color: canPlaceInCategory ? clay.accentDark : 'var(--vdms-text-faint)', border: `1px solid ${clay.accentSoft}`, borderRadius: 8, padding: '9px 14px', fontWeight: 700, cursor: canPlaceInCategory ? 'pointer' : 'not-allowed' }}>Place in Category</button>
             </div>
 
             {/* Move to Recycle Bin */}
             <button
               onClick={() => host._moveAnomalyToRecycleBin(anomaly)}
               style={{
-                background: 'linear-gradient(135deg, #ef4444, #dc2626)',
-                color: '#fff', border: 'none', borderRadius: 12, padding: '14px 20px',
+                background: clay.pillDangerText,
+                color: DMS_ON_ACCENT, border: 'none', borderRadius: 12, padding: '14px 20px',
                 cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, textAlign: 'left',
               }}
             >
-              <span style={{ fontSize: 26 }}>🗑️</span>
+              <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 26 }} />
               <div>
                 <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>Move to Recycle Bin</div>
                 <div style={{ fontSize: 12, opacity: 0.9 }}>Remove this unclassified file and move it to the Recycle Bin.</div>
@@ -940,15 +942,15 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
             <button
               onClick={handleNormal}
               style={{
-                background: '#f8fafc', color: '#334155',
-                border: '2px solid #e2e8f0', borderRadius: 12, padding: '12px 20px',
+                background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text)',
+                border: '2px solid var(--vdms-line)', borderRadius: 12, padding: '12px 20px',
                 cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 14, textAlign: 'left',
               }}
             >
-              <span style={{ fontSize: 26 }}>📌</span>
+              <Icon iconName="Pin" aria-hidden="true" style={{ fontSize: 26 }} />
               <div>
-                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2, color: '#0f172a' }}>Keep in Current Location</div>
-                <div style={{ fontSize: 12, color: '#64748b' }}>Dismiss the warning and keep this file in its current SharePoint location.</div>
+                <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2, color: 'var(--vdms-text)' }}>Keep in Current Location</div>
+                <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>Dismiss the warning and keep this file in its current SharePoint location.</div>
               </div>
             </button>
           </div>
@@ -972,15 +974,15 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
      onClick={e => { if (e.target === e.currentTarget) handleClose(); }}
     >
       <div style={{
-        background: '#fff', borderRadius: 20, padding: isMobile ? '18px 14px' : '32px 36px',
+        background: clay.surface, borderRadius: 20, padding: isMobile ? '18px 14px' : '32px 36px',
         width: isMobile ? '95vw' : 480, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto',
         boxShadow: '0 24px 64px rgba(0,0,0,0.28)', position: 'relative',
       }}>
         <button
           onClick={handleClose}
-          style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
+          style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: 'var(--vdms-text-faint)' }}
           title="Close (provisioning continues in the background)"
-        >✕</button>
+        ><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 18 }} /></button>
         {renderBody()}
       </div>
     </div>
@@ -994,15 +996,15 @@ function ClassifyModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): R
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function renderUnrecognisedFolders(host: VesselEmail, items: FolderAnomalyItem[]): React.ReactElement {
   return (
-    <div style={{ marginTop: 32, background: 'linear-gradient(135deg, #fffbeb 0%, #fff9e6 100%)', border: '2px solid #f59e0b', borderRadius: 16, padding: 24 }}>
+    <div style={{ marginTop: 32, background: clay.pillWarnBg, border: `2px solid ${clay.pillWarnText}`, borderRadius: 16, padding: 24 }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h3 style={{ margin: '0 0 4px', fontSize: 16, fontWeight: 700, color: '#92400e', display: 'flex', alignItems: 'center', gap: 8 }}>
-            ⚠️ Folders Created Outside DMS Records
-            <span style={{ background: '#f59e0b', color: '#fff', borderRadius: 20, padding: '1px 10px', fontSize: 12, fontWeight: 700 }}>{items.length}</span>
+          <h3 style={{ margin: '0 0 4px', fontSize: 16, fontWeight: 700, color: clay.pillWarnText, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 16 }} /> Folders Created Outside DMS Records
+            <span style={{ background: clay.pillWarnText, color: DMS_ON_ACCENT, borderRadius: 20, padding: '1px 10px', fontSize: 12, fontWeight: 700 }}>{items.length}</span>
           </h3>
-          <p style={{ margin: 0, fontSize: 12, color: '#a16207' }}>
+          <p style={{ margin: 0, fontSize: 12, color: clay.pillWarnText }}>
             These folders were created directly in SharePoint Online at the vessel management level but are not registered in DMS.
             Please classify each one as a Vessel or a Normal Folder.
           </p>
@@ -1015,19 +1017,19 @@ function renderUnrecognisedFolders(host: VesselEmail, items: FolderAnomalyItem[]
           <div
             key={item.id}
             style={{
-              background: '#fff', borderRadius: 12, border: '1px solid #fde68a',
+              background: clay.surface, borderRadius: 12, border: `1px solid ${clay.pillWarnBg}`,
               padding: '14px 18px', display: 'flex', alignItems: 'center',
               justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
               boxShadow: '0 1px 4px rgba(245,158,11,0.08)',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 200 }}>
-              <span style={{ fontSize: 28 }}>📁</span>
+              <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 28 }} />
               <div>
-                <div style={{ fontWeight: 700, fontSize: 14, color: '#1f1f1f', marginBottom: 2 }}>{item.name}</div>
-                <div style={{ fontSize: 11, color: '#78716c', fontFamily: 'monospace' }}>{item.spo_path}</div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', marginBottom: 2 }}>{item.name}</div>
+                <div style={{ fontSize: 11, color: 'var(--vdms-text-faint)', fontFamily: 'monospace' }}>{item.spo_path}</div>
                 {item.detected_at && (
-                  <div style={{ fontSize: 10, color: '#a8a29e', marginTop: 2 }}>
+                  <div style={{ fontSize: 10, color: 'var(--vdms-text-faint)', marginTop: 2 }}>
                     Detected: {new Date(item.detected_at).toLocaleString()}
                   </div>
                 )}
@@ -1039,13 +1041,13 @@ function renderUnrecognisedFolders(host: VesselEmail, items: FolderAnomalyItem[]
               <button
                 onClick={() => host.setState({ spoClassifyDialog: { anomaly: item, provisioning: false, done: false, error: null } })}
                 style={{
-                  background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-                  color: '#fff', border: 'none', borderRadius: 8, padding: '7px 14px',
+                  background: clay.pillWarnText,
+                  color: DMS_ON_ACCENT, border: 'none', borderRadius: 8, padding: '7px 14px',
                   fontSize: 12, fontWeight: 700, cursor: 'pointer',
                   display: 'inline-flex', alignItems: 'center', gap: 5,
                 }}
               >
-                🔍 Classify
+                <Icon iconName="Search" aria-hidden="true" style={{ fontSize: 12 }} /> Classify
               </button>
 
               {/* Open in SPO */}
@@ -1064,7 +1066,7 @@ function renderUnrecognisedFolders(host: VesselEmail, items: FolderAnomalyItem[]
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
-                  background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd',
+                  background: clay.accentSoft, color: clay.accentDark, border: `1px solid ${clay.accentSoft}`,
                   borderRadius: 8, padding: '7px 12px', fontSize: 12, fontWeight: 600,
                   textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4,
                 }}
@@ -1076,12 +1078,12 @@ function renderUnrecognisedFolders(host: VesselEmail, items: FolderAnomalyItem[]
               <button
                 onClick={() => host.setState({ spoAnomalyDismissConfirm: item })}
                 style={{
-                  background: '#f1f5f9', color: '#64748b', border: '1px solid #cbd5e1',
+                  background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-muted)', border: '1px solid var(--vdms-line-strong)',
                   borderRadius: 8, padding: '7px 12px', fontSize: 12, cursor: 'pointer',
                 }}
                 title="Dismiss warning"
               >
-                ✕ Dismiss
+                <Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 12 }} /> Dismiss
               </button>
             </div>
           </div>
@@ -1100,39 +1102,36 @@ function renderNormalFoldersSection(host: VesselEmail): React.ReactElement | nul
     <div style={{ marginTop: 36 }}>
       {/* Divider */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-        <div style={{ flex: 1, height: 1, background: 'linear-gradient(to right, #94a3b8, transparent)' }} />
-        <span style={{ fontSize: 12, fontWeight: 700, color: '#475569', background: '#f1f5f9', padding: '4px 14px', borderRadius: 20, border: '1px solid #cbd5e1', whiteSpace: 'nowrap' }}>
-          📁 Normal Folders ({folders.length})
+        <div style={{ flex: 1, height: 1, background: 'linear-gradient(to right, var(--vdms-line-strong), transparent)' }} />
+        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--vdms-text-muted)', background: 'var(--vdms-surface-alt)', padding: '4px 14px', borderRadius: 20, border: '1px solid var(--vdms-line)', whiteSpace: 'nowrap' }}>
+          <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 12 }} /> Normal Folders ({folders.length})
         </span>
-        <div style={{ flex: 1, height: 1, background: 'linear-gradient(to left, #94a3b8, transparent)' }} />
+        <div style={{ flex: 1, height: 1, background: 'linear-gradient(to left, var(--vdms-line-strong), transparent)' }} />
       </div>
 
-      <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 14, padding: '16px 20px' }}>
-        <p style={{ margin: '0 0 14px', fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
+      <div style={{ ...DMS_SECTION_CARD, padding: '16px 20px' }}>
+        <p style={{ margin: '0 0 14px', fontSize: 12, color: 'var(--vdms-text-muted)', lineHeight: 1.5 }}>
           The following folders were found in SharePoint Online but confirmed as <strong>normal (non-vessel) folders</strong> by a user. They are listed here for reference only.
         </p>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10 }}>
+        <div style={dmsGrid(280)}>
           {folders.map((f, idx) => (
             <div
               key={f.id ?? `nf-${idx}`}
-              style={{
-                background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px',
-                display: 'flex', alignItems: 'flex-start', gap: 10,
-              }}
+              style={{ ...DMS_TILE, cursor: 'default', alignItems: 'flex-start' }}
             >
               <span style={{ fontSize: 24, flexShrink: 0, marginTop: 2 }}>
-                {f.item_type === 'folder' ? '📁' : '📄'}
+                {f.item_type === 'folder' ? <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 24 }} /> : <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 24 }} />}
               </span>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div style={DMS_TILE_TITLE}>
                   {f.name}
                 </div>
-                <div style={{ fontSize: 10, color: '#94a3b8', fontFamily: 'monospace', marginTop: 2, wordBreak: 'break-all' }}>
+                <div style={{ fontSize: 10, color: 'var(--vdms-text-faint)', fontFamily: 'monospace', marginTop: 2, wordBreak: 'break-all' }}>
                   {f.spo_path}
                 </div>
                 {f.detected_at && (
-                  <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 4 }}>
+                  <div style={{ fontSize: 10, color: 'var(--vdms-text-faint)', marginTop: 4 }}>
                     Saved: {new Date(f.detected_at).toLocaleDateString()}
                   </div>
                 )}
@@ -1146,7 +1145,7 @@ function renderNormalFoldersSection(host: VesselEmail): React.ReactElement | nul
 }
 
 // ── Vessel Card Provision Dialog ──────────────────────────────────────────────
-// Shown when user clicks the "📁 Provision" button on a vessel card.
+// Shown when user clicks the "Provision" button on a vessel card.
 
 function renderProvisionDialog(host: VesselEmail): React.ReactElement | null {
   if (!host.state.spoProvisionDialog) return null;
@@ -1168,6 +1167,7 @@ function FolderCreationTicker({ feed }: { feed: any[] }): React.ReactElement | n
     <div
       ref={scrollRef}
       style={{
+        // Fixed dark console surface — see the live folder-creation feed note above.
         marginTop: 12, background: '#0f172a', borderRadius: 12, padding: '10px 14px',
         textAlign: 'left', fontSize: 11.5, fontFamily: 'monospace', maxHeight: 130,
         overflowY: 'auto', scrollBehavior: 'smooth',
@@ -1178,10 +1178,10 @@ function FolderCreationTicker({ feed }: { feed: any[] }): React.ReactElement | n
           key={`${entry.path}-${i}`}
           style={{
             display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0',
-            color: entry.status === 'failed' ? '#f87171' : entry.status === 'existed' ? '#94a3b8' : '#4ade80',
+            color: entry.status === 'failed' ? '#f87171' : entry.status === 'existed' ? 'var(--vdms-text-faint)' : '#4ade80',
           }}
         >
-          <span>{entry.status === 'failed' ? '✗' : entry.status === 'existed' ? '↩' : '✓'}</span>
+          <span>{entry.status === 'failed' ? <Icon iconName="ErrorBadge" aria-hidden="true" style={{ fontSize: 11.5 }} /> : entry.status === 'existed' ? '↩' : <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 11.5 }} />}</span>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {entry.path.split('/').slice(-1)[0]}
           </span>
@@ -1276,11 +1276,11 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
     if (isBusy) {
       return (
         <div style={{ textAlign: 'center', padding: '8px 0' }}>
-          <div style={{ fontSize: 44, marginBottom: 12 }}>⏳</div>
+          <div style={{ fontSize: 44, marginBottom: 12 }}><Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 44 }} /></div>
           <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: clay.accentDark }}>
             Provisioning DMS Folder Structure…
           </h3>
-          <p style={{ margin: '0 0 16px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--vdms-text-muted)', lineHeight: 1.5 }}>
             Creating standard DMS folder hierarchy for <strong>&quot;{ vessel.name }&quot;</strong> in SharePoint Online. Please wait.
           </p>
 
@@ -1290,12 +1290,12 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
             background: clay.accentSoft, color: clay.accentDark, border: `1px solid ${clay.accentSoft}`,
             borderRadius: 20, padding: '8px 18px', fontSize: 14, fontWeight: 700, marginBottom: 20,
           }}>
-            <span style={{ fontSize: 16 }}>⏱️</span>
+            <Icon iconName="Clock" aria-hidden="true" style={{ fontSize: 16 }} />
             <span>Elapsed Time: {formatTimer(elapsed)}</span>
           </div>
 
           {/* Animated Progress Bar */}
-          <div style={{ background: '#e2e8f0', borderRadius: 10, height: 8, overflow: 'hidden', marginBottom: 20 }}>
+          <div style={{ background: 'var(--vdms-line)', borderRadius: 10, height: 8, overflow: 'hidden', marginBottom: 20 }}>
             <div style={{
               background: clay.accentGradient,
               height: '100%', width: `${Math.min(96, 15 + elapsed * 12)}%`,
@@ -1304,15 +1304,15 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
           </div>
 
           {/* Step Progress Checklist */}
-          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: '14px 16px', textAlign: 'left', fontSize: 12 }}>
-            <div style={{ color: '#16a34a', fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 14 }}>✓</span><span>Vessel record confirmed in database</span>
+          <div style={{ background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-line)', borderRadius: 12, padding: '14px 16px', textAlign: 'left', fontSize: 12 }}>
+            <div style={{ color: clay.pillActiveText, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 14 }} /><span>Vessel record confirmed in database</span>
             </div>
             <div style={{ color: clay.accentDark, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 14 }}>⏳</span><span>Creating SharePoint DMS folder tree (Technical &amp; Crewing, Month End, Certificates)…</span>
+              <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 14 }} /><span>Creating SharePoint DMS folder tree (Technical &amp; Crewing, Month End, Certificates)…</span>
             </div>
-         <div style={{ color: '#94a3b8', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 14 }}>○</span><span>Linking category subfolders &amp; permissions</span>
+         <div style={{ color: 'var(--vdms-text-faint)', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Icon iconName="CircleRing" aria-hidden="true" style={{ fontSize: 14 }} /><span>Linking category subfolders &amp; permissions</span>
             </div>
           </div>
 
@@ -1328,11 +1328,11 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
       const hasFailures = failedFolders.length > 0;
       return (
         <div style={{ textAlign: 'center', padding: '12px 0' }}>
-          <div style={{ fontSize: 52, marginBottom: 12 }}>{hasFailures ? '⚠️' : '🎉'}</div>
-          <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: hasFailures ? '#b45309' : '#059669' }}>
+          <div style={{ fontSize: 52, marginBottom: 12 }}>{hasFailures ? <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 52 }} /> : <Icon iconName="Completed" aria-hidden="true" style={{ fontSize: 52 }} />}</div>
+          <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: hasFailures ? clay.pillWarnText : clay.pillActiveText }}>
             {hasFailures ? 'Vessel Folders Provisioned (with some issues)' : 'Vessel Folders Successfully Provisioned!'}
           </h3>
-          <p style={{ margin: '0 0 20px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+          <p style={{ margin: '0 0 20px', fontSize: 13, color: 'var(--vdms-text-muted)', lineHeight: 1.5 }}>
             {hasFailures ? (
               <><strong>&quot;{vessel.name}&quot;</strong> has been provisioned, but {failedFolders.length} folder{failedFolders.length === 1 ? '' : 's'} could not be created.</>
             ) : (
@@ -1340,8 +1340,8 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
             )}
           </p>
           {hasFailures ? (
-            <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 12, color: '#92400e', textAlign: 'left' }}>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>⚠️ Folders that failed:</div>
+            <div style={{ background: clay.pillWarnBg, border: `1px solid ${clay.pillWarnBg}`, borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 12, color: clay.pillWarnText, textAlign: 'left' }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> Folders that failed:</div>
               <div style={{ maxHeight: 100, overflowY: 'auto' }}>
                 {failedFolders.map((r, i) => (
                   <div key={`${r.path}-${i}`} title={r.error}>• {r.path.split('/').pop()}</div>
@@ -1351,10 +1351,10 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
               {retrying ? (
                 <div style={{
                   marginTop: 10, display: 'flex', alignItems: 'center', gap: 8,
-                  background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd',
+                  background: clay.accentSoft, color: clay.accentDark, border: `1px solid ${clay.accentSoft}`,
                   borderRadius: 8, padding: '7px 12px',
                 }}>
-                  <span style={{ fontSize: 15 }}>⏳</span>
+                  <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 15 }} />
                   <span style={{ fontWeight: 600 }}>
                     Retrying provisioning…
                   </span>
@@ -1365,33 +1365,33 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
                     id="btn-retry-failed-folders"
                     onClick={handleRetryInPlace}
                     style={{
-                      background: 'linear-gradient(135deg,#f59e0b,#d97706)',
-                      color: '#fff', border: 'none', borderRadius: 8,
+                      background: `linear-gradient(135deg,${clay.pillWarnText},${clay.pillWarnText})`,
+                      color: DMS_ON_ACCENT, border: 'none', borderRadius: 8,
                       padding: '8px 16px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
                       display: 'inline-flex', alignItems: 'center', gap: 6,
                       boxShadow: '0 3px 8px rgba(217,119,6,0.35)',
                     }}
                   >
-                    🔁 Retry Provisioning
+                    <Icon iconName="Refresh" aria-hidden="true" style={{ fontSize: 12 }} /> Retry Provisioning
                   </button>
                 </div>
               )}
             </div>
           ) : (
-            <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 12, color: '#065f46', textAlign: 'left' }}>
-              <div style={{ fontWeight: 700, marginBottom: 4 }}>✅ Provisioning Complete</div>
+            <div style={{ background: clay.pillActiveBg, border: `1px solid ${clay.pillActiveBg}`, borderRadius: 10, padding: '12px 16px', marginBottom: 16, fontSize: 12, color: clay.pillActiveText, textAlign: 'left' }}>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} /> Provisioning Complete</div>
               <div>• SharePoint DMS department subfolders created</div>
               <div>• IMO: {vessel.imo || '—'}</div>
               <div>• Vessel is ready for document uploads</div>
             </div>
           )}
           {/* Auto-close countdown */}
-          <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 14 }}>
+          <div style={{ fontSize: 12, color: 'var(--vdms-text-faint)', marginBottom: 14 }}>
             Auto-closing in {autoClose}s…
           </div>
-          <div style={{ background: '#e2e8f0', borderRadius: 10, height: 4, overflow: 'hidden', marginBottom: 20 }}>
+          <div style={{ background: 'var(--vdms-line)', borderRadius: 10, height: 4, overflow: 'hidden', marginBottom: 20 }}>
             <div style={{
-              background: '#10b981', height: '100%', borderRadius: 10,
+              background: clay.pillActiveText, height: '100%', borderRadius: 10,
               width: `${(autoClose / 10) * 100}%`, transition: 'width 1s linear',
             }} />
           </div>
@@ -1399,7 +1399,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
             <button
               onClick={handleClose}
               style={{
-                background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1',
+                background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-muted)', border: '1px solid var(--vdms-line-strong)',
                 borderRadius: 10, padding: '10px 22px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
               }}
             >
@@ -1411,14 +1411,14 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
-                  background: 'linear-gradient(135deg, #10b981, #059669)',
-                  color: '#fff', border: 'none', borderRadius: 10,
+                  background: clay.pillActiveText,
+                  color: DMS_ON_ACCENT, border: 'none', borderRadius: 10,
                   padding: '10px 22px', fontSize: 13, fontWeight: 700,
                   textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6,
                   boxShadow: '0 4px 12px rgba(16,185,129,0.3)',
                 }}
               >
-                📂 Open Folder in SharePoint ↗
+                <Icon iconName="OpenFolderHorizontal" aria-hidden="true" style={{ fontSize: 13 }} /> Open Folder in SharePoint ↗
               </a>
             )}
           </div>
@@ -1429,31 +1429,31 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
     if (!provisioning && !done && isProvisioned) {
       return (
         <div style={{ textAlign: 'center', padding: '8px 0' }}>
-          <div style={{ fontSize: 48, marginBottom: 10 }}>✅</div>
-          <h3 style={{ margin: '0 0 6px', fontSize: 19, fontWeight: 700, color: '#15803d' }}>
+          <div style={{ fontSize: 48, marginBottom: 10 }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 48 }} /></div>
+          <h3 style={{ margin: '0 0 6px', fontSize: 19, fontWeight: 700, color: clay.pillActiveText }}>
             Folders Already Provisioned
           </h3>
-          <p style={{ margin: '0 0 16px', fontSize: 13, color: '#475569', lineHeight: 1.5 }}>
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: 'var(--vdms-text-muted)', lineHeight: 1.5 }}>
             The standard SharePoint DMS folder tree for <strong>&quot;{vessel.name}&quot;</strong> is already provisioned and registered.
           </p>
 
-          <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 12, color: '#166534', textAlign: 'left' }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>📋 Provisioned Folder Structure:</div>
+          <div style={{ background: clay.pillActiveBg, border: `1px solid ${clay.pillActiveBg}`, borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 12, color: clay.pillActiveText, textAlign: 'left' }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}><Icon iconName="ClipboardList" aria-hidden="true" style={{ fontSize: 12 }} /> Provisioned Folder Structure:</div>
             <div>• Technical &amp; Crewing — Active</div>
             <div>• Commercial &amp; Chartering — Active</div>
             <div>• Insurance — Active</div>
           </div>
 
           {error && (
-            <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#dc2626', display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span>⚠️</span><span>{error}</span>
+            <div style={{ background: clay.pillDangerBg, border: `1px solid ${clay.pillDangerBg}`, borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: clay.pillDangerText, display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /><span>{error}</span>
             </div>
           )}
 
           <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
             <button
               onClick={handleClose}
-              style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+              style={{ background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-muted)', border: '1px solid var(--vdms-line-strong)', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
             >
               Close
             </button>
@@ -1463,7 +1463,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
-                  background: clay.accentGradient, color: '#fff',
+                  background: clay.accentGradient, color: DMS_ON_ACCENT,
                   border: 'none', borderRadius: 8, padding: '10px 20px',
                   fontSize: 13, fontWeight: 700, textDecoration: 'none',
                   display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -1479,7 +1479,7 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
                 borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
               }}
             >
-              🔄 Re-Provision Folders
+              <Icon iconName="Refresh" aria-hidden="true" style={{ fontSize: 13 }} /> Re-Provision Folders
             </button>
           </div>
         </div>
@@ -1489,32 +1489,32 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
     return (
       <>
         <div style={{ textAlign: 'center', marginBottom: 16 }}>
-          <div style={{ fontSize: 44, marginBottom: 10 }}>📁</div>
-          <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: '#0f172a' }}>
+          <div style={{ fontSize: 44, marginBottom: 10 }}><Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 44 }} /></div>
+          <h3 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 700, color: 'var(--vdms-text)' }}>
             Provision SharePoint Folders
           </h3>
-          <p style={{ margin: '0 0 12px', fontSize: 13, color: '#64748b', lineHeight: 1.5 }}>
+          <p style={{ margin: '0 0 12px', fontSize: 13, color: 'var(--vdms-text-muted)', lineHeight: 1.5 }}>
             This will create the full DMS folder hierarchy for <strong>&quot;{ vessel.name }&quot;</strong> in SharePoint Online across all departments.
           </p>
         </div>
 
         <div style={{ background: clay.accentSoft, border: `1px solid ${clay.accentSoft}`, borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 12, color: clay.accentDark, textAlign: 'left' }}>
-          <div style={{ fontWeight: 700, marginBottom: 4 }}>📋 What will be created:</div>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}><Icon iconName="ClipboardList" aria-hidden="true" style={{ fontSize: 12 }} /> What will be created:</div>
           <div>• Technical &amp; Crewing — monthly sub-folders + categories</div>
           <div>• Commercial — contract and invoice folders</div>
           <div>• Insurance — certificate and policy folders</div>
         </div>
 
         {error && (
-          <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#dc2626', display: 'flex', gap: 8, alignItems: 'center' }}>
-            <span>⚠️</span><span>{error}</span>
+          <div style={{ background: clay.pillDangerBg, border: `1px solid ${clay.pillDangerBg}`, borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 12, color: clay.pillDangerText, display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /><span>{error}</span>
           </div>
         )}
 
         <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
           <button
             onClick={handleClose}
-            style={{ background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 8, padding: '10px 22px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+            style={{ background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-muted)', border: '1px solid var(--vdms-line-strong)', borderRadius: 8, padding: '10px 22px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
           >
             Cancel
           </button>
@@ -1522,12 +1522,12 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
             onClick={handleProvision}
             style={{
               background: clay.accentGradient,
-              color: '#fff', border: 'none', borderRadius: 8,
+              color: DMS_ON_ACCENT, border: 'none', borderRadius: 8,
               padding: '10px 26px', fontSize: 13, fontWeight: 700, cursor: 'pointer',
               boxShadow: clay.shadowButton,
             }}
           >
-            📁 Start Provisioning
+  <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 13 }} /> Start Provisioning
           </button>
         </div>
       </>
@@ -1549,14 +1549,14 @@ function ProvisionModalContent({ host, dlg }: { host: VesselEmail; dlg: any }): 
       onClick={e => { if (e.target === e.currentTarget) handleClose(); }}
     >
       <div style={{
-        background: '#fff', borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
+        background: clay.surface, borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.28)',
         padding: isMobile ? 16 : 32, width: '100%', maxWidth: 480, maxHeight: '90vh', overflowY: 'auto', position: 'relative',
       }}>
         <button
           onClick={handleClose}
-          style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: '#94a3b8' }}
+          style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: 'var(--vdms-text-faint)' }}
           title="Close (provisioning continues in the background)"
-        >✕</button>
+        ><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 18 }} /></button>
         {renderBody()}
       </div>
     </div>
@@ -1693,7 +1693,7 @@ function FileAlertDialogContent({ host, dlg }: { host: VesselEmail; dlg: import(
 
   const selectStyle: React.CSSProperties = {
     width: '100%', padding: '9px 12px', borderRadius: 8,
-    border: '1px solid #bfdbfe', fontSize: 12, background: '#fff',
+    border: `1px solid ${clay.accentSoft}`, fontSize: 12, background: clay.surface,
     outline: 'none', marginBottom: 10, boxSizing: 'border-box',
   };
 
@@ -1703,67 +1703,67 @@ function FileAlertDialogContent({ host, dlg }: { host: VesselEmail; dlg: import(
       style={{ position: 'fixed', inset: 0, zIndex: 100010, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: isMobile ? 10 : 16 }}
       onClick={e => { if (e.target === e.currentTarget && !moving) handleClose(); }}
     >
-      <div style={{ background: '#fff', borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.28)', padding: isMobile ? 16 : 32, width: '100%', maxWidth: 520, maxHeight: '90vh', overflowY: 'auto', position: 'relative' }}>
+      <div style={{ background: clay.surface, borderRadius: 20, boxShadow: '0 24px 64px rgba(0,0,0,0.28)', padding: isMobile ? 16 : 32, width: '100%', maxWidth: 520, maxHeight: '90vh', overflowY: 'auto', position: 'relative' }}>
         {!moving && (
-          <button onClick={handleClose} style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: '#94a3b8' }} title="Close">✕</button>
+          <button onClick={handleClose} style={{ position: 'absolute', top: 10, right: 10, background: 'none', border: 'none', minHeight: 44, minWidth: 44, fontSize: 18, cursor: 'pointer', color: 'var(--vdms-text-faint)' }} title="Close"><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 18 }} /></button>
         )}
 
         {moved ? (
           <div style={{ textAlign: 'center', padding: '12px 0' }}>
-            <div style={{ fontSize: 52, marginBottom: 12 }}>✅</div>
-            <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#059669' }}>File Moved Successfully!</h3>
-            <p style={{ margin: '0 0 8px', fontSize: 13, color: '#475569' }}>
+            <div style={{ fontSize: 52, marginBottom: 12 }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 52 }} /></div>
+            <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: clay.pillActiveText }}>File Moved Successfully!</h3>
+            <p style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--vdms-text-muted)' }}>
               <strong>&quot;{fileName}&quot;</strong> has been moved to the selected DMS folder.
             </p>
             {selGroupKey && (() => {
               const t = subFolderOptions.find(o => o.groupKey === selGroupKey);
-              return t ? <p style={{ margin: '0 0 20px', fontSize: 12, color: '#64748b', fontFamily: 'monospace' }}>📂 {t.subFolderPath}</p> : null;
+              return t ? <p style={{ margin: '0 0 20px', fontSize: 12, color: 'var(--vdms-text-muted)', fontFamily: 'monospace' }}><Icon iconName="OpenFolderHorizontal" aria-hidden="true" style={{ fontSize: 12 }} /> {t.subFolderPath}</p> : null;
             })()}
-            <button onClick={handleClose} style={{ background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 28px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Done</button>
+            <button onClick={handleClose} style={{ background: `linear-gradient(135deg,${clay.pillActiveText},${clay.pillActiveText})`, color: DMS_ON_ACCENT, border: 'none', borderRadius: 10, padding: '10px 28px', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>Done</button>
           </div>
         ) : (
           <>
             {/* Header */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16 }}>
-              <div style={{ width: 48, height: 48, borderRadius: 12, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, flexShrink: 0 }}>⚠️</div>
+              <div style={{ width: 48, height: 48, borderRadius: 12, background: clay.pillWarnBg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, flexShrink: 0 }}><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 24 }} /></div>
               <div>
-                <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: '#0f172a' }}>File Uploaded Outside DMS Structure</h3>
-                <p style={{ margin: '3px 0 0', fontSize: 12, color: '#64748b' }}>Detected in SharePoint but not inside a standard DMS folder.</p>
+                <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: 'var(--vdms-text)' }}>File Uploaded Outside DMS Structure</h3>
+                <p style={{ margin: '3px 0 0', fontSize: 12, color: 'var(--vdms-text-muted)' }}>Detected in SharePoint but not inside a standard DMS folder.</p>
               </div>
             </div>
 
             {/* File info */}
-            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 14px', marginBottom: 16 }}>
+            <div style={{ background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-line)', borderRadius: 10, padding: '10px 14px', marginBottom: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 18 }}>📄</span>
-                <span style={{ fontWeight: 700, fontSize: 13, color: '#0f172a', wordBreak: 'break-all' }}>{fileName}</span>
+                <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 18 }} />
+                <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--vdms-text)', wordBreak: 'break-all' }}>{fileName}</span>
               </div>
-              <div style={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace', wordBreak: 'break-all' }}>📂 {spoPath}</div>
+              <div style={{ fontSize: 11, color: 'var(--vdms-text-muted)', fontFamily: 'monospace', wordBreak: 'break-all' }}><Icon iconName="OpenFolderHorizontal" aria-hidden="true" style={{ fontSize: 11 }} /> {spoPath}</div>
             </div>
 
             {error && (
-              <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 12, color: '#dc2626' }}>⚠️ {error}</div>
+              <div style={{ background: clay.pillDangerBg, border: `1px solid ${clay.pillDangerBg}`, borderRadius: 8, padding: '8px 12px', marginBottom: 12, fontSize: 12, color: clay.pillDangerText }}><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> {error}</div>
             )}
 
-            <p style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600, color: '#0f172a' }}>What would you like to do?</p>
+            <p style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600, color: 'var(--vdms-text)' }}>What would you like to do?</p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {/* Keep as is */}
               <button
                 onClick={handleClose}
-                style={{ background: '#f8fafc', color: '#334155', border: '2px solid #e2e8f0', borderRadius: 10, padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}
+                style={{ background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text)', border: '2px solid var(--vdms-line)', borderRadius: 10, padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}
               >
-                <span style={{ fontSize: 24 }}>📌</span>
+                <Icon iconName="Pin" aria-hidden="true" style={{ fontSize: 24 }} />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a', marginBottom: 2 }}>Keep as is</div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>Leave the file where it is. The alert stays in the bell for reference.</div>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--vdms-text)', marginBottom: 2 }}>Keep as is</div>
+                  <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>Leave the file where it is. The alert stays in the bell for reference.</div>
                 </div>
               </button>
 
               {/* Move to DMS subfolder — cascading selects */}
-              <div style={{ background: 'linear-gradient(135deg,#eff6ff,#dbeafe)', border: '2px solid #bfdbfe', borderRadius: 10, padding: '14px 16px' }}>
+              <div style={{ background: `linear-gradient(135deg,${clay.accentSoft},${clay.accentSoft})`, border: `2px solid ${clay.accentSoft}`, borderRadius: 10, padding: '14px 16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-                  <span style={{ fontSize: 24 }}>📁</span>
+                  <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 24 }} />
                   <div style={{ fontWeight: 700, fontSize: 13, color: clay.accentDark }}>Move to DMS Subfolder</div>
                 </div>
 
@@ -1794,12 +1794,12 @@ function FileAlertDialogContent({ host, dlg }: { host: VesselEmail; dlg: import(
                   style={{
                     width: '100%',
                     background: canMove ? clay.accentGradient : clay.accentSoft,
-                    color: '#fff', border: 'none', borderRadius: 8, padding: '10px',
+                    color: DMS_ON_ACCENT, border: 'none', borderRadius: 8, padding: '10px',
                     fontSize: 13, fontWeight: 700,
                     cursor: canMove ? 'pointer' : 'not-allowed',
                   }}
                 >
-                  {moving ? '⏳ Moving…' : '📁 Move File'}
+                  {moving ? <><Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 13 }} /> Moving…</> : <><Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 13 }} /> Move File</>}
                 </button>
               </div>
             </div>
@@ -1872,30 +1872,30 @@ function renderVesselActionPicker(host: VesselEmail): React.ReactElement {
       style={{ position: 'fixed', inset: 0, zIndex: 100010, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: isMobile ? 10 : 16 }}
       onClick={e => { if (e.target === e.currentTarget) host.setState({ vesselActionPicker: null }); }}
     >
-      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: isEdit ? 560 : 1020, maxHeight: '90vh', overflow: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.28)' }}>
-        <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ background: clay.surface, borderRadius: 16, width: '100%', maxWidth: isEdit ? 560 : 1020, maxHeight: '90vh', overflow: 'hidden', boxShadow: '0 24px 64px rgba(0,0,0,0.28)' }}>
+        <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid var(--vdms-line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
-            <h3 style={{ margin: 0, fontSize: 18, color: '#0f172a' }}>{isEdit ? 'Select Vessel to Edit' : 'Select Vessel to Delete'}</h3>
-            <p style={{ margin: '5px 0 0', fontSize: 12, color: '#64748b' }}>
+            <h3 style={{ margin: 0, fontSize: 18, color: 'var(--vdms-text)' }}>{isEdit ? 'Select Vessel to Edit' : 'Select Vessel to Delete'}</h3>
+            <p style={{ margin: '5px 0 0', fontSize: 12, color: 'var(--vdms-text-muted)' }}>
               {isEdit ? 'Choose a vessel to update its details.' : 'Choose one or more vessels to move their folders and contents to the Recycle Bin.'}
             </p>
           </div>
-          <button onClick={() => host.setState({ vesselActionPicker: null })} style={{ border: 'none', background: 'none', color: '#64748b', fontSize: 20, minHeight: 44, minWidth: 44, cursor: 'pointer' }} title="Close">✕</button>
+          <button onClick={() => host.setState({ vesselActionPicker: null })} style={{ border: 'none', background: 'none', color: 'var(--vdms-text-muted)', fontSize: 20, minHeight: 44, minWidth: 44, cursor: 'pointer' }} title="Close"><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 20 }} /></button>
         </div>
         {isEdit ? (
           <div style={{ padding: 16, maxHeight: 'calc(84vh - 100px)', overflowY: 'auto' }}>
             {host.state.vessels.length === 0 ? (
-              <div style={{ padding: 20, textAlign: 'center', color: '#64748b', fontSize: 13 }}>No vessels are available.</div>
+              <div style={{ padding: 20, textAlign: 'center', color: 'var(--vdms-text-muted)', fontSize: 13 }}>No vessels are available.</div>
             ) : host.state.vessels.map(vessel => (
               <button
                 key={vessel.id}
                 onClick={() => host._openEditVessel(vessel)}
-                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', marginBottom: 8, border: '1px solid #e2e8f0', borderRadius: 10, background: '#fff', textAlign: 'left', cursor: 'pointer' }}
+                style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', marginBottom: 8, border: '1px solid var(--vdms-line)', borderRadius: 10, background: clay.surface, textAlign: 'left', cursor: 'pointer' }}
               >
-                <span style={{ width: 36, height: 36, borderRadius: 8, background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>✏️</span>
+                <span style={{ width: 36, height: 36, borderRadius: 8, background: clay.accentSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}><Icon iconName="Edit" aria-hidden="true" style={{ fontSize: 18 }} /></span>
                 <span style={{ minWidth: 0, flex: 1 }}>
-                  <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
-                  <span style={{ display: 'block', marginTop: 3, fontSize: 11, color: '#64748b' }}>{vessel.vessel_type || 'Vessel'}{vessel.imo ? ` | IMO ${vessel.imo}` : ''}</span>
+                  <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: 'var(--vdms-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
+                  <span style={{ display: 'block', marginTop: 3, fontSize: 11, color: 'var(--vdms-text-muted)' }}>{vessel.vessel_type || 'Vessel'}{vessel.imo ? ` | IMO ${vessel.imo}` : ''}</span>
                 </span>
                 <span style={{ color: clay.accentDark, fontSize: 12, fontWeight: 700 }}>Edit →</span>
               </button>
@@ -1910,14 +1910,14 @@ function renderVesselActionPicker(host: VesselEmail): React.ReactElement {
               height: isNarrow ? 'calc(84vh - 132px)' : 'calc(84vh - 132px)',
               minHeight: isNarrow ? 360 : 420,
             }}>
-              <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#fff' }}>
-                <div style={{ padding: '12px 14px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'linear-gradient(180deg,#fff,#f8fafc)' }}>
-                  <span style={{ fontSize: 12, color: '#334155', fontWeight: 700 }}>Vessel List</span>
+              <div style={{ border: '1px solid var(--vdms-line)', borderRadius: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: clay.surface }}>
+                <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--vdms-line)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'linear-gradient(180deg,var(--vdms-surface),var(--vdms-surface-alt))' }}>
+                  <span style={{ fontSize: 12, color: 'var(--vdms-text)', fontWeight: 700 }}>Vessel List</span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>{selectedDeleteCount} selected</span>
+                    <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)', fontWeight: 600 }}>{selectedDeleteCount} selected</span>
                     <button
                       onClick={() => selectAllForDelete(!allDeleteSelected)}
-                      style={{ border: '1px solid #cbd5e1', background: '#fff', color: '#334155', borderRadius: 8, padding: '5px 9px', fontSize: 12, cursor: 'pointer' }}
+                      style={{ border: '1px solid var(--vdms-line-strong)', background: clay.surface, color: 'var(--vdms-text)', borderRadius: 8, padding: '5px 9px', fontSize: 12, cursor: 'pointer' }}
                     >
                       {allDeleteSelected ? 'Clear all' : 'Select all'}
                     </button>
@@ -1926,7 +1926,7 @@ function renderVesselActionPicker(host: VesselEmail): React.ReactElement {
 
                 <div style={{ padding: 10, overflowY: 'auto', flex: 1 }}>
                   {host.state.vessels.length === 0 ? (
-                    <div style={{ padding: 20, textAlign: 'center', color: '#64748b', fontSize: 13 }}>No vessels are available.</div>
+                    <div style={{ padding: 20, textAlign: 'center', color: 'var(--vdms-text-muted)', fontSize: 13 }}>No vessels are available.</div>
                   ) : host.state.vessels.map(vessel => {
                     const checked = selectedDeleteIds.has(vessel.id);
                     return (
@@ -1940,9 +1940,9 @@ function renderVesselActionPicker(host: VesselEmail): React.ReactElement {
                           gap: 10,
                           padding: '10px 12px',
                           marginBottom: 8,
-                          border: checked ? '1px solid #fca5a5' : '1px solid #e2e8f0',
+                          border: checked ? `1px solid ${clay.pillDangerBg}` : '1px solid var(--vdms-line)',
                           borderRadius: 10,
-                          background: checked ? '#fff1f2' : '#fff',
+                          background: checked ? clay.pillDangerBg : 'var(--vdms-surface)',
                           cursor: 'pointer',
                         }}
                       >
@@ -1952,18 +1952,18 @@ function renderVesselActionPicker(host: VesselEmail): React.ReactElement {
                           onChange={() => toggleDeleteSelection(vessel.id)}
                           onClick={e => e.stopPropagation()}
                           aria-label={`Select ${vessel.name} for deletion`}
-                          style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#dc2626' }}
+                          style={{ width: 16, height: 16, cursor: 'pointer', accentColor: clay.pillDangerText }}
                         />
                         <span style={{ minWidth: 0 }}>
-                          <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
-                          <span style={{ display: 'block', marginTop: 2, fontSize: 11, color: '#64748b' }}>{vessel.vessel_type || 'Vessel'}{vessel.imo ? ` | IMO ${vessel.imo}` : ''}</span>
+                          <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: 'var(--vdms-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
+                          <span style={{ display: 'block', marginTop: 2, fontSize: 11, color: 'var(--vdms-text-muted)' }}>{vessel.vessel_type || 'Vessel'}{vessel.imo ? ` | IMO ${vessel.imo}` : ''}</span>
                         </span>
                         <button
                           onClick={e => {
                             e.stopPropagation();
                             openSingleDeleteModal(vessel);
                           }}
-                          style={{ border: '1px solid #fecaca', background: '#fff', color: '#dc2626', borderRadius: 8, padding: '5px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+                          style={{ border: `1px solid ${clay.pillDangerBg}`, background: clay.surface, color: clay.pillDangerText, borderRadius: 8, padding: '5px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
                           title="Delete this vessel only"
                         >
                           Delete only
@@ -1974,13 +1974,13 @@ function renderVesselActionPicker(host: VesselEmail): React.ReactElement {
                 </div>
               </div>
 
-              <div style={{ border: '1px solid #fecdd3', borderRadius: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'linear-gradient(180deg,#fff1f2,#fff)' }}>
-                <div style={{ padding: '12px 14px', borderBottom: '1px solid #fecdd3', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <span style={{ fontSize: 12, color: '#9f1239', fontWeight: 700 }}>Selected For Deletion</span>
+              <div style={{ border: `1px solid ${clay.pillDangerBg}`, borderRadius: 12, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: `linear-gradient(180deg,${clay.pillDangerBg},var(--vdms-surface))` }}>
+                <div style={{ padding: '12px 14px', borderBottom: `1px solid ${clay.pillDangerBg}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ fontSize: 12, color: clay.pillDangerText, fontWeight: 700 }}>Selected For Deletion</span>
                   <button
                     onClick={proceedToDeleteModal}
                     disabled={selectedDeleteCount === 0}
-                    style={{ background: selectedDeleteCount > 0 ? 'linear-gradient(135deg, #ef4444, #dc2626)' : '#fca5a5', color: '#fff', border: 'none', borderRadius: 8, padding: '7px 11px', fontSize: 12, fontWeight: 700, cursor: selectedDeleteCount > 0 ? 'pointer' : 'not-allowed' }}
+                    style={{ background: selectedDeleteCount > 0 ? clay.pillDangerText : clay.pillDangerBg, color: DMS_ON_ACCENT, border: 'none', borderRadius: 8, padding: '7px 11px', fontSize: 12, fontWeight: 700, cursor: selectedDeleteCount > 0 ? 'pointer' : 'not-allowed' }}
                   >
                     Delete Selected ({selectedDeleteCount})
                   </button>
@@ -1988,19 +1988,19 @@ function renderVesselActionPicker(host: VesselEmail): React.ReactElement {
 
                 <div style={{ padding: 12, overflowY: 'auto', flex: 1 }}>
                   {selectedDeleteCount === 0 ? (
-                    <div style={{ marginTop: 8, background: '#fff', border: '1px dashed #fda4af', borderRadius: 10, padding: '12px 12px', color: '#9f1239', fontSize: 12, lineHeight: 1.45 }}>
+                    <div style={{ marginTop: 8, background: clay.surface, border: `1px dashed ${clay.pillDangerBg}`, borderRadius: 10, padding: '12px 12px', color: clay.pillDangerText, fontSize: 12, lineHeight: 1.45 }}>
                       Select one or more vessels from the left list to enable bulk delete.
                     </div>
                   ) : (
                     selectedDeleteVessels.map(vessel => (
-                      <div key={vessel.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 10px', marginBottom: 8, border: '1px solid #fecdd3', borderRadius: 9, background: '#fff' }}>
+                      <div key={vessel.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '8px 10px', marginBottom: 8, border: `1px solid ${clay.pillDangerBg}`, borderRadius: 9, background: clay.surface }}>
                         <span style={{ minWidth: 0 }}>
-                          <span style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#881337', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
-                          <span style={{ display: 'block', marginTop: 2, fontSize: 11, color: '#9f1239' }}>{vessel.vessel_type || 'Vessel'}{vessel.imo ? ` | IMO ${vessel.imo}` : ''}</span>
+                          <span style={{ display: 'block', fontSize: 13, fontWeight: 700, color: clay.pillDangerText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vessel.name}</span>
+                          <span style={{ display: 'block', marginTop: 2, fontSize: 11, color: clay.pillDangerText }}>{vessel.vessel_type || 'Vessel'}{vessel.imo ? ` | IMO ${vessel.imo}` : ''}</span>
                         </span>
                         <button
                           onClick={() => toggleDeleteSelection(vessel.id)}
-                          style={{ border: 'none', background: 'transparent', color: '#e11d48', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+                          style={{ border: 'none', background: 'transparent', color: clay.pillDangerText, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
                           title="Remove from selected"
                         >
                           Remove
@@ -2011,13 +2011,13 @@ function renderVesselActionPicker(host: VesselEmail): React.ReactElement {
                 </div>
 
                 {!!host.state.modalError && (
-                  <div style={{ margin: '0 12px 12px', background: '#fde7e9', color: '#a4262c', padding: 8, borderRadius: 6, fontSize: 12 }}>{host.state.modalError}</div>
+                  <div style={{ margin: '0 12px 12px', background: clay.pillDangerBg, color: clay.pillDangerText, padding: 8, borderRadius: 6, fontSize: 12 }}>{host.state.modalError}</div>
                 )}
 
                 <div style={{ padding: '0 12px 12px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                   <button
                     onClick={() => host.setState({ vesselActionPicker: null, modalError: null })}
-                    style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#334155', borderRadius: 8, padding: '7px 12px', fontSize: 12, cursor: 'pointer' }}
+                    style={{ background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-line-strong)', color: 'var(--vdms-text)', borderRadius: 8, padding: '7px 12px', fontSize: 12, cursor: 'pointer' }}
                   >
                     Close
                   </button>
@@ -2174,30 +2174,29 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
 
         {/* ── Header ── */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: 28, fontWeight: 700, color: clay.text, display: 'flex', alignItems: 'center', gap: 12 }}>
-              Vessels
-              {vessels.length > 0 && (
-                <span style={{ background: clay.accentGradient, color: '#fff', borderRadius: 20, padding: '3px 14px', fontSize: 14, fontWeight: 700, boxShadow: clay.shadowIcon }}>
-                  {vessels.length}
-                </span>
-              )}
-              {(vesselLevelFolders.length + vesselLevelFiles.length) > 0 && (
-                <span
-                  onClick={() => host._toggleAlertBell()}
-                  style={{ background: '#fef3c7', color: '#92400e', borderRadius: 20, padding: '3px 12px', fontSize: 12, fontWeight: 700, border: '1px solid #f59e0b', display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
-                  title="SPO items detected outside DMS structure — click to view in Alerts"
-                >
-                  ⚠️ {vesselLevelFolders.length + vesselLevelFiles.length} SPO item{vesselLevelFolders.length + vesselLevelFiles.length !== 1 ? 's' : ''} — view in Alerts →
-                </span>
-              )}
-            </h2>
-            <p style={{ margin: '6px 0 0', fontSize: 14, color: clay.textMuted }}>
-              Manage fleet vessels, provision SharePoint folders, and view documents.
-            </p>
-          </div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ marginBottom: 24 }}>
+          <DmsPageHeader
+            title={(
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
+                Vessels
+                {vessels.length > 0 && (
+                  <span style={{ background: clay.accentGradient, color: DMS_ON_ACCENT, borderRadius: 20, padding: '3px 14px', fontSize: 14, fontWeight: 700, boxShadow: clay.shadowIcon }}>
+                    {vessels.length}
+                  </span>
+                )}
+                {(vesselLevelFolders.length + vesselLevelFiles.length) > 0 && (
+                  <span
+                    onClick={() => host._toggleAlertBell()}
+                    style={{ background: dmsTone('warning').bg, color: dmsTone('warning').fg, borderRadius: 20, padding: '3px 12px', fontSize: 12, fontWeight: 700, border: `1px solid ${dmsTone('warning').bg}`, display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}
+                    title="SPO items detected outside DMS structure — click to view in Alerts"
+                  >
+                    <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> {vesselLevelFolders.length + vesselLevelFiles.length} SPO item{vesselLevelFolders.length + vesselLevelFiles.length !== 1 ? 's' : ''} — view in Alerts →
+                  </span>
+                )}
+              </span>
+            )}
+            subtitle="Manage fleet vessels, provision SharePoint folders, and view documents."
+          >
             <button
               onClick={() => host._goToView('vessels').catch(() => undefined)}
               title="Reload vessel list from database"
@@ -2222,9 +2221,9 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
               onClick={() => host._openVesselActionPicker('delete')}
               title="Delete vessel"
               aria-label="Delete vessel"
-              onMouseEnter={e => { e.currentTarget.style.background = '#f6dbd5'; e.currentTarget.style.boxShadow = '10px 10px 22px rgba(168,90,66,0.22), -10px -10px 20px rgba(255,255,255,0.92)'; }}
+              onMouseEnter={e => { e.currentTarget.style.background = dmsTone('danger').bg; e.currentTarget.style.boxShadow = clay.shadowRaisedHover; }}
               onMouseLeave={e => { e.currentTarget.style.background = clay.surface; e.currentTarget.style.boxShadow = clay.shadowRaised; }}
-              style={{ width: 42, height: 42, padding: 0, background: clay.surface, color: '#a4262c', border: 'none', borderRadius: '50%', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxShadow: clay.shadowRaised, transition: 'all 0.18s ease' }}
+              style={{ width: 42, height: 42, padding: 0, background: clay.surface, color: dmsTone('danger').fg, border: 'none', borderRadius: '50%', fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxShadow: clay.shadowRaised, transition: 'all 0.18s ease' }}
             >
               <Icon iconName="Delete" />
             </button>
@@ -2236,31 +2235,31 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
               onClick={() => host._openCreate()}
               title="Create new vessel"
               aria-label="Create new vessel"
-              onMouseEnter={e => { e.currentTarget.style.background = clay.accentGradientHover; e.currentTarget.style.boxShadow = '0 14px 26px rgba(199,122,62,0.42), inset 0 2px 3px rgba(255,255,255,0.45), inset 0 -3px 6px rgba(150,89,42,0.28)'; }}
+              onMouseEnter={e => { e.currentTarget.style.background = clay.accentGradientHover; e.currentTarget.style.boxShadow = clay.shadowButton; }}
               onMouseLeave={e => { e.currentTarget.style.background = clay.accentGradient; e.currentTarget.style.boxShadow = clay.shadowButton; }}
-              style={{ width: 42, height: 42, padding: 0, background: clay.accentGradient, color: '#fff', border: 'none', borderRadius: '50%', fontSize: 18, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxShadow: clay.shadowButton, transition: 'all 0.18s ease' }}
+              style={{ width: 42, height: 42, padding: 0, background: clay.accentGradient, color: DMS_ON_ACCENT, border: 'none', borderRadius: '50%', fontSize: 18, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxShadow: clay.shadowButton, transition: 'all 0.18s ease' }}
             >
               <Icon iconName="Add" />
             </button>
-          </div>
+          </DmsPageHeader>
         </div>
 
         {/* ── Search & Filter Bar ── */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
           <div style={{ position: 'relative', flex: '1 1 220px', minWidth: 180 }}>
-            <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 14 }}>🔍</span>
+            <Icon iconName="Search" aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--vdms-text-faint)', fontSize: 14 }} />
             <input
               type="text"
               placeholder="Search by name, IMO, type, shipyard…"
               value={vesselsSearch}
               onChange={e => host.setState({ vesselsSearch: e.target.value })}
-              style={{ width: '100%', padding: '10px 14px 10px 38px', borderRadius: clay.radiusButton, border: 'none', fontSize: 13, outline: 'none', boxSizing: 'border-box', background: clay.surface, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.22), inset -2px -2px 4px rgba(255,255,255,0.9)', color: clay.text }}
+              style={{ ...dmsControlStyle(), width: '100%', padding: '10px 14px 10px 38px', boxSizing: 'border-box' }}
             />
           </div>
           <select
             value={vesselStatusFilter}
             onChange={e => host.setState({ vesselStatusFilter: e.target.value })}
-            style={{ padding: '10px 14px', borderRadius: clay.radiusButton, border: 'none', fontSize: 13, background: clay.surface, outline: 'none', minWidth: 130, color: clay.text, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.22), inset -2px -2px 4px rgba(255,255,255,0.9)' }}
+            style={{ ...dmsControlStyle(), padding: '10px 14px', minWidth: 130 }}
           >
             <option value="all">All Status</option>
             <option value="Active">Active</option>
@@ -2270,7 +2269,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
           <select
             value={vesselTypeFilter || 'all'}
             onChange={e => host.setState({ vesselTypeFilter: e.target.value })}
-            style={{ padding: '10px 14px', borderRadius: clay.radiusButton, border: 'none', fontSize: 13, background: clay.surface, outline: 'none', minWidth: 140, color: clay.text, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.22), inset -2px -2px 4px rgba(255,255,255,0.9)' }}
+            style={{ ...dmsControlStyle(), padding: '10px 14px', minWidth: 140 }}
           >
             <option value="all">All Types</option>
             {allTypes.map(t => <option key={t} value={t}>{t}</option>)}
@@ -2287,7 +2286,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
               // nothing and sent no request).
               host.setState({ vesselSiteFilter: e.target.value }, () => { void host._loadData(true); });
             }}
-            style={{ padding: '10px 14px', borderRadius: clay.radiusButton, border: 'none', fontSize: 13, background: clay.surface, outline: 'none', minWidth: 160, color: clay.text, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.22), inset -2px -2px 4px rgba(255,255,255,0.9)' }}
+            style={{ ...dmsControlStyle(), padding: '10px 14px', minWidth: 160 }}
           >
             <option value="all">All SharePoint Sites</option>
             {siteOptions.map(site => <option key={site.key} value={site.key}>{site.label}</option>)}
@@ -2301,9 +2300,9 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                   () => { if (siteFilterWasScoped) void host._loadData(true); },
                 );
               }}
-              style={{ background: 'transparent', color: clay.textMuted, border: `1px solid ${clay.accentSoft}`, borderRadius: clay.radiusButton, padding: '9px 14px', fontSize: 13, cursor: 'pointer' }}
+              style={dmsBtn('ghost')}
             >
-              ✕ Clear
+<Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 13 }} /> Clear
             </button>
           )}
           <span style={{ marginLeft: 'auto', fontSize: 12, color: clay.textMuted, fontWeight: 500 }}>
@@ -2313,9 +2312,9 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
 
         {/* ── Folder creation status banners ── */}
         {folderCreationError && (
-          <div style={{ marginBottom: 12, background: '#fde7e9', border: '1px solid #fca5a5', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#a4262c', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>⚠ {folderCreationError}</span>
-            <button onClick={() => host.setState({ folderCreationError: null })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#a4262c', fontWeight: 700 }}>✕</button>
+          <div style={{ marginBottom: 12, background: dmsTone('danger').bg, border: `1px solid ${dmsTone('danger').bg}`, borderRadius: 8, padding: '10px 14px', fontSize: 12, color: dmsTone('danger').fg, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> {folderCreationError}</span>
+            <button onClick={() => host.setState({ folderCreationError: null })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: dmsTone('danger').fg, fontWeight: 700 }}><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 12 }} /></button>
           </div>
         )}
         {folderCreationResults && folderCreationResults.length > 0 && !folderCreationError && (() => {
@@ -2334,9 +2333,9 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                 : host.props.siteUrl);
           const bannerHref = getSpoVesselFolderUrl(host, provisionedVessel, bannerSiteUrl);
           return (
-            <div style={{ marginBottom: 12, background: '#dff6dd', border: '1px solid #86efac', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#107c10', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ marginBottom: 12, background: dmsTone('success').bg, border: `1px solid ${dmsTone('success').bg}`, borderRadius: 8, padding: '10px 14px', fontSize: 12, color: dmsTone('success').fg, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <span>✅ SharePoint folders provisioned — {createdCount} created, {existedCount} already existed.</span>
+                <span><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} /> SharePoint folders provisioned — {createdCount} created, {existedCount} already existed.</span>
                 {bannerHref && bannerHref !== '#' && (
                   <a
                     href={bannerHref}
@@ -2348,16 +2347,16 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                   </a>
                 )}
               </div>
-              <button onClick={() => host.setState({ folderCreationResults: null })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#107c10', fontWeight: 700 }}>✕</button>
+              <button onClick={() => host.setState({ folderCreationResults: null })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: dmsTone('success').fg, fontWeight: 700 }}><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 12 }} /></button>
             </div>
           );
         })()}
 
         {/* ── Vessel sync (SharePoint auto-discovery) status banners ── */}
         {host.state.vesselSyncError && (
-          <div style={{ marginBottom: 12, background: '#fde7e9', border: '1px solid #fca5a5', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#a4262c', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>⚠ {host.state.vesselSyncError}</span>
-            <button onClick={() => host.setState({ vesselSyncError: null })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#a4262c', fontWeight: 700 }}>✕</button>
+          <div style={{ marginBottom: 12, background: dmsTone('danger').bg, border: `1px solid ${dmsTone('danger').bg}`, borderRadius: 8, padding: '10px 14px', fontSize: 12, color: dmsTone('danger').fg, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> {host.state.vesselSyncError}</span>
+            <button onClick={() => host.setState({ vesselSyncError: null })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: dmsTone('danger').fg, fontWeight: 700 }}><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 12 }} /></button>
           </div>
         )}
         {/* Success/summary banner for the manual sync removed along with the
@@ -2367,38 +2366,27 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
 
         {/* ── Loading State ── */}
         {isLoading ? (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 280, gap: 16, background: clay.surface, borderRadius: clay.radiusCard, border: 'none', boxShadow: clay.shadowRaised }}>
-            <div style={{
-              width: 40, height: 40, border: `3px solid ${clay.accentSoft}`,
-              borderTopColor: clay.accent, borderRadius: '50%',
-              animation: 'spin 0.8s linear infinite',
-            }} />
-            <p style={{ margin: 0, fontSize: 14, color: clay.textMuted, fontWeight: 500 }}>Loading vessels from database…</p>
-            <p style={{ margin: 0, fontSize: 12, color: clay.textMuted }}>Fetching vessel records and folder structure</p>
+          <div style={{ background: clay.surface, borderRadius: clay.radiusCard, border: 'none', boxShadow: clay.shadowRaised }}>
+            <DmsLoadingState label="Loading vessels from database…" hint="Fetching vessel records and folder structure" />
           </div>
         ) : filtered.length === 0 ? (
           /* ── Empty State ── */
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 280, gap: 16, background: clay.surface, borderRadius: clay.radiusCard, border: `2px dashed ${clay.accentSoft}` }}>
-            <span style={{ fontSize: 48 }}>🚢</span>
-            <div style={{ textAlign: 'center' }}>
-              <p style={{ margin: 0, fontSize: 16, fontWeight: 700, color: clay.text }}>
-                {vessels.length === 0 ? 'No vessels yet' : 'No vessels match your filter'}
-              </p>
-              <p style={{ margin: '6px 0 0', fontSize: 13, color: clay.textMuted }}>
-                {vessels.length === 0
-                  ? 'Create your first vessel to provision its SharePoint folder structure.'
-                  : 'Try clearing the search or filters.'}
-              </p>
-            </div>
-            {vessels.length === 0 && (
+          <DmsEmptyState
+            icon="Ferry"
+            title={vessels.length === 0 ? 'No vessels yet' : 'No vessels match your filter'}
+            action={vessels.length === 0 && (
               <button
                 onClick={() => host._openCreate()}
-                style={{ background: clay.accentGradient, color: '#fff', border: 'none', borderRadius: clay.radiusButton, padding: '10px 24px', fontSize: 14, fontWeight: 600, cursor: 'pointer', boxShadow: clay.shadowButton }}
+                style={{ ...dmsBtn('primary'), marginTop: 6 }}
               >
                 + Create First Vessel
               </button>
             )}
-          </div>
+          >
+            {vessels.length === 0
+              ? 'Create your first vessel to provision its SharePoint folder structure.'
+              : 'Try clearing the search or filters.'}
+          </DmsEmptyState>
         ) : (
           /* ── Vessel Cards Grid ── */
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 20 }}>
@@ -2469,16 +2457,16 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                     {isSelected && (
                       <span style={{
                         position: 'absolute', top: 12, left: 12,
-                        background: clay.accentGradient, color: '#fff',
+                        background: clay.accentGradient, color: DMS_ON_ACCENT,
                         borderRadius: '50%', width: 26, height: 26,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         fontSize: 14, fontWeight: 700, boxShadow: clay.shadowIcon,
-                      }}>✓</span>
+                      }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 14 }} /></span>
                     )}
                     {/* Vessel name + type, set on a legibility scrim */}
                     <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '20px 16px 12px' }}>
                       <p style={{
-                        margin: 0, fontFamily: vdmsFont.display, fontSize: 17, fontWeight: 800, color: '#fff', letterSpacing: '-0.02em',
+                        margin: 0, fontFamily: vdmsFont.display, fontSize: 17, fontWeight: 800, color: DMS_ON_ACCENT, letterSpacing: '-0.02em',
                         textShadow: '0 1px 6px rgba(0,0,0,0.5)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                       }}>
                         {vessel.name}
@@ -2577,7 +2565,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                               />
                             )}
                             {error && (
-                              <p style={{ margin: '2px 0 0', fontSize: 10, color: '#c0392b' }}>{error}</p>
+                              <p style={{ margin: '2px 0 0', fontSize: 10, color: dmsTone('danger').fg }}>{error}</p>
                             )}
                           </>
                         );
@@ -2686,18 +2674,13 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                             onClick={e => { e.stopPropagation(); host._confirmDiscoveredVessel(vessel).catch(() => undefined); }}
                             disabled={isConfirming}
                             title="Save the IMO/Hull No. above and register this SharePoint folder as a DMS vessel record (no new folder is created)"
-                            style={{
-                              marginTop: 2, padding: '8px 12px', borderRadius: clay.radiusButton, border: 'none',
-                              background: clay.accentGradient, color: '#fff', fontSize: 12, fontWeight: 700,
-                              cursor: isConfirming ? 'default' : 'pointer', opacity: isConfirming ? 0.7 : 1,
-                              boxShadow: clay.shadowButton,
-                            }}
+                            style={{ ...dmsBtn('primary', !isConfirming), marginTop: 2, width: '100%' }}
                           >
-                            {isConfirming ? 'Confirming…' : '✓ Confirm Vessel'}
+                            {isConfirming ? 'Confirming…' : <><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} /> Confirm Vessel</>}
                           </button>
                           {confirmError && (
-                            <p style={{ margin: '2px 0 0', fontSize: 11, color: '#c0392b', fontWeight: 600 }}>
-                              ⚠ {confirmError}
+                            <p style={{ margin: '2px 0 0', fontSize: 11, color: dmsTone('danger').fg, fontWeight: 600 }}>
+                              <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 11 }} /> {confirmError}
                             </p>
                           )}
                         </>
@@ -2774,7 +2757,29 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                                   (item.name || '').trim().toLowerCase() === segName ||
                                   stripPrefix((item.name || '').trim().toLowerCase()) === stripPrefix(segName)
                                 ));
-                                if (!match?.id) break;
+                                if (!match?.id) {
+                                  // A vessel with no recorded folder path sits under its
+                                  // main folder (e.g. Technical & Crewing > <vessel>), not at
+                                  // the drive root: look one level down, main folder first.
+                                  if (i === 3 && folderPathStack.length === 4) {
+                                    const mainLow = (nav.docMainFolder || '').toString().trim().toLowerCase();
+                                    const mains = (children || []).filter((item: any) => !!item.folder && !!item.id)
+                                      .sort((a: any, b: any) => Number((b.name || '').trim().toLowerCase() === mainLow) - Number((a.name || '').trim().toLowerCase() === mainLow));
+                                    for (const mainFolder of mains) {
+                                      // eslint-disable-next-line no-await-in-loop
+                                      const kids = await host._loadAndCacheSiteFolderChildren(resolveSiteId, resolveDriveId, mainFolder.id);
+                                      const hit = (kids || []).find((item: any) => !!item.folder && !!item.id && (
+                                        (item.name || '').trim().toLowerCase() === segName ||
+                                        stripPrefix((item.name || '').trim().toLowerCase()) === stripPrefix(segName)
+                                      ));
+                                      if (hit) {
+                                        resolvedPath.push({ id: mainFolder.id, name: mainFolder.name }, { id: hit.id, name: hit.name || folderPathStack[i].name });
+                                        break;
+                                      }
+                                    }
+                                  }
+                                  break;
+                                }
                                 resolvedPath.push({ id: match.id, name: match.name || folderPathStack[i].name });
                                 parentId = match.id;
                               }
@@ -2807,17 +2812,9 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                           }
                         }}
                         title={isSharePointOnly ? 'Confirm this vessel above to view its documents' : undefined}
-                        style={{
-                          flex: 1, background: isSharePointOnly ? 'var(--vdms-field, rgba(255,255,255,0.72))' : clay.accentGradient,
-                          color: isSharePointOnly ? clay.textMuted : '#fff',
-                          border: isSharePointOnly ? '1px solid var(--vdms-line-strong, rgba(16,84,138,0.26))' : 'none', borderRadius: 14, padding: '10px 12px',
-                          fontSize: 12, fontWeight: 700, cursor: isSharePointOnly ? 'not-allowed' : 'pointer',
-                          opacity: isSharePointOnly ? 0.7 : 1,
-                          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-                          boxShadow: isSharePointOnly ? 'none' : clay.shadowButton,
-                        }}
+                        style={{ ...dmsBtn('primary', !isSharePointOnly), flex: 1, borderRadius: 14 }}
                       >
-                        📄 View Documents
+<Icon iconName="Page" aria-hidden="true" style={{ fontSize: 12 }} /> View Documents
                       </button>
                       <a
                         href={getSpoVesselFolderUrl(host, vessel)}
@@ -2825,12 +2822,7 @@ export function renderVesselsPage(host: VesselEmail): React.ReactElement {
                         rel="noopener noreferrer"
                         onClick={e => e.stopPropagation()}
                         title="Open in SharePoint"
-                        style={{
-                          width: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          border: '1px solid var(--vdms-line-strong, rgba(16,84,138,0.26))', borderRadius: 14, background: 'var(--vdms-field, rgba(255,255,255,0.72))',
-                          color: clay.accentDark, fontSize: 14, textDecoration: 'none',
-                          boxShadow: 'none',
-                        }}
+                        style={{ ...dmsBtn('secondary'), width: 36, padding: 0, borderRadius: 14, textDecoration: 'none' }}
                       >
                         ↗
                       </a>

@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { Icon } from '@fluentui/react/lib/Icon';
+import { Dropdown } from '@fluentui/react/lib/Dropdown';
 import type VesselEmail from '../VesselEmail';
 import {
   badge, GROUP_COLORS, DATASOURCE_TAGS_MAP, VESSEL_TYPES, cleanName, suggestTagFromFilename,
@@ -22,22 +24,33 @@ import {
 import { extractFilesFromDataTransfer } from '../BulkUploadModal';
 import { CopilotSearchPanel } from '../copilot/CopilotSearchPanel';
 import { FolderTreeSelect, FolderTreeNode } from './FolderTreeSelect';
+import { CompactCategorySelect } from './CompactCategorySelect';
 import { DebouncedSearchInput } from './DebouncedSearchInput';
 
 import { clay } from '../clayTheme';
+import {
+  DMS_FONT_DISPLAY, DMS_ON_ACCENT, DmsTone, dmsTone, DMS_TILE, DMS_TILE_TITLE, DMS_TILE_SUB, dmsGrid,
+  DmsTileIcon, DmsChevron, DmsCountChip, DmsSectionLabel, DmsEmptyState, DmsSpinner, DmsLoadingState,
+  DmsBtnKind, dmsBtn, DMS_TABLE_CARD, DMS_TABLE, DMS_TH, DMS_TR, DMS_TD, DMS_TD_NAME, DMS_NAME_CELL,
+  DMS_FILE_LINK, dmsRowBtn, dmsPagerBtn, dmsCompactDropdownStyles,
+} from '../dmsDesignSystem';
+// The Sub-folder tree and Sub-category dropdowns are hidden from the filter bar
+// (their state / logic is untouched); flip to true to show them again.
+const SHOW_SUBFOLDER_FILTERS = false;
 // ── List view table styles ────────────────────────────────────────────────
 // Every cell is top-aligned with the same padding, and each file line in the
 // File name / Size / Date columns has the same fixed height, so a file's size
 // and upload time always sit on the same line as its name.
 const LIST_TH: React.CSSProperties = {
   position: 'sticky', top: 0, zIndex: 1,
-  padding: '11px 12px', background: 'var(--vdms-surface-alt)',
-  borderBottom: '1px solid var(--vdms-border)',
-  color: 'var(--vdms-text-muted)', fontSize: 10.5, fontWeight: 700,
-  letterSpacing: '0.06em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap',
+  padding: '10px 12px', background: 'var(--vdms-surface-alt)',
+  borderBottom: '1px solid var(--vdms-line)',
+  color: 'var(--vdms-text-muted)', fontSize: 11, fontWeight: 700,
+  letterSpacing: '0.05em', textTransform: 'uppercase', textAlign: 'left', whiteSpace: 'nowrap',
 };
 const LIST_TD: React.CSSProperties = {
-  padding: '10px 12px', verticalAlign: 'top', fontSize: 12, lineHeight: '18px', overflow: 'hidden',
+  padding: '10px 12px', verticalAlign: 'top', fontSize: 12.5, lineHeight: '18px', overflow: 'hidden',
+  borderBottom: '1px solid var(--vdms-border-soft)',
 };
 const LIST_FILE_LINE: React.CSSProperties = {
   display: 'flex', alignItems: 'center', height: 26, minWidth: 0, whiteSpace: 'nowrap',
@@ -57,13 +70,15 @@ const LIST_PILL: React.CSSProperties = {
 };
 const LIST_X_DOT: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  width: 14, height: 14, borderRadius: '50%', background: '#c2410c', color: '#fff',
+  width: 14, height: 14, borderRadius: '50%', background: clay.pillWarnText, color: 'var(--vdms-surface)',
   fontSize: 9, fontWeight: 800, lineHeight: 1, flexShrink: 0,
 };
 const LIST_ACTION_BTN: React.CSSProperties = {
-  height: 26, padding: '0 8px', borderRadius: 6, border: '1px solid var(--vdms-border)',
+  height: 26, padding: '0 8px', borderRadius: 7, border: '1px solid var(--vdms-line)',
+  background: 'var(--vdms-surface)', color: 'var(--vdms-text)',
   fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', boxSizing: 'border-box',
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+  transition: 'border-color 150ms ease, background 150ms ease',
 };
 
 /** Folder view Group/Category search: one backend recursive walk per
@@ -107,11 +122,11 @@ function ListMissingMark(props: { title: string }): React.ReactElement {
       style={{
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         width: 20, height: 20, borderRadius: 6,
-        background: '#fef2f2', color: '#dc2626', border: '1px solid #fecaca',
+        background: clay.pillDangerBg, color: clay.pillDangerText, border: '1px solid transparent',
         fontSize: 11, fontWeight: 800, lineHeight: 1,
       }}
     >
-      ✕
+      <Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 11 }} />
     </span>
   );
 }
@@ -3458,7 +3473,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // trip just shows "Loading…" and resolves itself on the next render,
     // same self-healing behaviour as everywhere else in this file.
     const compareBoxStyle: React.CSSProperties = {
-      border: '1px solid var(--vdms-border)', borderRadius: 10, background: 'var(--vdms-surface)',
+      border: '1px solid var(--vdms-line)', borderRadius: 14, background: 'var(--vdms-surface)',
+      boxShadow: clay.shadowRaised, overflow: 'hidden',
       display: 'flex', flexDirection: 'column', minWidth: 0,
     };
     const renderCompareBox = (mainFolder: string): React.ReactElement => {
@@ -3469,7 +3485,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       };
       const crumb = [mainFolder, vesselFilter, ...subPath];
       const header = (
-        <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--vdms-border-soft)', fontSize: 11, color: 'var(--vdms-text-muted)', display: 'flex', flexWrap: 'wrap', gap: 2 }}>
+        <div style={{ padding: '10px 14px', borderBottom: '1px solid var(--vdms-line)', background: 'var(--vdms-surface-alt)', fontSize: 12, color: 'var(--vdms-text-muted)', display: 'flex', flexWrap: 'wrap', gap: 2 }}>
           {crumb.map((seg, i) => {
             const isLast = i === crumb.length - 1;
             const targetSubPath = i <= 1 ? [] : subPath.slice(0, i - 1);
@@ -3480,9 +3496,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   onClick={isLast ? undefined : () => setSubPath(targetSubPath)}
                   style={{
                     cursor: isLast ? 'default' : 'pointer',
-                    textDecoration: isLast ? 'none' : 'underline',
-                    fontWeight: isLast ? 700 : 500,
-                    color: isLast ? 'var(--vdms-text)' : 'var(--vdms-text-muted)',
+                    textDecoration: 'none',
+                    fontWeight: isLast ? 700 : 600,
+                    color: isLast ? 'var(--vdms-text)' : clay.accent,
                   }}
                 >
                   {seg}
@@ -3527,11 +3543,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               <div
                 key={f.id}
                 onClick={() => setSubPath([...subPath, f.name])}
-                style={{ padding: '6px 8px', cursor: 'pointer', borderRadius: 6, fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}
+                style={{ padding: '7px 8px', cursor: 'pointer', borderRadius: 8, fontSize: 13, fontWeight: 600, color: 'var(--vdms-text)', display: 'flex', alignItems: 'center', gap: 8 }}
                 onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--vdms-surface-alt)'; }}
                 onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
               >
-                📁 {f.name}
+                <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 14, color: clay.accent, flexShrink: 0 }} />
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{f.name}</span>
+                <DmsChevron />
               </div>
             ))}
             {boxFiles.map((file: any) => {
@@ -3543,11 +3561,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     if (fileUrl) window.open(fileUrl, '_blank');
                     else void host._openDocumentFile(file.id, file.name, crumb.join(' > '));
                   }}
-                  style={{ padding: '6px 8px', cursor: 'pointer', borderRadius: 6, fontSize: 12, color: '#0284c7' }}
+                  style={{ padding: '7px 8px', cursor: 'pointer', borderRadius: 8, fontSize: 13, fontWeight: 500, color: clay.accent, display: 'flex', alignItems: 'center', gap: 8 }}
                   onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = 'var(--vdms-surface-alt)'; }}
                   onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
                 >
-                  📄 {file.name}
+                  <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 13, color: 'var(--vdms-text-muted)', flexShrink: 0 }} />
+                  <span style={{ minWidth: 0, wordBreak: 'break-word' }}>{file.name}</span>
                 </div>
               );
             })}
@@ -3556,20 +3575,17 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       );
     };
     const renderVesselCompareGrid = (): React.ReactElement => (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--vdms-text)' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: 'var(--vdms-text)', fontFamily: DMS_FONT_DISPLAY }}>
             Comparing {vesselFilter} across {vesselMainFolders.length} main folders
-          </div>
+          </h3>
           <button
             type="button"
             onClick={() => host.setState({ docCompareMode: false })}
-            style={{
-              padding: '5px 12px', borderRadius: 8, border: '1px solid var(--vdms-border)',
-              background: 'var(--vdms-surface)', color: 'var(--vdms-text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-            }}
+            style={dmsBtn('secondary')}
           >
-            ✕ Exit compare
+            <Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 11 }} /> Exit compare
           </button>
         </div>
         {/* One box per main folder; wraps to a new row on narrow widths, and
@@ -5803,25 +5819,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         `Folders: ${fmt(totalFolders)} total (${fmt(fc.direct_subfolders)} direct, ${fmt(nestedFolders)} nested)`,
         `Files: ${fmt(totalFiles)} total (${fmt(directFiles)} directly inside, ${fmt(Math.max(totalFiles - directFiles, 0))} in subfolders)`,
       ].join('\n');
-      const chip = (on: boolean, bg: string, fg: string): React.CSSProperties => ({
-        display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 8,
-        padding: '2px 9px', fontSize: 11, fontWeight: 700, lineHeight: '16px',
-        whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums',
-        background: on ? bg : 'var(--vdms-border-soft)',
-        color: on ? fg : 'var(--vdms-text-faint)',
-      });
       return (
         <span title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <span style={chip(totalFolders > 0, '#e0f2fe', '#0369a1')}>
-            <span aria-hidden="true">📁</span>
-            {approx ? '~' : ''}{fmt(totalFolders)}
-            <span style={{ fontWeight: 600, opacity: 0.8 }}>{totalFolders === 1 ? 'folder' : 'folders'}</span>
-          </span>
-          <span style={chip(totalFiles > 0, '#dcfce7', '#15803d')}>
-            <span aria-hidden="true">📄</span>
-            {approx ? '~' : ''}{fmt(totalFiles)}
-            <span style={{ fontWeight: 600, opacity: 0.8 }}>{totalFiles === 1 ? 'file' : 'files'}</span>
-          </span>
+          <DmsCountChip icon="FabricFolder" tone="accent" on={totalFolders > 0} count={`${approx ? '~' : ''}${fmt(totalFolders)}`} label={totalFolders === 1 ? 'folder' : 'folders'} />
+          <DmsCountChip icon="Page" tone="success" on={totalFiles > 0} count={`${approx ? '~' : ''}${fmt(totalFiles)}`} label={totalFiles === 1 ? 'file' : 'files'} />
         </span>
       );
     };
@@ -5840,10 +5841,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
       if (folderData.loading && folderData.items.length === 0) {
         return (
-          <div style={{ padding: 48, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>
-            <div style={{ fontSize: 28, marginBottom: 8, animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</div>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Loading {currentNode?.name || libraryTitle}...</div>
-          </div>
+          <DmsLoadingState label={<>Loading {currentNode?.name || libraryTitle}...</>} />
         );
       }
 
@@ -5861,24 +5859,23 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       const folderServerCounts = folderData.error ? null : host._getOrLoadFolderCounts(siteId, driveId, currentFolderId);
 
       return (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <DmsTileIcon icon="SharepointLogo" tone="accent" size={32} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--vdms-text)', fontFamily: DMS_FONT_DISPLAY, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {currentNode?.name || libraryTitle}
               </div>
-              <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>
+              <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--vdms-text-muted)', marginTop: 1 }}>
                 {librarySubtitle} · {childFolders.length} folders, {childFiles.length} files{folderServerCounts?.summary ? ` · ${folderServerCounts.summary.total_files} total files` : ''}
               </div>
             </div>
           </div>
 
           {childFolders.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Folders ({childFolders.length})
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <DmsSectionLabel title="Folders" count={childFolders.length} />
+              <div style={dmsGrid(250)}>
                 {childFolders.map((sf, idx) => {
                   const sfInTree = !!sf.id && liveTreeIndex.ids.has(sf.id);
                   // Server counts (one /subfolder-counts call) already feed every tile pill, so
@@ -5916,34 +5913,26 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           docListPage: 0,
                         });
                       }}
-                      style={{
-                        background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)', padding: 18,
-                        display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'all 0.15s ease',
-                      }}
+                      className="dms-tile"
+                      style={DMS_TILE}
                     >
-                      <div style={{
-                        width: 44, height: 44, borderRadius: 10, background: '#e0f2fe',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#0284c7',
-                      }}>
-                        📁
-                      </div>
+                      <DmsTileIcon icon="FabricFolder" />
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <div style={DMS_TILE_TITLE}>
                           {sf.name}
                         </div>
-                        <div title={sfCounts ? `${sfCounts.folders} sub-folder(s) and ${sfCounts.files} file(s) in total` : undefined} style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <div title={sfCounts ? `${sfCounts.folders} sub-folder(s) and ${sfCounts.files} file(s) in total` : undefined} style={{ ...DMS_TILE_SUB, marginTop: 4 }}>
                           {sfServerCounts ? renderServerCountPill(sfServerCounts, sf.name) : sfLoading ? (
-                            <span style={{ color: 'var(--vdms-text-faint)', fontSize: 10 }}>{sfTotal > 0 ? `${sfTotal} items` : '···'}</span>
+                            <span style={{ color: 'var(--vdms-text-faint)', fontSize: 11 }}>{sfTotal > 0 ? `${sfTotal} items` : '···'}</span>
                           ) : (
                             <>
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFolderCount ?? 0) > 0 ? '#e0f2fe' : 'var(--vdms-border-soft)', color: (sfFolderCount ?? 0) > 0 ? '#0369a1' : 'var(--vdms-text-faint)', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📁 {sfFolderCount ?? 0}</span>
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFileCount ?? 0) > 0 ? '#dcfce7' : 'var(--vdms-border-soft)', color: (sfFileCount ?? 0) > 0 ? '#15803d' : 'var(--vdms-text-faint)', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📄 {sfFileCount ?? 0}</span>
+                              <DmsCountChip icon="FabricFolder" tone="accent" on={(sfFolderCount ?? 0) > 0} count={sfFolderCount ?? 0} />
+                              <DmsCountChip icon="Page" tone="success" on={(sfFileCount ?? 0) > 0} count={sfFileCount ?? 0} />
                             </>
                           )}
                         </div>
                       </div>
-                      <span style={{ color: '#0284c7', fontSize: 16 }}>›</span>
+                      <DmsChevron />
                     </div>
                   );
                 })}
@@ -5952,18 +5941,17 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           )}
 
           {childFiles.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ fontSize: 12, fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Files ({childFiles.length})
-              </div>
-              <div style={{ background: 'var(--vdms-surface)', borderRadius: 12, border: '1px solid var(--vdms-border)', overflow: 'hidden' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <DmsSectionLabel title="Files" count={childFiles.length} tone="success" />
+              <div style={DMS_TABLE_CARD}>
+               <div style={{ overflowX: 'auto' }}>
+                <table className="dms-table" style={DMS_TABLE}>
                   <thead>
-                    <tr style={{ background: 'var(--vdms-surface-alt)', borderBottom: '1px solid var(--vdms-border)', color: 'var(--vdms-text-muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
-                      <th style={{ padding: '10px 16px' }}>FILE NAME</th>
-                      <th style={{ padding: '10px 16px' }}>SIZE</th>
-                      <th style={{ padding: '10px 16px' }}>DATE MODIFIED</th>
-                      <th style={{ padding: '10px 16px', textAlign: 'right' }}>ACTION</th>
+                    <tr>
+                      <th style={DMS_TH}>File name</th>
+                      <th style={DMS_TH}>Size</th>
+                      <th style={DMS_TH}>Date modified</th>
+                      <th style={{ ...DMS_TH, textAlign: 'right' }}>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -5975,10 +5963,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       const fileUrl = file.web_url || file.webUrl || file.download_url || '';
 
                       return (
-                        <tr key={file.id || file.name + idx} style={{ borderBottom: '1px solid var(--vdms-border-soft)' }}>
-                          <td style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--vdms-text)', display: 'flex', alignItems: 'center', gap: 10 }}>
-                            <span style={{ fontSize: 18 }}>📄</span>
+                        <tr key={file.id || file.name + idx} style={DMS_TR}>
+                          <td style={DMS_TD_NAME}>
+                           <div style={DMS_NAME_CELL}>
+                            <DmsTileIcon icon="Page" tone="neutral" size={28} />
                             <span
+                              className="dms-file-link"
                               onClick={() => {
                                 if (fileUrl) {
                                   window.open(fileUrl, '_blank');
@@ -5986,15 +5976,16 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   void host._openDocumentFile(file.id, file.name, folderPathStack.map(n => n.name).join(' > '));
                                 }
                               }}
-                              style={{ cursor: 'pointer', color: '#0284c7', textDecoration: 'underline' }}
+                              style={DMS_FILE_LINK}
                               title={`Click to view/download ${file.name}`}
                             >
                               {file.name}
                             </span>
+                           </div>
                           </td>
-                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)' }}>{fileSize}</td>
-                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)' }}>{fileDate}</td>
-                          <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                          <td style={{ ...DMS_TD, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{fileSize}</td>
+                          <td style={{ ...DMS_TD, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{fileDate}</td>
+                          <td style={{ ...DMS_TD, textAlign: 'right' }}>
                             <button
                               type="button"
                               onClick={() => {
@@ -6004,12 +5995,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   void host._openDocumentFile(file.id, file.name, folderPathStack.map(n => n.name).join(' > '));
                                 }
                               }}
-                              style={{
-                                background: '#0284c7', color: '#fff', border: 'none', borderRadius: 6,
-                                padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                              }}
+                              style={dmsRowBtn('accent')}
                             >
-                              Open / Download
+                              <Icon iconName="OpenInNewWindow" aria-hidden="true" style={{ fontSize: 11 }} /> Open / Download
                             </button>
                           </td>
                         </tr>
@@ -6017,16 +6005,15 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     })}
                   </tbody>
                 </table>
+               </div>
               </div>
             </div>
           )}
 
           {childFolders.length === 0 && childFiles.length === 0 && (
-            <div style={{ background: 'var(--vdms-surface)', borderRadius: 14, border: '1px dashed var(--vdms-border)', padding: 48, textAlign: 'center', color: 'var(--vdms-text-faint)' }}>
-              <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
-              <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>This folder is empty</div>
-              <div style={{ fontSize: 13, marginTop: 4 }}>No files or subfolders found in this directory.</div>
-            </div>
+            <DmsEmptyState icon="FabricFolder" title="This folder is empty">
+              No files or subfolders found in this directory.
+            </DmsEmptyState>
           )}
         </div>
       );
@@ -6040,45 +6027,50 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
         style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
       >
         <style>{`
-          /* Solid surfaces for the Documents module (folder view, sub-folders,
-             file tables, filters). The global glass tokens are 50–92% alpha, so
-             the sea backdrop showed through behind text. Overriding them on this
-             root only keeps every other module's glass look unchanged. */
-          [data-vessel-theme="light"] .dms-docs-root, .dms-docs-root {
-            --vdms-surface: #ffffff;
-            --vdms-surface-alt: #e8f3fc;
-            --vdms-glass: #ffffff;
-            --vdms-glass-strong: #ffffff;
-            --vdms-field: #ffffff;
-            --vdms-border: rgba(16,84,138,0.34);
-            --vdms-line: rgba(16,84,138,0.30);
-            --vdms-line-strong: rgba(16,84,138,0.50);
-          }
-          [data-vessel-theme="night"] .dms-docs-root {
-            --vdms-surface: #0b2943;
-            --vdms-surface-alt: #103554;
-            --vdms-glass: #0a2640;
-            --vdms-glass-strong: #0a2640;
-            --vdms-field: #06223a;
-            --vdms-border: rgba(140,210,240,0.36);
-            --vdms-line: rgba(140,210,240,0.32);
-            --vdms-line-strong: rgba(140,210,240,0.52);
-          }
+          /* Surfaces / borders: the Documents module inherits the same
+             app-wide --vdms-* / --clay-* tokens as the Dashboard (all solid
+             now), so Settings → Color Management and Night/Light mode re-theme
+             it exactly like every other redesigned page. */
           .dms-docs-root div[style*="var(--vdms-surface)"],
           .dms-docs-root .dms-docs-nav, .dms-docs-root .dms-filter-bar { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+          @keyframes dms-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+          /* Folder / library / vessel cards — subtle lift on hover. */
+          .dms-docs-root .dms-tile:hover { border-color: var(--clay-accent, #0e7490) !important; box-shadow: var(--clay-shadow-raised-hover) !important; transform: translateY(-1px); }
+          .dms-docs-root .dms-tile:active { transform: translateY(0); }
+          .dms-docs-root .dms-tile:hover [data-icon-name="ChevronRight"] { color: var(--clay-accent, #0e7490) !important; }
+
+          /* Tables — row hover + quiet links. */
+          .dms-docs-root .dms-table tbody tr { transition: background 120ms ease; }
+          .dms-docs-root .dms-table tbody tr:hover { background: var(--clay-surface-hover, #eaf0f6); }
+          .dms-docs-root .dms-table tbody tr:last-child { border-bottom: none !important; }
+          .dms-docs-root .dms-file-link:hover { text-decoration: underline !important; }
+          .dms-docs-root .dms-result-row { transition: background 120ms ease; }
+          .dms-docs-root .dms-result-row:hover { background: var(--clay-surface-hover, #eaf0f6) !important; }
+          .dms-docs-root .dms-result-row:last-child { border-bottom: none !important; }
+
+          /* Toolbar buttons — subtle hover states for the button hierarchy. */
+          .dms-docs-root .dms-btn:not(:disabled) { cursor: pointer; }
+          .dms-docs-root .dms-btn-primary:hover { background: var(--clay-accent-hover, #0b5c72) !important; }
+          .dms-docs-root .dms-btn-secondary:not(:disabled):hover { border-color: var(--clay-accent, #0e7490) !important; color: var(--clay-accent, #0e7490) !important; }
+          .dms-docs-root .dms-btn-ghost:not(:disabled):hover { background: var(--clay-surface-hover, #eaf0f6) !important; color: var(--vdms-text) !important; }
+          .dms-docs-root .dms-btn-danger:not(:disabled):hover { filter: brightness(0.97); box-shadow: inset 0 0 0 1px currentColor; }
 
           /* Title row: everything on one centre line; toggle never clips. */
           .dms-docs-head { align-items: center !important; }
-          .dms-docs-head .dms-site-picker select { height: 36px; box-sizing: border-box; min-width: 200px !important; padding: 0 36px 0 16px !important; border-radius: 999px !important; border: 2px solid var(--vdms-line-strong) !important; background-color: var(--vdms-field) !important; font-weight: 600; font-size: 13px; appearance: none; -webkit-appearance: none; cursor: pointer;
-            background-repeat: no-repeat; background-position: right 13px center; background-size: 12px;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 4.2 6 8l4-3.8' fill='none' stroke='%230a7ea8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
-          .dms-view-toggle { border-width: 2px !important; padding: 3px !important; white-space: nowrap; }
-          .dms-view-toggle button { height: 30px; padding: 0 14px !important; white-space: nowrap; font-weight: 700 !important; display: inline-flex; align-items: center; }
+          .dms-docs-head .dms-site-picker select { height: 34px; box-sizing: border-box; min-width: 200px !important; padding: 0 32px 0 12px !important; border-radius: 8px !important; border: 1px solid var(--vdms-line-strong) !important; background-color: var(--vdms-surface) !important; color: var(--vdms-text) !important; font-weight: 600; font-size: 13px; appearance: none; -webkit-appearance: none; cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease;
+            background-repeat: no-repeat; background-position: right 11px center; background-size: 11px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 4.2 6 8l4-3.8' fill='none' stroke='%2364748b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+          .dms-docs-head .dms-site-picker select:hover { border-color: var(--clay-accent, #0e7490) !important; }
+          .dms-docs-head .dms-site-picker select:focus { outline: none; border-color: var(--clay-accent, #0e7490) !important; box-shadow: 0 0 0 3px var(--vdms-focus-soft); }
+          .dms-docs-head .dms-site-picker select option { background: var(--vdms-surface); color: var(--vdms-text); }
+          .dms-view-toggle { white-space: nowrap; }
+          .dms-view-toggle button:focus-visible { outline: 2px solid var(--clay-accent, #0e7490); outline-offset: 1px; }
 
           /* Filter row: compact — search shares the line with the dropdowns
              and every control grows evenly to fill it, so the bar stays short
              and the results get the space. */
-          .dms-filter-row { display: flex !important; flex-wrap: wrap; gap: 8px 10px !important; align-items: center !important; }
+          .dms-filter-row { display: flex !important; flex-wrap: wrap; gap: 8px !important; align-items: center !important; }
           .dms-filter-row > .dms-filter-search { flex: 2 1 260px !important; min-width: 220px !important; }
           .dms-filter-row > .dms-filter-loading { flex: 1 0 100%; justify-content: flex-start; }
           .dms-filter-row > div:empty { display: none !important; }
@@ -6086,47 +6078,47 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           .dms-filter-row > div > button { width: 100%; display: flex !important; align-items: center; justify-content: space-between; text-align: left; }
           .dms-filter-row select { flex: 1 1 150px; width: auto !important; min-width: 140px !important; max-width: 260px !important; }
 
-          /* Tighter pinned header. */
-          .dms-docs-sticky { gap: 8px !important; padding-bottom: 8px !important; }
-          .dms-docs-nav { min-height: 40px !important; padding: 4px 12px !important; gap: 6px !important; }
-          .dms-docs-nav .dms-nav-arrow { width: 30px !important; height: 30px !important; font-size: 17px !important; }
-          .dms-docs-head h2 { font-size: 18px !important; }
-          .dms-docs-head p { margin-top: 2px !important; }
+          /* Pinned header spacing. */
+          .dms-docs-sticky { gap: 12px !important; padding-bottom: 12px !important; }
+          .dms-docs-head p { margin-top: 3px !important; }
 
-          /* Back / forward arrows — app accent, no hard-coded purple/pink. */
-          .dms-nav-arrow:not(:disabled) { background: var(--clay-accent-gradient, linear-gradient(135deg, #1fa9cf, #1463b8)) !important; border-color: transparent !important; color: #fff !important; box-shadow: 0 6px 16px var(--clay-accent-glow, rgba(10,126,168,0.4)); }
-          .dms-nav-arrow:not(:disabled):hover { transform: translateY(-1px); background: var(--clay-accent-gradient-hover, linear-gradient(135deg, #0a7ea8, #0f4f96)) !important; }
-          .dms-nav-arrow:not(:disabled):active { transform: translateY(0) scale(0.96); }
+          /* Back / forward arrows — quiet square buttons, accent on hover. */
+          .dms-nav-arrow:not(:disabled):hover { background: var(--clay-accent-soft, #dceef2) !important; color: var(--clay-accent, #0e7490) !important; border-color: transparent !important; }
+          .dms-nav-arrow:not(:disabled):active { transform: scale(0.96); }
 
-          /* Breadcrumb "nav bar": a glass pill that matches the app top bar. */
-          .dms-docs-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 48px; padding: 7px 14px; box-sizing: border-box;
-            background: var(--vdms-glass-strong); border: 2px solid var(--vdms-line-strong); border-radius: 16px; box-shadow: var(--clay-shadow-raised); }
-          .dms-docs-nav .dms-crumb-sep { color: var(--vdms-text-faint); font-size: 14px; }
-          .dms-docs-nav .dms-crumb-link { padding: 4px 10px; border-radius: 999px; color: var(--clay-accent, #0a7ea8); font-weight: 600; transition: background .15s ease, color .15s ease; }
-          .dms-docs-nav .dms-crumb-link:hover { background: var(--clay-accent-soft, #cfe8f7); color: var(--clay-accent-dark, #0b5f8a); }
-          .dms-docs-nav .dms-crumb-current { padding: 4px 12px; border-radius: 999px; color: var(--vdms-text); font-weight: 700; background: var(--vdms-focus-soft); }
+          /* Breadcrumb — compact, low-weight trail (no heavy pill). */
+          .dms-docs-nav { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-height: 34px; padding: 0; box-sizing: border-box; background: transparent; border: none; }
+          .dms-docs-nav .dms-crumb-sep { display: inline-flex; align-items: center; color: var(--vdms-text-faint); font-size: 9px; padding: 0 1px; }
+          .dms-docs-nav .dms-crumb-link { padding: 3px 7px; border-radius: 6px; color: var(--vdms-text-muted); font-weight: 600; font-size: 12.5px; transition: background .15s ease, color .15s ease; }
+          .dms-docs-nav .dms-crumb-link:hover { background: var(--clay-accent-soft, #dceef2); color: var(--clay-accent, #0e7490); }
+          .dms-docs-nav .dms-crumb-current { padding: 3px 8px; border-radius: 6px; color: var(--clay-accent, #0e7490); font-weight: 700; font-size: 12.5px; background: var(--clay-accent-soft, #dceef2); }
 
-          /* Filter bar — modern, app-coloured fields. Inline styles on the
-             controls are overridden here so every dropdown looks the same. */
-          .dms-filter-bar { background: var(--vdms-glass-strong) !important; border: 2px solid var(--vdms-line-strong) !important; border-radius: 18px !important; padding: 8px 10px !important; box-shadow: var(--clay-shadow-raised); }
+          /* Filter toolbar — compact, consistent 34px controls with subtle
+             borders. Inline styles on the controls are overridden here so
+             every dropdown looks the same. */
+          .dms-filter-bar { background: var(--vdms-surface) !important; border: 1px solid var(--vdms-line) !important; border-radius: 14px !important; padding: 10px 12px !important; box-shadow: var(--clay-shadow-raised); }
           .dms-filter-bar select, .dms-filter-bar .dms-filter-search input, .dms-filter-bar > div > div > button {
-            height: 36px; box-sizing: border-box; border-radius: 999px !important; border: 2px solid var(--vdms-line-strong) !important;
-            background-color: var(--vdms-field) !important; color: var(--vdms-text) !important; font-size: 13px !important; font-weight: 600;
+            height: 34px; box-sizing: border-box; border-radius: 8px !important; border: 1px solid var(--vdms-border) !important;
+            background-color: var(--vdms-surface) !important; color: var(--vdms-text) !important; font-size: 13px !important; font-weight: 500;
             transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
           }
-          html .vessel-dms-app .dms-filter-bar select { appearance: none; -webkit-appearance: none; padding: 0 30px 0 14px !important; cursor: pointer; text-overflow: ellipsis;
-            background-repeat: no-repeat !important; background-position: right 13px center !important; background-size: 12px !important;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 4.2 6 8l4-3.8' fill='none' stroke='%230a7ea8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important; }
-          html [data-vessel-theme="night"] .vessel-dms-app .dms-filter-bar select, html .vessel-dms-app[data-vessel-theme="night"] .dms-filter-bar select { background-color: var(--vdms-field) !important;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 4.2 6 8l4-3.8' fill='none' stroke='%2334d5ea' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important; }
-          .dms-filter-bar select:hover:not(:disabled), .dms-filter-bar .dms-filter-search input:hover, .dms-filter-bar > div > div > button:hover:not(:disabled) { border-color: var(--clay-accent, #0a7ea8) !important; background-color: var(--vdms-glass-strong) !important; }
-          .dms-filter-bar select:disabled { opacity: .7; cursor: not-allowed !important; background-color: var(--vdms-surface-alt) !important; }
-          .dms-filter-bar .dms-filter-search input { padding: 0 14px 0 38px !important; width: 100%; }
-          .dms-filter-bar select:focus, .dms-filter-bar .dms-filter-search input:focus { outline: none; border-color: var(--clay-accent, #0a7ea8) !important; box-shadow: 0 0 0 3px var(--vdms-focus-soft); }
+          html .vessel-dms-app .dms-filter-bar select { appearance: none; -webkit-appearance: none; padding: 0 28px 0 11px !important; cursor: pointer; text-overflow: ellipsis;
+            background-repeat: no-repeat !important; background-position: right 10px center !important; background-size: 11px !important;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 4.2 6 8l4-3.8' fill='none' stroke='%2364748b' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important; }
+          html [data-vessel-theme="night"] .vessel-dms-app .dms-filter-bar select, html .vessel-dms-app[data-vessel-theme="night"] .dms-filter-bar select { background-color: var(--vdms-surface) !important;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 4.2 6 8l4-3.8' fill='none' stroke='%238ca0b5' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important; }
+          .dms-filter-bar select:hover:not(:disabled), .dms-filter-bar .dms-filter-search input:hover, .dms-filter-bar > div > div > button:hover:not(:disabled) { border-color: var(--vdms-line-strong) !important; background-color: var(--vdms-surface-alt) !important; }
+          .dms-filter-bar select:disabled { opacity: .6; cursor: not-allowed !important; background-color: var(--vdms-surface-alt) !important; color: var(--vdms-text-faint) !important; }
+          .dms-filter-bar .dms-filter-search input { padding: 0 12px 0 34px !important; width: 100%; }
+          .dms-filter-bar select:focus, .dms-filter-bar .dms-filter-search input:focus { outline: none; border-color: var(--clay-accent, #0e7490) !important; box-shadow: 0 0 0 3px var(--vdms-focus-soft); background-color: var(--vdms-surface) !important; }
           .dms-filter-bar .dms-filter-search input::placeholder { color: var(--vdms-text-faint); }
-          .dms-filter-bar select option, .dms-filter-bar select optgroup { background: var(--vdms-glass-strong); color: var(--vdms-text); }
-          .dms-filter-bar > div > div > button { padding: 0 14px !important; }
-          .dms-filter-bar .dms-filter-export { border-radius: 999px !important; border: 2px solid var(--vdms-line-strong) !important; font-weight: 700 !important; background: var(--clay-accent-soft, #cfe8f7) !important; color: var(--clay-accent-dark, #0b5f8a) !important; }
+          .dms-filter-bar select option, .dms-filter-bar select optgroup { background: var(--vdms-surface); color: var(--vdms-text); }
+          .dms-filter-bar > div > div > button { padding: 0 11px !important; }
+          /* Fluent dropdowns (Vessel / Category) take the same typography as the native selects. */
+          html .vessel-dms-app .dms-filter-bar .ms-Dropdown, html .vessel-dms-app .dms-filter-bar .ms-Dropdown-title, html .vessel-dms-app .dms-filter-bar .ms-Dropdown-title *,
+          html .vessel-dms-app .dms-filter-callout .ms-Dropdown-item, html .vessel-dms-app .dms-filter-callout .ms-Dropdown-item *,
+          html .dms-filter-callout .ms-Dropdown-item, html .dms-filter-callout .ms-Dropdown-item * { font-family: 'Manrope', 'Segoe UI Variable', 'Segoe UI', sans-serif !important; font-size: 15px !important; font-weight: 500 !important; letter-spacing: normal !important; }
+          .dms-filter-bar .dms-filter-export:not(:disabled):hover { border-color: var(--clay-accent, #0e7490) !important; color: var(--clay-accent, #0e7490) !important; }
         `}</style>
         {/* Sticky header: breadcrumb + module header + filter toolbar stay pinned
             while the file table scrolls underneath. */}
@@ -6134,9 +6126,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             pins at the scroller's padding edge, leaving that strip open above the header so
             scrolled rows show through. Pull the header up by the padding and re-add it as
             paddingTop so the resting layout is unchanged and nothing shows above it. */}
-        <div className="dms-docs-sticky" style={{ position: 'sticky', top: 'calc(-1 * var(--vdms-content-pad, 0px))', marginTop: 'calc(-1 * var(--vdms-content-pad, 0px))', marginLeft: 'calc(-1 * var(--vdms-content-pad, 0px))', marginRight: 'calc(-1 * var(--vdms-content-pad, 0px))', zIndex: 30, background: clay.bg, display: 'flex', flexDirection: 'column', gap: 14, paddingTop: 'var(--vdms-content-pad, 0px)', paddingLeft: 'var(--vdms-content-pad, 0px)', paddingRight: 'var(--vdms-content-pad, 0px)', paddingBottom: 12, borderBottom: '1px solid var(--vdms-line)', boxShadow: '0 8px 14px -10px rgba(20,80,130,0.35)' }}>
+        <div className="dms-docs-sticky" style={{ position: 'sticky', top: 'calc(-1 * var(--vdms-content-pad, 0px))', marginTop: 'calc(-1 * var(--vdms-content-pad, 0px))', marginLeft: 'calc(-1 * var(--vdms-content-pad, 0px))', marginRight: 'calc(-1 * var(--vdms-content-pad, 0px))', zIndex: 30, background: clay.bg, display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 'var(--vdms-content-pad, 0px)', paddingLeft: 'var(--vdms-content-pad, 0px)', paddingRight: 'var(--vdms-content-pad, 0px)', paddingBottom: 12, borderBottom: '1px solid var(--vdms-line)', boxShadow: '0 10px 16px -14px rgba(16,27,45,0.28)' }}>
         {/* Breadcrumb Navigation Trail */}
-        <div className="dms-docs-nav" style={{ fontSize: 13, color: 'var(--vdms-text-muted)' }}>
+        <div className="dms-docs-nav" style={{ fontSize: 12.5, color: 'var(--vdms-text-muted)' }}>
           {/* Back / Forward navigation buttons */}
           <button
             onClick={goBack}
@@ -6145,15 +6137,16 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             title="Go back (Left Arrow)"
             className="dms-nav-arrow"
             style={{
-              width: 34, height: 34, borderRadius: '50%', border: '1px solid var(--vdms-border)',
-              background: canGoBack ? clay.accentGradient : 'var(--vdms-border-soft)',
-              color: canGoBack ? '#fff' : 'var(--vdms-border)',
+              width: 28, height: 28, borderRadius: 7, border: '1px solid var(--vdms-line)',
+              background: 'var(--vdms-surface)',
+              color: canGoBack ? 'var(--vdms-text)' : 'var(--vdms-text-faint)',
+              opacity: canGoBack ? 1 : 0.55,
               cursor: canGoBack ? 'pointer' : 'not-allowed',
-              fontSize: 20, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'transform 160ms ease, filter 160ms ease, box-shadow 160ms ease',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+              transition: 'background 150ms ease, color 150ms ease, transform 150ms ease',
               flexShrink: 0,
             }}
-          >←</button>
+          ><Icon iconName="ChevronLeft" aria-hidden="true" style={{ fontSize: 11 }} /></button>
           <button
             onClick={goForward}
             disabled={!canGoForward}
@@ -6161,15 +6154,18 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             title="Go forward (Right Arrow)"
             className="dms-nav-arrow"
             style={{
-              width: 34, height: 34, borderRadius: '50%', border: '1px solid var(--vdms-border)',
-              background: canGoForward ? clay.accentGradient : 'var(--vdms-border-soft)',
-              color: canGoForward ? '#fff' : 'var(--vdms-border)',
+              width: 28, height: 28, borderRadius: 7, border: '1px solid var(--vdms-line)',
+              background: 'var(--vdms-surface)',
+              color: canGoForward ? 'var(--vdms-text)' : 'var(--vdms-text-faint)',
+              opacity: canGoForward ? 1 : 0.55,
               cursor: canGoForward ? 'pointer' : 'not-allowed',
-              fontSize: 20, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'transform 160ms ease, filter 160ms ease, box-shadow 160ms ease',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 0,
+              transition: 'background 150ms ease, color 150ms ease, transform 150ms ease',
               flexShrink: 0,
             }}
-          >→</button>
+          ><Icon iconName="ChevronRight" aria-hidden="true" style={{ fontSize: 11 }} /></button>
+          <span aria-hidden="true" style={{ width: 1, height: 18, background: 'var(--vdms-line)', margin: '0 6px 0 4px', flexShrink: 0 }} />
+          <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 13, color: 'var(--vdms-text-faint)', marginRight: 2, flexShrink: 0 }} />
         {folderPathStack.map((item, idx) => {
           if (idx === 0 && (item.id === 'sites_root' || item.name === 'SharePoint Sites' || item.name === 'Sites Documents')) {
             return null;
@@ -6177,7 +6173,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             const isLast = idx === folderPathStack.length - 1;
             return (
               <React.Fragment key={item.id + idx}>
-                <span className="dms-crumb-sep">›</span>
+                <span className="dms-crumb-sep"><Icon iconName="ChevronRight" aria-hidden="true" /></span>
                 <span
                   className={isLast ? 'dms-crumb-current' : 'dms-crumb-link'}
                   onClick={() => {
@@ -6265,16 +6261,26 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           })}
         </div>
 
-        {/* Module Header — the Folder/List toggle is pinned as the last,
-            non-shrinking child so it sits at the same top-right spot in both
-            views; the variable-width action buttons wrap to its left. */}
-        <div className="dms-docs-head" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{ flex: '0 1 auto', minWidth: 160 }}>
-            <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'var(--vdms-text)', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 20 }}>📁</span>
+        {/* Module Header — left title column has a fixed, non-shrinking
+            width so the right-side site selector / action row can never
+            compress it; the right side stacks the site selector above a
+            single-row action bar (own overflow scroll) so neither can ever
+            overlap the other. White rounded card (matching Settings → Site
+            Management's card style) instead of sitting directly on the
+            sticky wrapper's flat background, per the "Shared Documents"
+            reference design. */}
+        <div className="dms-docs-head" style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'nowrap', gap: 16,
+          background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-line)',
+          boxShadow: clay.shadowRaised, padding: '16px 18px', boxSizing: 'border-box',
+        }}>
+          <div style={{ flex: '0 0 auto', flexShrink: 0, minWidth: 220, display: 'flex', alignItems: 'center', gap: 12 }}>
+           <DmsTileIcon icon="FabricFolder" tone="accent" size={40} />
+           <div style={{ minWidth: 0 }}>
+            <h2 style={{ margin: 0, fontSize: 'clamp(22px, 2.2vw, 28px)', fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1.15, color: 'var(--vdms-text)', fontFamily: DMS_FONT_DISPLAY, wordBreak: 'break-word' }}>
               {currentFolderNode ? currentFolderNode.name : 'Documents'}
             </h2>
-            <p style={{ margin: '4px 0 0', fontSize: 13, color: 'var(--vdms-text-muted)' }}>
+            <p style={{ margin: '3px 0 0', fontSize: 13, fontWeight: 600, color: 'var(--vdms-text-muted)' }}>
               {docViewMode === 'list'
                 ? `${filtered.length} rows · flattened list view`
                 : stackLevel === 0
@@ -6293,14 +6299,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               && !atSitesRoot && !atSharedDocsRoot && !atDocsRoot
               && !host.state.documentFilesLoading
               && (
-              <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: allCurrentFolderFiles.length > 0 ? '#15803d' : 'var(--vdms-text-muted)' }}>
-                {allCurrentFolderFiles.length > 0 ? '✅ Attached' : '⚪ Not Attached'}
+              <div style={{ marginTop: 6, display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 700, borderRadius: 12, padding: '2px 9px', background: allCurrentFolderFiles.length > 0 ? clay.pillActiveBg : clay.pillWarnBg, color: allCurrentFolderFiles.length > 0 ? clay.pillActiveText : clay.pillWarnText }}>
+                <Icon iconName={allCurrentFolderFiles.length > 0 ? 'CheckMark' : 'Warning'} aria-hidden="true" style={{ fontSize: 10 }} />
+                {allCurrentFolderFiles.length > 0 ? 'Attached' : 'Not Attached'}
               </div>
             )}
+           </div>
           </div>
 
+          <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+
+          {/* Top row — SharePoint site selector only. Never positioned
+              absolutely, so it simply takes its own row above the action
+              bar and can never overlap it. */}
           {(host.state.documentSites || []).length > 1 && (
-            <label className="dms-site-picker" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--vdms-text)', fontWeight: 600, flexShrink: 0 }}>
+            <label className="dms-site-picker" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--vdms-text-muted)', fontWeight: 600, flexShrink: 0 }}>
+              <Icon iconName="SharepointLogo" aria-hidden="true" style={{ fontSize: 14, color: clay.accent }} />
               SharePoint site
               <select
                 aria-label="Select SharePoint site"
@@ -6311,7 +6325,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     alert(error?.message || 'Could not switch site.');
                   });
                 }}
-                style={{ minWidth: 230, padding: '9px 12px', border: '1px solid var(--vdms-text-faint)', borderRadius: 7, background: 'var(--vdms-surface)', color: 'var(--vdms-text)' }}
+                style={{ minWidth: 220, height: 34, padding: '0 12px', border: '1px solid var(--vdms-line-strong)', borderRadius: 8, background: 'var(--vdms-surface)', color: 'var(--vdms-text)', boxShadow: clay.shadowRaised }}
               >
                 {host.state.documentSites.map(site => (
                   <option key={site.site_key} value={site.site_key}>
@@ -6322,7 +6336,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             </label>
           )}
 
-          <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 10 }}>
+          {/* Bottom row — every action button in one horizontal, non-wrapping
+              row (its own overflow scroll if the viewport is too narrow), so
+              it can never overlap the site selector above it. */}
+          <div style={{ minWidth: 0, maxWidth: '100%', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'nowrap', gap: 6, overflowX: 'auto' }}>
 
             {/* New Folder Button — sits just before Archive. In the plain
                 SharePoint folder tree (Sites / Shared Documents / Documents)
@@ -6350,17 +6367,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     if (!vesselCtx) { alert('Open a vessel or department folder first to create a folder inside it.'); return; }
                     host._openAddFolderDialog(vesselCtx);
                   }}
-                  style={{
-                    background: canCreateFolder ? clay.accentGradient : 'var(--vdms-border-soft)',
-                    color: canCreateFolder ? '#fff' : 'var(--vdms-text-faint)',
-                    border: 'none', borderRadius: 999,
-                    boxShadow: canCreateFolder ? clay.shadowButton : 'none',
-                    padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: canCreateFolder ? 'pointer' : 'not-allowed',
-                    display: 'inline-flex', alignItems: 'center', gap: 6,
-                  }}
+                  className="dms-btn dms-btn-secondary"
+                  style={dmsBtn('secondary', canCreateFolder)}
                   title={canCreateFolder ? 'Create a new folder here' : 'Open a folder first to create a folder inside it'}
                 >
-                  📁 New Folder
+                  <Icon iconName="Add" aria-hidden="true" style={{ fontSize: 12 }} /> New Folder
                 </button>
               );
             })()}
@@ -6396,17 +6407,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         .map(file => ({ id: file.id || file.name, name: file.name, folderPath: currentFolderName || '', department: docMainFolder || '', vesselName: currentVesselNameFromStack || '' }));
                     void host._archiveSelectedDocuments(selectedFiles);
                   }}
-                  style={{
-                    background: isActive ? clay.accentGradient : 'var(--vdms-border-soft)',
-                    color: isActive ? '#fff' : 'var(--vdms-text-faint)',
-                    border: 'none', borderRadius: 999,
-                    boxShadow: isActive ? clay.shadowButton : 'none',
-                    padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: isActive ? 'pointer' : 'not-allowed',
-                    display: 'inline-flex', alignItems: 'center', gap: 6,
-                  }}
+                  className="dms-btn dms-btn-ghost"
+                  style={{ ...dmsBtn('ghost', isActive), order: -1 }}
                   title={usesArchivePicker ? 'Choose folders or files to archive' : undefined}
                 >
-                  📦 Archive{(!usesArchivePicker && selectionCount > 0) ? ` (${selectionCount})` : ''}
+                  <Icon iconName="Archive" aria-hidden="true" style={{ fontSize: 13 }} /> Archive{(!usesArchivePicker && selectionCount > 0) ? ` (${selectionCount})` : ''}
                 </button>
               );
             })()}
@@ -6422,17 +6427,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     .filter(f => f.id);
                   host._openFileDeleteDialog(filesToDelete);
                 }}
-                style={{
-                  background: listViewSelectedFiles.size > 0 ? '#fff5f5' : 'var(--vdms-surface-alt)',
-                  color: listViewSelectedFiles.size > 0 ? '#ef4444' : 'var(--vdms-border)',
-                  border: `1px solid ${listViewSelectedFiles.size > 0 ? '#fca5a5' : 'var(--vdms-border)'}`,
-                  borderRadius: 8, padding: '7px 16px', fontSize: 13, fontWeight: 600,
-                  cursor: listViewSelectedFiles.size > 0 ? 'pointer' : 'not-allowed',
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                }}
+                className="dms-btn dms-btn-danger"
+                style={dmsBtn('danger', listViewSelectedFiles.size > 0)}
                 title={listViewSelectedFiles.size > 0 ? `Delete ${listViewSelectedFiles.size} selected file(s)` : 'Select files to delete'}
               >
-                🗑 Delete{listViewSelectedFiles.size > 0 ? ` (${listViewSelectedFiles.size})` : ''}
+                <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 12 }} /> Delete{listViewSelectedFiles.size > 0 ? ` (${listViewSelectedFiles.size})` : ''}
               </button>
             )}
 
@@ -6453,17 +6452,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   host.setState({ folderViewSelectedFiles: new Set() });
                   host._openFileDeleteDialog(filesToDelete);
                 }}
-                style={{
-                  background: folderViewSelectedFiles.size > 0 ? '#fff5f5' : 'var(--vdms-surface-alt)',
-                  color: folderViewSelectedFiles.size > 0 ? '#ef4444' : 'var(--vdms-border)',
-                  border: `1px solid ${folderViewSelectedFiles.size > 0 ? '#fca5a5' : 'var(--vdms-border)'}`,
-                  borderRadius: 8, padding: '7px 16px', fontSize: 13, fontWeight: 600,
-                  cursor: folderViewSelectedFiles.size > 0 ? 'pointer' : 'not-allowed',
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                }}
+                className="dms-btn dms-btn-danger"
+                style={dmsBtn('danger', folderViewSelectedFiles.size > 0)}
                 title={folderViewSelectedFiles.size > 0 ? `Delete ${folderViewSelectedFiles.size} selected file(s)` : 'Select files to delete'}
               >
-                🗑 Delete{folderViewSelectedFiles.size > 0 ? ` (${folderViewSelectedFiles.size})` : ''}
+                <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 12 }} /> Delete{folderViewSelectedFiles.size > 0 ? ` (${folderViewSelectedFiles.size})` : ''}
               </button>
             )}
 
@@ -6575,14 +6568,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               };
 
               return (
-                <div style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                  {/* 1. Upload Multiple Files */}
-                  <label style={{
-                    background: '#0284c7', color: '#fff', border: 'none', borderRadius: 8,
-                    padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                    display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 4px rgba(2,132,199,0.2)',
-                    transition: 'opacity 0.15s, transform 0.15s',
-                  }}>
+                <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'nowrap' }}>
+                  {/* 1. Upload Multiple Files — the page's primary action
+                      (CSS `order` keeps it right-most, next to the view toggle). */}
+                  <label className="dms-btn dms-btn-primary" style={{ ...dmsBtn('primary'), order: 2 }}>
                     <input
                       type="file"
                       multiple
@@ -6596,16 +6585,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         host._openBulkUpload(bulkFiles, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
                       }}
                     />
-                    <span>⬆</span> Upload Files
+                    <Icon iconName="Upload" aria-hidden="true" style={{ fontSize: 13 }} /> Upload Files
                   </label>
 
-                  {/* 2. Upload Entire Folder */}
-                  <label style={{
-                    background: '#0284c7', color: '#fff', border: 'none', borderRadius: 8,
-                    padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                    display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 4px rgba(2,132,199,0.2)',
-                    transition: 'opacity 0.15s, transform 0.15s',
-                  }}>
+                  {/* 2. Upload Entire Folder — secondary action */}
+                  <label className="dms-btn dms-btn-secondary" style={{ ...dmsBtn('secondary'), order: 1 }}>
                     <input
                       type="file"
                       {...({ webkitdirectory: '', directory: '' } as any)}
@@ -6623,7 +6607,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         host._openBulkUpload(bulkFiles, resolvedFolderId, subFolderPath, currentVessel, currentFolderNode, targetSiteId, targetDriveId);
                       }}
                     />
-                    <span>📁</span> Upload Folder
+                    <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 13 }} /> Upload Folder
                   </label>
 
                   {/* 3. Delete Uploaded Folder Button (if uploaded folders exist) */}
@@ -6640,53 +6624,67 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           subfolderNames: uploadedOnlySubfolderNames,
                         });
                       }}
-                      style={{
-                        background: '#fff1f2', color: '#e11d48', border: '1px solid #fecdd3', borderRadius: 8,
-                        padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                        display: 'inline-flex', alignItems: 'center', gap: 6, boxShadow: '0 2px 4px rgba(225,29,72,0.1)',
-                        transition: 'all 0.15s',
-                      }}
+                      className="dms-btn dms-btn-danger"
+                      style={dmsBtn('danger')}
                       title="Delete uploaded folders (non-template only)"
                     >
-                      <span>🗑</span> Delete Uploaded Folder
+                      <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 12 }} /> Delete Uploaded Folder
                     </button>
                   )}
                 </div>
               );
             })()}
 
-          </div>
-
           {/* Folder view / List view Pill Toggle — fixed position */}
-          <div className="dms-view-toggle" style={{ display: 'inline-flex', flexShrink: 0, background: 'var(--vdms-glass-strong)', border: '1px solid var(--vdms-line-strong)', borderRadius: 999, padding: 3, gap: 2 }}>
+          {/* Segmented control (same pattern as the Sidebar theme switch):
+              two equal cells with a sliding accent highlight behind them. */}
+          <div className="dms-view-toggle" role="group" aria-label="Documents view" style={{ position: 'relative', display: 'inline-grid', gridTemplateColumns: '1fr 1fr', flexShrink: 0, background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-line)', borderRadius: 10, padding: 3, boxSizing: 'border-box' }}>
+            <span
+              aria-hidden="true"
+              style={{
+                position: 'absolute', top: 3, bottom: 3, left: 3, width: 'calc(50% - 3px)',
+                borderRadius: 7, background: clay.accent, boxShadow: clay.shadowButton,
+                transform: docViewMode === 'list' ? 'translateX(100%)' : 'translateX(0)',
+                transition: 'transform 0.25s ease',
+              }}
+            />
             <button
               onClick={openFolderViewFromListContext}
+              aria-pressed={docViewMode === 'folder'}
               style={{
-                padding: '6px 14px', borderRadius: 999, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                background: docViewMode === 'folder' ? 'var(--vdms-toggle-active-bg)' : 'transparent',
-                color: docViewMode === 'folder' ? 'var(--vdms-toggle-active-text)' : 'var(--vdms-text-muted)',
+                position: 'relative', zIndex: 1, height: 28, padding: '0 14px', borderRadius: 7, border: 'none', fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap',
+                background: 'transparent',
+                color: docViewMode === 'folder' ? DMS_ON_ACCENT : 'var(--vdms-text-muted)',
+                transition: 'color 150ms ease',
               }}
             >
-              ⊞ Folder view
+              <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 12 }} /> Folder view
             </button>
             <button
               onClick={openListViewFromFolderContext}
+              aria-pressed={docViewMode === 'list'}
               style={{
-                padding: '6px 14px', borderRadius: 999, border: 'none', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                background: docViewMode === 'list' ? 'var(--vdms-toggle-active-bg)' : 'transparent',
-                color: docViewMode === 'list' ? 'var(--vdms-toggle-active-text)' : 'var(--vdms-text-muted)',
+                position: 'relative', zIndex: 1, height: 28, padding: '0 14px', borderRadius: 7, border: 'none', fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6, whiteSpace: 'nowrap',
+                background: 'transparent',
+                color: docViewMode === 'list' ? DMS_ON_ACCENT : 'var(--vdms-text-muted)',
+                transition: 'color 150ms ease',
               }}
             >
-              ☰ List view
+              <Icon iconName="BulletedList" aria-hidden="true" style={{ fontSize: 12 }} /> List view
             </button>
+          </div>
+          </div>
           </div>
         </div>
 
         {/* ── Filter Toolbar ── */}
-        <div className="dms-filter-bar" style={{ background: 'var(--vdms-surface)', borderRadius: 10, padding: '10px 12px', border: '1px solid var(--vdms-border)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="dms-filter-bar" style={{ background: 'var(--vdms-surface)', borderRadius: 14, padding: '10px 12px', border: '1px solid var(--vdms-line)', display: 'flex', flexDirection: 'column', gap: 10 }}>
           {docViewMode === 'list' && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingBottom: 6, borderBottom: '1px solid var(--vdms-border-soft)' }}>
-              <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingBottom: 8, borderBottom: '1px solid var(--vdms-border-soft)' }}>
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--vdms-text-muted)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <Icon iconName="Documentation" aria-hidden="true" style={{ fontSize: 13, color: clay.accent }} />
                 {docScopeType === 'vessels' && `Showing documents for ${vesselFilter !== 'all' ? vesselFilter : 'individual vessels'}`}
                 {docScopeType === 'common' && 'Showing documents shared across all vessels (Common for all ships)'}
                 {docScopeType === 'kaizen' && 'Showing global Kaizen - Knowledge Bank documents'}
@@ -6700,22 +6698,18 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 onClick={() => host._exportVesselsExcel()}
                 disabled={host.state.vesselsExcelExportBusy}
                 title="Download a full vessel + folder summary (.xlsx) — independent of the filters above"
-                style={{
-                  border: '1px solid #bae6fd', background: host.state.vesselsExcelExportBusy ? 'var(--vdms-border-soft)' : '#f0f9ff',
-                  color: host.state.vesselsExcelExportBusy ? 'var(--vdms-text-faint)' : '#0369a1', borderRadius: 8,
-                  padding: '6px 12px', fontSize: 12, fontWeight: 600,
-                  cursor: host.state.vesselsExcelExportBusy ? 'not-allowed' : 'pointer',
-                  display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
-                }}
+                style={{ ...dmsBtn('secondary', !host.state.vesselsExcelExportBusy), height: 30, fontSize: 12.5, padding: '0 12px' }}
               >
-                {host.state.vesselsExcelExportBusy ? '⏳ Exporting…' : '⬇ Export vessels report (.xlsx)'}
+                {host.state.vesselsExcelExportBusy
+                  ? <><DmsSpinner size={12} /> Exporting…</>
+                  : <><Icon iconName="ExcelDocument" aria-hidden="true" style={{ fontSize: 13, color: clay.pillActiveText }} /> Export vessels report (.xlsx)</>}
               </button>
             </div>
           )}
 
           <div className="dms-filter-row" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
             <div className="dms-filter-search" style={{ position: 'relative', flex: '1 1 260px', minWidth: 200 }}>
-              <span style={{ position: 'absolute', left: 15, top: '50%', transform: 'translateY(-50%)', color: 'var(--clay-accent, #0a7ea8)', fontSize: 13, zIndex: 1, pointerEvents: 'none' }}>🔍</span>
+              <Icon iconName="Search" aria-hidden="true" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--vdms-text-muted)', fontSize: 13, zIndex: 1, pointerEvents: 'none', lineHeight: 1 }} />
               {/* Debounced: typing feeds this page's expensive per-render
                   recompute (groupCatActive's recursive folder walk / fleet-wide
                   row scan below), which used to run once per keystroke and made
@@ -6727,7 +6721,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 value={textFilter}
                 placeholder="Search vessel, file, folder, category…"
                 title="Matches any format/file type. You can combine terms — e.g. a vessel name plus a partial file name — separated by spaces; each word can match a different field."
-                style={{ width: '100%', padding: '6px 26px 6px 28px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, outline: 'none', boxSizing: 'border-box' }}
+                style={{ width: '100%', height: 34, padding: '0 26px 0 34px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, outline: 'none', boxSizing: 'border-box', background: 'var(--vdms-surface)', color: 'var(--vdms-text)' }}
                 onChange={nextValue => {
                   host.setState({ textFilter: nextValue, docListPage: 0, searchDropdownActiveIndex: -1 });
                   // Fleet-wide backend lookup, debounced: finds which
@@ -6758,7 +6752,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     host.setState({ docGroupFilter: val, docCategoryFilter: 'all', docGroupLevelFilter: 'all', docLeafCategoryFilter: 'all', docSubCategoryFilter: 'all', catFilter: 'all', docListPage: 0 });
                   }
                 }}
-                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 160 }}
+                style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 160 }}
               >
                 <option value="all">All main folders</option>
                 {allGroups.map(g => (
@@ -6771,28 +6765,23 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 (mainFolderPage-only case used to hide it everywhere else in
                 Folder view browsing). */}
             {(docScopeType === 'vessels' || docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents') && (
-              <select
+              <Dropdown
                 aria-label="Vessel filter"
-                value={mainFolderPage ? (vesselFilter === 'all' ? '' : vesselFilter) : vesselFilter}
-                onChange={e => applyVesselFilterSelection(e.target.value)}
-                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 160 }}
-              >
-                {!mainFolderPage && <option value="all">All vessels</option>}
-                {mainFolderPage && <option value="">Select vessel</option>}
-                {docScopeType === 'vessels' && mainFolderPage ? (
-                  vesselFilterOptions.map(v => (
-                    <option key={v.id || v.name} value={v.name}>{v.name}</option>
-                  ))
-                ) : docScopeType === 'sites' ? (
-                  siteVesselOptions.map(v => (
-                    <option key={v.id || v.name} value={v.name}>{v.name}</option>
-                  ))
-                ) : (
-                  (docScopeType === 'shared_docs' || docScopeType === 'documents' ? libraryVesselOptions : distinctVesselsInScope).map(vName => (
-                    <option key={vName} value={vName}>{vName}</option>
-                  ))
-                )}
-              </select>
+                selectedKey={mainFolderPage ? (vesselFilter === 'all' ? '' : vesselFilter) : vesselFilter}
+                onChange={(_, option) => applyVesselFilterSelection(String(option?.key ?? ''))}
+                dropdownWidth={0}
+                calloutProps={{ className: 'dms-filter-callout' }}
+                options={[
+                  ...(!mainFolderPage ? [{ key: 'all', text: 'All vessels' }] : [{ key: '', text: 'Select vessel' }]),
+                  ...(docScopeType === 'vessels' && mainFolderPage
+                    ? vesselFilterOptions.map(v => ({ key: v.name, text: v.name }))
+                    : docScopeType === 'sites'
+                      ? siteVesselOptions.map(v => ({ key: v.name, text: v.name }))
+                      : (docScopeType === 'shared_docs' || docScopeType === 'documents' ? libraryVesselOptions : distinctVesselsInScope)
+                        .map(vName => ({ key: vName, text: vName }))),
+                ]}
+                styles={styleProps => dmsCompactDropdownStyles(styleProps)}
+              />
             )}
             <select
               aria-label="Main folder filter"
@@ -6851,12 +6840,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   }
                 }
               }}
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
+              style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
             >
               <option value="all">All main folders</option>
               {mainFolderOptions.map(folder => <option key={folder} value={folder}>{folder}</option>)}
             </select>
-            {subfolderTree.length > 0 ? (
+            {!SHOW_SUBFOLDER_FILTERS ? null : subfolderTree.length > 0 ? (
               <FolderTreeSelect
                 tree={subfolderTree}
                 value={docSubfolderOtherFilter}
@@ -6965,7 +6954,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               <select
                 value="all"
                 disabled
-                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-faint)', outline: 'none', maxWidth: 180, cursor: 'not-allowed' }}
+                style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-faint)', outline: 'none', maxWidth: 180, cursor: 'not-allowed' }}
                 title={`"${scopedMainFolderForSubfolders}" has no sub-folders`}
               >
                 <option value="all">No folder found</option>
@@ -7009,6 +6998,34 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 // groups": drop a sub-folder that was only there for a group.
                 // (Library-wide: opening one vessel's group folder would also
                 // change the Vessel / Main folder filters — just filter.)
+                // "All groups" in Folder view: step back out of the previous
+                // group's folder (like clicking the breadcrumb above it), so the
+                // page stops showing that group's contents.
+                if (val === 'all' && docViewMode === 'folder' && docGroupLevelFilter !== 'all') {
+                  const prefixLen = folderPathStack[0]?.id === 'sites_root' ? 3 : 1;
+                  const prevGroup = docGroupLevelFilter.trim().toLowerCase();
+                  const groupIdx = folderPathStack.findIndex((n, i) => {
+                    if (i < prefixLen) return false;
+                    if (prevGroup === TBC_GROUP_LABEL.toLowerCase()) return isToBeClassifiedName(n.name);
+                    const g = folderGroupsOf(n.name);
+                    return g.drawings !== g.manuals && (prevGroup === 'drawings' ? g.drawings : g.manuals);
+                  });
+                  if (groupIdx >= prefixLen) {
+                    const newStack = folderPathStack.slice(0, groupIdx);
+                    (host as any)._subfolderSelectedPath = undefined;
+                    host._pushFolderNav(newStack, docMainFolder);
+                    const navFilters = newStack[0]?.id === 'sites_root' ? deriveLiveNavFilterState(newStack) : deriveDocFiltersFromStack(newStack);
+                    host.setState({
+                      ...navFilters,
+                      docGroupLevelFilter: 'all',
+                      docLeafCategoryFilter: 'all',
+                      docSubCategoryFilter: 'all',
+                      docListPage: 0,
+                    });
+                    triggerFolderRefresh(newStack);
+                    return;
+                  }
+                }
                 const groupNode = (val === 'all' || libraryWideScope) ? null : findSubfolderNodeForCategory(val, { group: val });
                 (host as any)._subfolderSelectedPath = groupNode ? groupNode.path : undefined;
                 host.setState({
@@ -7025,13 +7042,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   else navigateToDeptSubfolder(groupNode.path);
                 }
               }}
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 160, cursor: groupOptions.length === 0 ? 'not-allowed' : 'pointer', opacity: groupOptions.length === 0 ? 0.6 : 1 }}
+              style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 160, cursor: groupOptions.length === 0 ? 'not-allowed' : 'pointer', opacity: groupOptions.length === 0 ? 0.6 : 1 }}
             >
               <option value="all">{groupOptions.length === 0 ? (scopedTaxonomyKey && libTaxonomyState !== 'ready' ? 'Loading groups…' : 'No groups found') : 'All groups'}</option>
               {groupOptions.map(g => <option key={g} value={g}>{g}</option>)}
             </select>
             {(categoryOptions.length > 0 || categoryOptionGroups.length > 0 || libraryWideScope || (!!scopedTaxonomyKey && libTaxonomyState !== 'ready')) ? (
-              <select
+              <CompactCategorySelect
                 aria-label="Category filter"
                 value={(() => {
                   // Classified (All groups) options carry "<Group>::<Category>";
@@ -7044,8 +7061,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   const owner = categoryOptionGroups.find(x => x.categories.indexOf(docLeafCategoryFilter) !== -1);
                   return owner ? `${owner.group}::${docLeafCategoryFilter}` : docLeafCategoryFilter;
                 })()}
-                onChange={e => {
-                  let val = e.target.value;
+                onChange={value => {
+                  let val = value;
                   // "<Group>::<Category>" (All groups, classified list): only the
                   // Category changes — the Groups filter stays exactly as the
                   // user set it. The group is used just to find the matching
@@ -7091,7 +7108,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     else navigateToDeptSubfolder(match.path);
                   }
                 }}
-                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
+                style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
               >
                 <option value="all">All categories</option>
                 {docGroupLevelFilter === 'all' && categoryOptionGroups.length > 0 ? (
@@ -7106,13 +7123,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     ))}
                   </>
                 ) : categoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
-              </select>
+              </CompactCategorySelect>
             ) : (
-              <select aria-label="Category filter" value="all" disabled style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-faint)', outline: 'none', maxWidth: 180, cursor: 'not-allowed' }}>
+              <select aria-label="Category filter" value="all" disabled style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-faint)', outline: 'none', maxWidth: 180, cursor: 'not-allowed' }}>
                 <option value="all">No categories found</option>
               </select>
             )}
-            {(subCategoryOptions.length > 0 || subCategoryOptionGroups.length > 0 || taxonomyScoped) ? (
+            {!SHOW_SUBFOLDER_FILTERS ? null : (subCategoryOptions.length > 0 || subCategoryOptionGroups.length > 0 || taxonomyScoped) ? (
               <select
                 aria-label="Sub-category filter"
                 value={(() => {
@@ -7156,7 +7173,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     else navigateToDeptSubfolder(node.path);
                   }
                 }}
-                style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
+                style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
               >
                 <option value="all">All sub-categories</option>
                 {libTaxonomyState !== 'ready' && (
@@ -7172,7 +7189,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 ))}
               </select>
             ) : (
-              <select aria-label="Sub-category filter" value="all" disabled style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-faint)', outline: 'none', maxWidth: 180, cursor: 'not-allowed' }}>
+              <select aria-label="Sub-category filter" value="all" disabled style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-faint)', outline: 'none', maxWidth: 180, cursor: 'not-allowed' }}>
                 <option value="all">No sub-categories found</option>
               </select>
             )}
@@ -7180,7 +7197,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               aria-label="Attachment status filter"
               value={attachmentFilter}
               onChange={e => host.setState({ attachmentFilter: e.target.value as any, docListPage: 0 })}
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
+              style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
             >
               <option value="all">All attachment status</option>
               <option value="attached">Attachment Available</option>
@@ -7190,12 +7207,28 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               aria-label="Sort filter"
               value={docListSort}
               onChange={e => host.setState({ docListSort: e.target.value as any, docListPage: 0 })}
-              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 12, background: 'var(--vdms-surface)', outline: 'none' }}
+              style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface)', outline: 'none' }}
             >
               <option value="default">Default order</option>
               <option value="name_az">Name A–Z</option>
               <option value="newest">Newest</option>
             </select>
+            <button
+              type="button"
+              aria-label="Refresh files"
+              title="Reload this folder from SharePoint (picks up files deleted, renamed or moved there)"
+              onClick={e => {
+                const btn = e.currentTarget;
+                btn.disabled = true;
+                btn.style.opacity = '0.6';
+                triggerFolderRefresh(host.state.folderPathStack);
+                void host._syncScheduler?.triggerNow().catch(() => undefined);
+                window.setTimeout(() => { btn.disabled = false; btn.style.opacity = ''; }, 1500);
+              }}
+              style={{ height: 34, padding: '0 12px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface)', color: 'var(--vdms-text)', outline: 'none', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            >
+              <Icon iconName="Refresh" aria-hidden="true" style={{ fontSize: 13 }} /> Refresh
+            </button>
 
             {/* vesselLoadingName / documentVesselsLoadingMore / documentFilesLoading
                 are ALL per-vessel background loads: every setter of
@@ -7218,11 +7251,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 banner is gated on it. */}
             {(docScopeType === 'vessels' && (documentFilesLoading || vesselLoadingName || documentVesselsLoadingMore)) && (
               <div className="dms-filter-loading" style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px',
-                borderRadius: 8, background: '#eff6ff', border: '1px solid #bfdbfe',
-                fontSize: 11, color: '#1d4ed8', fontWeight: 600,
+                display: 'inline-flex', alignItems: 'center', gap: 8, padding: '5px 10px',
+                borderRadius: 8, background: clay.accentSoft, border: '1px solid transparent',
+                fontSize: 12, color: clay.accent, fontWeight: 600,
               }}>
-                <span style={{ display: 'inline-block', animation: 'spin 1s linear infinite' }}>⏳</span>
+                <DmsSpinner size={12} />
                 <span>{vesselLoadingName ? `Loading ${vesselLoadingName}...` : (documentVesselsLoadingMore ? 'Loading vessels...' : 'Syncing live files...')}</span>
               </div>
             )}
@@ -7256,7 +7289,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           (docScopeType === 'sites' || docScopeType === 'shared_docs' || docScopeType === 'documents') &&
           vesselMainFolders.length > 1 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 11, color: 'var(--vdms-text-muted)', fontWeight: 600 }}>
+              <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 13, color: clay.accent }} />
                 {vesselFilter} is also under:
               </span>
               {vesselMainFolders.map(m => {
@@ -7289,10 +7323,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     disabled={active}
                     title={active ? `Currently viewing ${vesselFilter} under ${m}` : `Jump to ${vesselFilter} under ${m}`}
                     style={{
-                      padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600,
-                      border: active ? '1px solid #2563eb' : '1px solid var(--vdms-border)',
-                      background: active ? '#dbeafe' : 'var(--vdms-surface)',
-                      color: active ? '#1d4ed8' : 'var(--vdms-text-muted)',
+                      height: 26, padding: '0 10px', borderRadius: 7, fontSize: 12, fontWeight: 600, boxSizing: 'border-box',
+                      border: active ? '1px solid transparent' : '1px solid var(--vdms-line)',
+                      background: active ? clay.accentSoft : 'var(--vdms-surface)',
+                      color: active ? clay.accent : 'var(--vdms-text-muted)',
                       cursor: active ? 'default' : 'pointer',
                     }}
                   >
@@ -7305,33 +7339,33 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 onClick={() => host.setState({ docCompareMode: true })}
                 title={`Show ${vesselFilter}'s folders from all ${vesselMainFolders.length} main folders side by side`}
                 style={{
-                  padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600,
-                  border: '1px dashed #94a3b8', background: 'var(--vdms-surface)', color: 'var(--vdms-text-muted)', cursor: 'pointer',
-                  marginLeft: 4,
+                  height: 26, padding: '0 10px', borderRadius: 7, fontSize: 12, fontWeight: 600, boxSizing: 'border-box',
+                  border: '1px dashed var(--vdms-line-strong)', background: 'transparent', color: clay.accent, cursor: 'pointer',
+                  marginLeft: 4, display: 'inline-flex', alignItems: 'center', gap: 5,
                 }}
               >
-                ⊞⊞ Compare all {vesselMainFolders.length}
+                <Icon iconName="BulletedList" aria-hidden="true" style={{ fontSize: 11 }} /> Compare all {vesselMainFolders.length}
               </button>
             </div>
           )}
 
         {/* Success Message Banner */}
         {docUploadMsg && (
-          <div style={{ background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 8, padding: '8px 14px', fontSize: 12, color: '#16a34a', display: 'flex', justifyContent: 'space-between' }}>
-            <span>✓ {docUploadMsg}</span>
-            <button onClick={() => host.setState({ docUploadMsg: null })} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#16a34a', fontWeight: 700 }}>✕</button>
+          <div role="status" style={{ background: clay.pillActiveBg, border: '1px solid transparent', borderRadius: 10, padding: '9px 14px', fontSize: 13, fontWeight: 600, color: clay.pillActiveText, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} /> {docUploadMsg}</span>
+            <button onClick={() => host.setState({ docUploadMsg: null })} aria-label="Dismiss" style={{ border: 'none', background: 'none', cursor: 'pointer', color: clay.pillActiveText, fontWeight: 700, display: 'inline-flex', alignItems: 'center', padding: 4 }}><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 11 }} /></button>
           </div>
         )}
 
         {docCompareMode && vesselMainFolders.length > 1 ? (
           renderVesselCompareGrid()
         ) : docViewMode === 'folder' ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 24, marginTop: 4 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20, marginTop: 4 }}>
 
             {/* Level 0: Main Departments + Kaizen - Knowledge Bank */}
             {stackLevel === 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 16 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                      <div style={dmsGrid(240)}>
                         {rootFolderCards.filter(item => {
                           if (docGroupFilter !== 'all') {
                             const itemNorm = item.key.toLowerCase();
@@ -7389,16 +7423,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                 host.setState({ vesselFilter: 'all', docScopeType: 'vessels' });
                               }
                             }}
-                            style={{
-                              background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)', padding: 18,
-                              display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
-                              boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-                            }}
+                            className="dms-tile"
+                            style={DMS_TILE}
                           >
-                            <div style={{ width: 44, height: 44, borderRadius: 10, background: item.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>{item.emoji}</div>
+                            <DmsTileIcon icon={item.key === 'Kaizen - Knowledge Bank' ? 'Documentation' : (item.key === 'SharePoint Sites' ? 'Globe' : 'FabricFolder')} />
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.key}</div>
-                              <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>
+                              <div style={DMS_TILE_TITLE} title={item.key}>{item.key}</div>
+                              <div style={DMS_TILE_SUB}>
                                 {item.key === 'Kaizen - Knowledge Bank' ? 'Knowledge base' :
                                  item.key === 'Shared Documents' ? `${activeLiveSite?.sp_site_name || 'Selected site'} · SharePoint Library` :
                                  item.key === 'Documents' ? 'Site Documents Library' :
@@ -7407,18 +7438,18 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                  `${displayVessels.length} vessels`}
                               </div>
                             </div>
-                            <span style={{ color: 'var(--vdms-text-faint)', fontSize: 16 }}>›</span>
+                            <DmsChevron />
                           </div>
                         ))}
                       </div>
                 {(textFilter || vesselFilter !== 'all' || docGroupFilter !== 'all' || docCategoryFilter !== 'all' || docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all' || docSubCategoryFilter !== 'all' || attachmentFilter !== 'all') && (
-                  <div style={{ marginTop: 24, background: 'var(--vdms-surface)', border: '1px solid var(--vdms-border)', borderRadius: 12, overflow: 'hidden' }}>
-                    <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--vdms-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-                      <strong style={{ color: 'var(--vdms-text)', fontSize: 14 }}>Filtered document results</strong>
-                      <span style={{ color: 'var(--vdms-text-muted)', fontSize: 12 }}>{groupedList.length} folder{groupedList.length === 1 ? '' : 's'}</span>
+                  <div style={{ ...DMS_TABLE_CARD, marginTop: 4 }}>
+                    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--vdms-line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                      <DmsSectionLabel title="Filtered document results" />
+                      <span style={{ fontSize: 11, fontWeight: 700, color: clay.accent, background: clay.accentSoft, borderRadius: 12, padding: '1px 8px', whiteSpace: 'nowrap' }}>{groupedList.length} folder{groupedList.length === 1 ? '' : 's'}</span>
                     </div>
                     {groupedList.length === 0 ? (
-                      <div style={{ padding: 28, textAlign: 'center', color: 'var(--vdms-text-faint)', fontSize: 13 }}>No documents match the selected filters.</div>
+                      <div style={{ padding: '28px 16px', textAlign: 'center', color: 'var(--vdms-text-muted)', fontSize: 13 }}>No documents match the selected filters.</div>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column' }}>
                         {groupedList.slice(0, PAGE_ROWS).map(result => (
@@ -7426,13 +7457,17 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             key={result.groupKey}
                             type="button"
                             onClick={() => host._pushFolderNav([{ id: result.groupKey, name: result.subFolderPath.split(' > ').pop() || result.subCategory }], result.group as 'Technical & Crewing' | 'Commercial & Chartering' | 'Insurance' | 'Kaizen - Knowledge Bank' | 'Knowledge Bank')}
-                            style={{ border: 0, borderBottom: '1px solid var(--vdms-border-soft)', background: 'var(--vdms-surface)', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, textAlign: 'left', cursor: 'pointer' }}
+                            className="dms-result-row"
+                            style={{ border: 0, borderBottom: '1px solid var(--vdms-border-soft)', background: 'var(--vdms-surface)', padding: '11px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, textAlign: 'left', cursor: 'pointer', color: 'inherit', font: 'inherit' }}
                           >
-                            <span style={{ minWidth: 0 }}>
-                              <strong style={{ display: 'block', color: 'var(--vdms-text)', fontSize: 13 }}>{result.subFolderPath.split(' > ').pop() || result.subCategory}</strong>
-                              <span style={{ display: 'block', color: 'var(--vdms-text-muted)', fontSize: 11, marginTop: 3 }}>{result.vesselName} · {result.group} · {result.category}</span>
+                            <span style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <DmsTileIcon icon="FabricFolder" size={30} />
+                              <span style={{ minWidth: 0 }}>
+                                <strong style={{ display: 'block', color: 'var(--vdms-text)', fontSize: 13.5, fontWeight: 700 }}>{result.subFolderPath.split(' > ').pop() || result.subCategory}</strong>
+                                <span style={{ display: 'block', color: 'var(--vdms-text-muted)', fontSize: 12, marginTop: 2 }}>{result.vesselName} · {result.group} · {result.category}</span>
+                              </span>
                             </span>
-                            <span style={{ color: '#0284c7', fontSize: 12, whiteSpace: 'nowrap' }}>{result.files.length} file{result.files.length === 1 ? '' : 's'} ›</span>
+                            <span style={{ color: clay.accent, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}>{result.files.length} file{result.files.length === 1 ? '' : 's'} <DmsChevron /></span>
                           </button>
                         ))}
                       </div>
@@ -7449,24 +7484,20 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
                   if (sitesList.length === 0) {
                     return (
-                      <div style={{ background: 'var(--vdms-surface)', borderRadius: 14, border: '1px dashed var(--vdms-border)', padding: 48, textAlign: 'center', color: 'var(--vdms-text-faint)' }}>
-                        <div style={{ fontSize: 32, marginBottom: 8 }}>🌐</div>
-                        <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>No configured document site found</div>
-                        <div style={{ fontSize: 13, marginTop: 4 }}>Configure a SharePoint document site before browsing its libraries.</div>
-                      </div>
+                      <DmsEmptyState icon="Globe" title="No configured document site found">
+                        Configure a SharePoint document site before browsing its libraries.
+                      </DmsEmptyState>
                     );
                   }
 
                   return (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                          Connected SharePoint Sites ({sitesList.length})
-                        </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                        <DmsSectionLabel title="Connected SharePoint Sites" count={sitesList.length} />
                         <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>Select a SharePoint site to view document libraries</span>
                       </div>
 
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+                      <div style={dmsGrid(260)}>
                         {sitesList
                         .filter(site => !textFilter || (site.sp_site_name || site.site_key || '').toLowerCase().includes(textFilter.trim().toLowerCase()))
                         .map((site, sIdx) => {
@@ -7480,32 +7511,27 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                 const siteNodeId = `site:${siteId}`;
                                 host._pushFolderNav([...folderPathStack, { id: siteNodeId, name: siteName }], 'SharePoint Sites');
                               }}
-                              style={{
-                                background: 'var(--vdms-surface)', borderRadius: 14, border: isActive ? '2px solid #0284c7' : '1px solid var(--vdms-border)',
-                                padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
-                                boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'all 0.15s ease',
-                              }}
+                              className="dms-tile"
+                              style={{ ...DMS_TILE, position: 'relative', overflow: 'hidden', borderColor: isActive ? clay.accent : 'var(--vdms-line)' }}
                             >
-                              <div style={{
-                                width: 48, height: 48, borderRadius: 12, background: isActive ? '#e0f2fe' : 'var(--vdms-surface-alt)',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24,
-                              }}>
-                                🌐
-                              </div>
+                              {isActive && (
+                                <span aria-hidden="true" style={{ position: 'absolute', left: 0, top: 8, bottom: 8, width: 3, borderRadius: '0 3px 3px 0', background: clay.accent }} />
+                              )}
+                              <DmsTileIcon icon="Globe" tone={isActive ? 'accent' : 'neutral'} />
                               <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                <div style={DMS_TILE_TITLE} title={siteName}>
                                   {siteName}
                                 </div>
-                                <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <div style={DMS_TILE_SUB}>
                                   <span>SharePoint Site</span>
                                   {isActive && (
-                                    <span style={{ background: '#dcfce7', color: '#15803d', fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4 }}>
+                                    <span style={{ background: clay.pillActiveBg, color: clay.pillActiveText, fontSize: 10.5, fontWeight: 700, padding: '1px 7px', borderRadius: 10 }}>
                                       Active
                                     </span>
                                   )}
                                 </div>
                               </div>
-                              <span style={{ color: '#0284c7', fontSize: 18, fontWeight: 700 }}>›</span>
+                              <DmsChevron />
                             </div>
                           );
                         })}
@@ -7528,10 +7554,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
                   if (!drivesList) {
                     return (
-                      <div style={{ padding: 40, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>
-                        <div style={{ fontSize: 24, marginBottom: 8, animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</div>
-                        <div>Loading SharePoint document libraries for {siteNode?.name}...</div>
-                      </div>
+                      <DmsLoadingState label={<>Loading SharePoint document libraries for {siteNode?.name}...</>} />
                     );
                   }
 
@@ -7552,15 +7575,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     .filter(drive => !textFilter || (drive.name || '').toLowerCase().includes(textFilter.trim().toLowerCase()));
 
                   return (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                          Libraries in {siteNode?.name} ({visibleDrives.length})
-                        </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                        <DmsSectionLabel title={<>Libraries in {siteNode?.name}</>} count={visibleDrives.length} />
                         <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>Select a document library to browse folders and files</span>
                       </div>
 
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+                      <div style={dmsGrid(260)}>
                         {visibleDrives.map((drive, dIdx) => {
                           const hasCount = typeof drive.item_count === 'number';
                           const isEmpty = hasCount && drive.item_count === 0;
@@ -7570,36 +7591,28 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             onClick={() => {
                               pushLiveFolderNav([...folderPathStack, { id: `drive:${drive.id}`, name: drive.name }]);
                             }}
-                            style={{
-                              background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)',
-                              padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
-                              boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-                            }}
+                            className="dms-tile"
+                            style={DMS_TILE}
                           >
-                            <div style={{
-                              width: 48, height: 48, borderRadius: 12, background: '#fef3c7',
-                              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24,
-                            }}>
-                              📚
-                            </div>
+                            <DmsTileIcon icon="SharepointLogo" />
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 700, fontSize: 15, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              <div style={DMS_TILE_TITLE} title={drive.name}>
                                 {drive.name}
                               </div>
-                              <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <div style={DMS_TILE_SUB}>
                                 <span>Document Library</span>
                                 {hasCount && (
                                   <span style={{
-                                    fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4,
-                                    background: isEmpty ? 'var(--vdms-border)' : '#dcfce7',
-                                    color: isEmpty ? 'var(--vdms-text-muted)' : '#15803d',
+                                    fontSize: 10.5, fontWeight: 700, padding: '1px 7px', borderRadius: 10,
+                                    background: isEmpty ? 'var(--vdms-surface-alt)' : clay.pillActiveBg,
+                                    color: isEmpty ? 'var(--vdms-text-muted)' : clay.pillActiveText,
                                   }}>
                                     {isEmpty ? 'empty' : `${drive.item_count} item${drive.item_count === 1 ? '' : 's'}`}
                                   </span>
                                 )}
                               </div>
                             </div>
-                            <span style={{ color: '#0284c7', fontSize: 18, fontWeight: 700 }}>›</span>
+                            <DmsChevron />
                           </div>
                           );
                         })}
@@ -7612,7 +7625,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             else { host._systemLibrariesRevealed.add(effectiveSiteId); }
                             host.forceUpdate();
                           }}
-                          style={{ alignSelf: 'flex-start', border: 'none', background: 'transparent', color: '#0284c7', cursor: 'pointer', fontSize: 12, padding: '4px 2px' }}
+                          style={{ alignSelf: 'flex-start', border: 'none', background: 'transparent', color: clay.accent, cursor: 'pointer', fontSize: 12.5, fontWeight: 600, padding: '4px 2px' }}
                         >
                           {showSystem
                             ? `Hide ${systemLibraries.length} system librar${systemLibraries.length === 1 ? 'y' : 'ies'}`
@@ -7650,10 +7663,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 // Cannot render without a resolved drive — show a loading/error state
                 if (!rawDriveId) {
                   return (
-                    <div style={{ padding: 40, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>
-                      <div style={{ fontSize: 24, marginBottom: 8 }}>⏳</div>
-                      <div>Resolving SharePoint document library{siteNode?.name ? ` for ${siteNode.name}` : ''}...</div>
-                    </div>
+                    <DmsLoadingState label={<>Resolving SharePoint document library{siteNode?.name ? ` for ${siteNode.name}` : ''}...</>} />
                   );
                 }
 
@@ -7661,10 +7671,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
                 if (folderData.loading && folderData.items.length === 0) {
                   return (
-                    <div style={{ padding: 40, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>
-                      <div style={{ fontSize: 24, marginBottom: 8, animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</div>
-                      <div>Loading contents of {currentNode?.name || 'folder'}...</div>
-                    </div>
+                    <DmsLoadingState label={<>Loading contents of {currentNode?.name || 'folder'}...</>} />
                   );
                 }
 
@@ -8015,14 +8022,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     : vesselScopedChildFolders);
 
                 return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                     {/* Folders Section */}
                     {childFolders.length > 0 && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        <div style={{ fontSize: 12, fontWeight: 800, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                          Folders ({childFolders.length})
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <DmsSectionLabel title="Folders" count={childFolders.length} />
+                        <div style={dmsGrid(250)}>
                           {childFolders.map((sf, idx) => {
                             const sfInTree2 = !!sf.id && liveTreeIndex.ids.has(sf.id);
                             const sfCountsPending2 = !folderServerCounts2 && host._folderCountsLoading(effectiveSiteId, rawDriveId, currentFolderId);
@@ -8039,34 +8044,26 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                 onClick={() => {
                                   pushLiveFolderNav([...folderPathStack, { id: sf.id, name: sf.name }]);
                                 }}
-                                style={{
-                                  background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)', padding: 18,
-                                  display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
-                                  boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-                                }}
+                                className="dms-tile"
+                                style={DMS_TILE}
                               >
-                                <div style={{
-                                  width: 44, height: 44, borderRadius: 10, background: '#e0f2fe',
-                                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#0284c7',
-                                }}>
-                                  📁
-                                </div>
+                                <DmsTileIcon icon="FabricFolder" />
                                 <div style={{ flex: 1, minWidth: 0 }}>
-                                  <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  <div style={DMS_TILE_TITLE} title={sf.name}>
                                     {sf.name}
                                   </div>
-                                  <div title={sfCounts2 ? `${sfCounts2.folders} sub-folder(s) and ${sfCounts2.files} file(s) in total` : undefined} style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                  <div title={sfCounts2 ? `${sfCounts2.folders} sub-folder(s) and ${sfCounts2.files} file(s) in total` : undefined} style={{ ...DMS_TILE_SUB, marginTop: 4 }}>
                                     {sfServerCounts2 ? renderServerCountPill(sfServerCounts2, sf.name) : sfLoading2 ? (
-                                      <span style={{ color: 'var(--vdms-text-faint)', fontSize: 10 }}>{sfTotal2 > 0 ? `${sfTotal2} items` : '···'}</span>
+                                      <span style={{ color: 'var(--vdms-text-faint)', fontSize: 11 }}>{sfTotal2 > 0 ? `${sfTotal2} items` : '···'}</span>
                                     ) : (
                                       <>
-                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFolderCount2 ?? 0) > 0 ? '#e0f2fe' : 'var(--vdms-border-soft)', color: (sfFolderCount2 ?? 0) > 0 ? '#0369a1' : 'var(--vdms-text-faint)', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📁 {sfFolderCount2 ?? 0}</span>
-                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: (sfFileCount2 ?? 0) > 0 ? '#dcfce7' : 'var(--vdms-border-soft)', color: (sfFileCount2 ?? 0) > 0 ? '#15803d' : 'var(--vdms-text-faint)', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>📄 {sfFileCount2 ?? 0}</span>
+                                        <DmsCountChip icon="FabricFolder" tone="accent" on={(sfFolderCount2 ?? 0) > 0} count={sfFolderCount2 ?? 0} />
+                                        <DmsCountChip icon="Page" tone="success" on={(sfFileCount2 ?? 0) > 0} count={sfFileCount2 ?? 0} />
                                       </>
                                     )}
                                   </div>
                                 </div>
-                                <span style={{ color: 'var(--vdms-text-faint)', fontSize: 16 }}>›</span>
+                                <DmsChevron />
                               </div>
                             );
                           })}
@@ -8121,39 +8118,31 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           fvPageNums.push(n);
                         });
                       }
-                      const fvBtn = (disabled: boolean, active = false): React.CSSProperties => ({
-                        border: active ? 'none' : '1px solid var(--vdms-border)',
-                        background: active ? '#0078d4' : 'var(--vdms-surface)',
-                        color: active ? '#fff' : 'var(--vdms-text)',
-                        borderRadius: 4, padding: '3px 9px', fontSize: 11, fontWeight: active ? 700 : 400,
-                        cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.4 : 1,
-                      });
+                      const fvBtn = (disabled: boolean, active = false): React.CSSProperties => dmsPagerBtn(disabled, active);
 
                       return (
                         <>
                           {displayChildFiles.length > 0 && (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                              <div style={{ fontSize: 12, fontWeight: 800, color: '#15803d', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                                <span>
-                                  {groupCatOnly ? `${groupCatLabel} files in this folder (${displayChildFiles.length})` : `Files (${displayChildFiles.length})`}
-                                </span>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                              <DmsSectionLabel title={groupCatOnly ? `${groupCatLabel} files in this folder` : 'Files'} count={displayChildFiles.length} tone="success">
                                 {groupCatActive && groupCatSearching && (
-                                  <span style={{ fontSize: 11, fontWeight: 600, color: '#1d4ed8', textTransform: 'none', letterSpacing: 0 }}>Searching sub-folders…</span>
+                                  <span style={{ fontSize: 12, fontWeight: 600, color: clay.accent, display: 'inline-flex', alignItems: 'center', gap: 6 }}><DmsSpinner size={11} /> Searching sub-folders…</span>
                                 )}
                                 {groupCatActive && !groupCatSearching && groupCatTruncated && (
-                                  <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--vdms-text-muted)', textTransform: 'none', letterSpacing: 0 }}>Large folder — open a sub-folder to search it fully</span>
+                                  <span style={{ fontSize: 12, fontWeight: 600, color: clay.pillWarnText, background: clay.pillWarnBg, borderRadius: 10, padding: '1px 8px' }}>Large folder — open a sub-folder to search it fully</span>
                                 )}
-                              </div>
-                              <div style={{ background: 'var(--vdms-surface)', borderRadius: 12, border: '1px solid var(--vdms-border)', overflow: 'hidden' }}>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                              </DmsSectionLabel>
+                              <div style={DMS_TABLE_CARD}>
+                               <div style={{ overflowX: 'auto' }}>
+                                <table className="dms-table" style={DMS_TABLE}>
                                   <thead>
-                                    <tr style={{ background: 'var(--vdms-surface-alt)', borderBottom: '1px solid var(--vdms-border)', color: 'var(--vdms-text-muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
-                                      <th style={{ padding: '10px 16px' }}>FILE NAME</th>
-                                      <th style={{ padding: '10px 16px' }}>VESSEL</th>
-                                      <th style={{ padding: '10px 16px' }}>FOLDER PATH</th>
-                                      <th style={{ padding: '10px 16px' }}>SIZE</th>
-                                      <th style={{ padding: '10px 16px' }}>DATE MODIFIED</th>
-                                      <th style={{ padding: '10px 16px', textAlign: 'right' }}>ACTION</th>
+                                    <tr>
+                                      <th style={DMS_TH}>File name</th>
+                                      <th style={DMS_TH}>Vessel</th>
+                                      <th style={DMS_TH}>Folder path</th>
+                                      <th style={DMS_TH}>Size</th>
+                                      <th style={DMS_TH}>Date modified</th>
+                                      <th style={{ ...DMS_TH, textAlign: 'right' }}>Action</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -8190,11 +8179,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         (rowVessel && rowVessel !== 'Not Listed' && rowVessel !== 'Vessel name not listed' ? rowVessel : null);
 
                                       return (
-                                        <tr key={file.id || file.name + idx} style={{ borderBottom: '1px solid var(--vdms-border-soft)' }}>
-                                          <td style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--vdms-text)', display: 'flex', alignItems: 'center', gap: 10 }}>
-                                            <span style={{ fontSize: 18 }}>📄</span>
+                                        <tr key={file.id || file.name + idx} style={DMS_TR}>
+                                          <td style={DMS_TD_NAME}>
+                                           <div style={DMS_NAME_CELL}>
+                                            <DmsTileIcon icon="Page" tone="neutral" size={28} />
                                             <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                                               <span
+                                                className="dms-file-link"
                                                 onClick={() => {
                                                   if (fileUrl) {
                                                     window.open(fileUrl, '_blank');
@@ -8202,37 +8193,38 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                                     void host._openDocumentFile(file.id, file.name, fileBreadcrumb);
                                                   }
                                                 }}
-                                                style={{ cursor: 'pointer', color: '#0284c7', textDecoration: 'underline' }}
+                                                style={DMS_FILE_LINK}
                                                 title={`Click to view/download ${file.name}`}
                                               >
                                                 {file.name}
                                               </span>
                                               {relFolderNames.length > 0 && (
-                                                <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--vdms-text-muted)', marginTop: 2 }} title={fileBreadcrumb}>
+                                                <span style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--vdms-text-muted)', marginTop: 2 }} title={fileBreadcrumb}>
                                                   {relFolderNames.join(' › ')}
                                                 </span>
                                               )}
                                             </span>
+                                           </div>
                                           </td>
-                                          <td style={{ padding: '12px 16px' }}>
+                                          <td style={DMS_TD}>
                                             {effectiveVessel ? (
                                               <span style={{ color: 'var(--vdms-text)', fontWeight: 600 }}>{effectiveVessel}</span>
                                             ) : (
                                               <span
-                                                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#ffedd5', color: '#c2410c', borderRadius: 6, padding: '2px 7px', fontSize: 11, fontWeight: 700 }}
+                                                style={{ ...LIST_PILL, background: clay.pillWarnBg, color: clay.pillWarnText, fontWeight: 700 }}
                                                 title="No vessel associated with this file"
                                               >
-                                                <span aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 14, height: 14, borderRadius: '50%', background: '#c2410c', color: '#fff', fontSize: 9, fontWeight: 800, lineHeight: 1 }}>✕</span>
+                                                <span aria-hidden="true" style={LIST_X_DOT}><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 9 }} /></span>
                                                 Not Listed
                                               </span>
                                             )}
                                           </td>
-                                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)', fontSize: 12 }} title={fileBreadcrumb || undefined}>
+                                          <td style={{ ...DMS_TD, fontSize: 12, wordBreak: 'break-word' }} title={fileBreadcrumb || undefined}>
                                             {fileBreadcrumb || '—'}
                                           </td>
-                                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)' }}>{fileSize}</td>
-                                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)' }}>{fileDate}</td>
-                                          <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                                          <td style={{ ...DMS_TD, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{fileSize}</td>
+                                          <td style={{ ...DMS_TD, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{fileDate}</td>
+                                          <td style={{ ...DMS_TD, textAlign: 'right' }}>
                                             <button
                                               type="button"
                                               onClick={() => {
@@ -8242,20 +8234,37 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                                   void host._openDocumentFile(file.id, file.name, fileBreadcrumb);
                                                 }
                                               }}
-                                              style={{
-                                                background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6,
-                                                padding: '4px 10px', fontSize: 12, fontWeight: 600, color: '#0284c7', cursor: 'pointer',
-                                              }}
+                                              style={dmsRowBtn('accent')}
                                             >
-                                              Download / Open
+                                              <Icon iconName="OpenInNewWindow" aria-hidden="true" style={{ fontSize: 11 }} /> Download / Open
                                             </button>
+                                            {file.id && (
+                                              <button
+                                                type="button"
+                                                title={`Delete ${file.name} (moves it to the SharePoint Recycle Bin)`}
+                                                aria-label={`Delete ${file.name}`}
+                                                onClick={() => host._openFileDeleteDialog([{
+                                                  id: file.id,
+                                                  name: file.name,
+                                                  folderId: currentFolderId,
+                                                  folderPath: fileBreadcrumb,
+                                                  vesselName: effectiveVessel || undefined,
+                                                  siteId: effectiveSiteId,
+                                                  driveId: rawDriveId,
+                                                }])}
+                                                style={{ ...dmsRowBtn('danger'), marginLeft: 6 }}
+                                              >
+                                                <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 11 }} /> Delete
+                                              </button>
+                                            )}
                                           </td>
                                         </tr>
                                       );
                                     })}
                                   </tbody>
                                 </table>
-                                <div style={{ padding: '10px 14px', color: 'var(--vdms-text-muted)', fontSize: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, borderTop: '1px solid var(--vdms-border-soft)', background: 'var(--vdms-surface-alt)' }}>
+                               </div>
+                                <div style={{ padding: '10px 14px', color: 'var(--vdms-text-muted)', fontSize: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, borderTop: '1px solid var(--vdms-line)', background: 'var(--vdms-surface-alt)' }}>
                                   <span>
                                     Showing {fvPage * FOLDER_PAGE_SIZE + 1}–{Math.min((fvPage + 1) * FOLDER_PAGE_SIZE, displayChildFiles.length)} of {displayChildFiles.length} files
                                   </span>
@@ -8275,21 +8284,21 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
 
                           {childFolders.length === 0 && displayChildFiles.length === 0 && (
                             folderData.error ? (
-                              <div style={{ background: 'var(--vdms-surface)', borderRadius: 14, border: '1px dashed #fca5a5', padding: 48, textAlign: 'center', color: 'var(--vdms-text-faint)' }}>
-                                <div style={{ fontSize: 32, marginBottom: 8 }}>⚠️</div>
+                              <div style={{ background: 'var(--vdms-surface)', borderRadius: 16, border: '1px solid var(--vdms-line)', boxShadow: clay.shadowRaised, padding: '36px 20px', textAlign: 'center', color: 'var(--vdms-text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                <div style={{ marginBottom: 10 }}><DmsTileIcon icon="Warning" tone={folderData.throttled ? 'warning' : 'danger'} size={44} /></div>
                                 {(() => {
                                   // Graph quota cooldown: the listing re-loads by itself when it ends.
                                   const waitSec = folderData.throttled ? Math.max(0, Math.ceil(((folderData.retryAt || host._graphThrottledUntil) - Date.now()) / 1000)) : 0;
                                   return folderData.throttled ? (
                                     <>
-                                      <div style={{ fontWeight: 600, color: '#b45309', fontSize: 15 }}>SharePoint is busy</div>
+                                      <div style={{ fontWeight: 700, color: clay.pillWarnText, fontSize: 15 }}>SharePoint is busy</div>
                                       <div style={{ fontSize: 13, marginTop: 4 }}>
                                         Microsoft limited requests for a moment. This folder will load again automatically{waitSec > 0 ? ` in about ${waitSec}s` : ''}.
                                       </div>
                                     </>
                                   ) : (
                                     <>
-                                      <div style={{ fontWeight: 600, color: '#b91c1c', fontSize: 15 }}>Couldn't load this folder</div>
+                                      <div style={{ fontWeight: 700, color: clay.pillDangerText, fontSize: 15 }}>Couldn't load this folder</div>
                                       <div style={{ fontSize: 13, marginTop: 4 }}>The request to SharePoint failed — this may not actually be empty. Try again.</div>
                                     </>
                                   );
@@ -8297,18 +8306,21 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                 <button
                                   type="button"
                                   onClick={() => void host._refreshSiteFolder(effectiveSiteId, rawDriveId, currentFolderId)}
-                                  style={{ marginTop: 12, border: '1px solid #fca5a5', background: '#fef2f2', color: '#b91c1c', borderRadius: 8, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                                  className="dms-btn dms-btn-secondary"
+                                  style={{ ...dmsBtn('secondary'), marginTop: 14 }}
                                 >
-                                  ↻ Retry
+                                  <Icon iconName="Refresh" aria-hidden="true" style={{ fontSize: 12 }} /> Retry
                                 </button>
                               </div>
                             ) : (
-                              <div style={{ background: 'var(--vdms-surface)', borderRadius: 14, border: '1px dashed var(--vdms-border)', padding: 48, textAlign: 'center', color: 'var(--vdms-text-faint)' }}>
-                                <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
+                              <div style={{ background: 'var(--vdms-surface)', borderRadius: 16, border: '1px solid var(--vdms-line)', boxShadow: clay.shadowRaised, padding: '36px 20px', textAlign: 'center', color: 'var(--vdms-text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                                <div style={{ marginBottom: 10 }}>
+                                  {groupCatActive && groupCatSearching ? <DmsSpinner size={36} /> : <DmsTileIcon icon={groupCatActive ? 'Search' : (insideSelectedVessel ? 'FabricFolder' : 'Ferry')} size={44} />}
+                                </div>
                                 {groupCatActive ? (
                                   groupCatSearching ? (
                                     <>
-                                      <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>Searching for {groupCatLabel} files…</div>
+                                      <div style={{ fontWeight: 700, color: 'var(--vdms-text)', fontSize: 15 }}>Searching for {groupCatLabel} files…</div>
                                       <div style={{ fontSize: 13, marginTop: 4 }}>
                                         {groupCatFailed
                                           ? 'That took longer than expected. Trying again automatically…'
@@ -8317,8 +8329,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                     </>
                                   ) : (
                                     <>
-                                      <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>No {groupCatLabel} files here</div>
-                                      <div style={{ fontSize: 13, marginTop: 4 }}>
+                                      <div style={{ fontWeight: 700, color: 'var(--vdms-text)', fontSize: 15 }}>No {groupCatLabel} files here</div>
+                                      <div style={{ fontSize: 13, marginTop: 4, maxWidth: 520, lineHeight: 1.5 }}>
                                         No folder under {currentNode?.name || 'this folder'} matches
                                         {docGroupLevelFilter !== 'all' ? ` ${docGroupLevelFilter}` : ''}
                                         {docGroupLevelFilter !== 'all' && docLeafCategoryFilter !== 'all' ? ' and' : ''}
@@ -8331,12 +8343,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   )
                                 ) : insideSelectedVessel ? (
                                   <>
-                                    <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>This folder is empty</div>
+                                    <div style={{ fontWeight: 700, color: 'var(--vdms-text)', fontSize: 15 }}>This folder is empty</div>
                                     <div style={{ fontSize: 13, marginTop: 4 }}>No files or subfolders found in this directory. You can upload files or folders using the buttons above.</div>
                                   </>
                                 ) : (
                                   <>
-                                    <div style={{ fontWeight: 600, color: 'var(--vdms-text-secondary)', fontSize: 15 }}>No folder for {vesselFilter} here</div>
+                                    <div style={{ fontWeight: 700, color: 'var(--vdms-text)', fontSize: 15 }}>No folder for {vesselFilter} here</div>
                                     <div style={{ fontSize: 13, marginTop: 4 }}>Nothing in this folder belongs to the selected vessel. Choose "All vessels" to see everything.</div>
                                   </>
                                 )}
@@ -8359,9 +8371,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   'Shared Documents'
                 )
               ) : (
-                <div style={{ padding: 40, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>
-                  Loading configured document site...
-                </div>
+                <DmsLoadingState label="Loading configured document site..." />
               )
             ) : atDocsRoot ? (
               docsSite ? (
@@ -8373,9 +8383,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   'Documents'
                 )
               ) : (
-                <div style={{ padding: 40, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>
-                  Loading configured document site...
-                </div>
+                <DmsLoadingState label="Loading configured document site..." />
               )
             ) : atDepartmentVesselList && !showSelectedVesselCategories ? (
 
@@ -8389,27 +8397,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       : 'Common for all ships');
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      <div style={{ fontSize: 12, fontWeight: 800, color: '#92400e', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                        Common Folder
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${vesselColumns}, minmax(0, 1fr))`, gap: 16 }}>
+                      <DmsSectionLabel title="Common Folder" />
+                      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${vesselColumns}, minmax(0, 1fr))`, gap: 12 }}>
                         <div
                           onClick={() => {
                             host._pushFolderNav([...folderPathStack, { id: 'common', name: commonDisplayName }], docMainFolder);
                             host.setState({ vesselFilter: 'all', docScopeType: 'common' });
                           }}
-                          style={{
-                            background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)', padding: 18,
-                            display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
-                            boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-                          }}
+                          className="dms-tile"
+                          style={DMS_TILE}
                         >
-                          <div style={{ width: 44, height: 44, borderRadius: 10, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>📁</div>
+                          <DmsTileIcon icon="FabricFolder" tone="warning" />
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{commonDisplayName}</div>
-                            <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>Shared {docMainFolder} documents</div>
+                            <div style={DMS_TILE_TITLE} title={commonDisplayName}>{commonDisplayName}</div>
+                            <div style={DMS_TILE_SUB}>Shared {docMainFolder} documents</div>
                           </div>
-                          <span style={{ color: 'var(--vdms-text-faint)', fontSize: 16 }}>›</span>
+                          <DmsChevron />
                         </div>
                       </div>
                     </div>
@@ -8417,10 +8420,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 })()}
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ fontSize: 12, fontWeight: 800, color: '#0369a1', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                    Vessel Folders
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: `repeat(${vesselColumns}, minmax(0, 1fr))`, gap: 16 }}>
+                  <DmsSectionLabel title="Vessel Folders" />
+                  <div style={{ display: 'grid', gridTemplateColumns: `repeat(${vesselColumns}, minmax(0, 1fr))`, gap: 12 }}>
                     {displayVessels
                     .filter(v => vesselFilter === 'all' || v.name.trim().toLowerCase() === vesselFilter.trim().toLowerCase())
                     .filter(v => catFilter === 'all' || scopeRows.some(row =>
@@ -8437,14 +8438,15 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         host.setState({ vesselFilter: v.name, docScopeType: 'vessels' });
                         host._loadFilesForVessel(v.name).catch(() => undefined);
                       }}
-                      style={{ background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)', padding: 18, display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer' }}
+                      className="dms-tile"
+                      style={DMS_TILE}
                     >
-                      <div style={{ width: 44, height: 44, borderRadius: 10, background: '#e0f2fe', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#0284c7' }}>🚢</div>
+                      <DmsTileIcon icon="Ferry" />
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.name}</div>
-                        <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>Vessel</div>
+                        <div style={DMS_TILE_TITLE} title={v.name}>{v.name}</div>
+                        <div style={DMS_TILE_SUB}>Vessel</div>
                       </div>
-                      <span style={{ color: 'var(--vdms-text-faint)', fontSize: 16 }}>›</span>
+                      <DmsChevron />
                     </div>
                     ))}
 
@@ -8456,35 +8458,29 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                           }
                         }}
                         style={{
-                          background: documentVesselsLoadingMore ? 'var(--vdms-surface-alt)' : '#f0f9ff',
-                          borderRadius: 14,
-                          border: '2px dashed #0284c7',
-                          padding: 18,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 14,
+                          ...DMS_TILE,
+                          background: documentVesselsLoadingMore ? 'var(--vdms-surface-alt)' : clay.accentSoft,
+                          border: `1px dashed ${clay.accent}`,
+                          boxShadow: 'none',
                           cursor: documentVesselsLoadingMore ? 'wait' : 'pointer',
-                          boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
-                          transition: 'all 0.15s ease',
                         }}
                       >
                         <div style={{
-                          width: 44, height: 44, borderRadius: 10,
-                          background: '#0284c7', color: '#fff',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontSize: 20, fontWeight: 700, flexShrink: 0,
+                          width: 36, height: 36, borderRadius: 10,
+                          background: clay.accent, color: DMS_ON_ACCENT,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                         }}>
-                          {documentVesselsLoadingMore ? '⏳' : '+'}
+                          {documentVesselsLoadingMore ? <DmsSpinner size={16} /> : <Icon iconName="Add" aria-hidden="true" style={{ fontSize: 15 }} />}
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontWeight: 700, fontSize: 14, color: '#0284c7', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <div style={{ ...DMS_TILE_TITLE, color: clay.accent }}>
                             {documentVesselsLoadingMore ? 'Loading vessels...' : `More vessels (+${Math.min(8, vessels.length - documentVesselCount)})`}
                           </div>
-                          <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>
+                          <div style={DMS_TILE_SUB}>
                             {documentVesselsLoadingMore ? 'Please wait...' : `Load next batch (${documentVesselCount} of ${vessels.length} shown)`}
                           </div>
                         </div>
-                        <span style={{ color: '#0284c7', fontSize: 18, fontWeight: 700 }}>›</span>
+                        <DmsChevron />
                       </div>
                     )}
                   </div>
@@ -8493,7 +8489,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             ) : subfolderNames.length > 0 ? (
               /* Subfolders Grid */
               <div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
+                <div style={dmsGrid(250)}>
                   {subfolderNames.filter(sf => {
                     const selectedCategoryIsCurrentFolder = catFilter !== 'all' && currentFolderName &&
                       currentFolderName.trim().toLowerCase() === catFilter.trim().toLowerCase();
@@ -8527,40 +8523,32 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         const subGroupKey = matchingSubRow?.groupKey || fullBreadcrumbWithSf;
                         void host._refreshFolderFiles(realFolderId, subGroupKey, true).catch(() => undefined);
                       }}
-                      style={{
-                        background: 'var(--vdms-surface)', borderRadius: 14, border: '1px solid var(--vdms-border)', padding: 18,
-                        display: 'flex', alignItems: 'center', gap: 14, cursor: 'pointer',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)', transition: 'transform 0.15s, box-shadow 0.15s',
-                      }}
+                      className="dms-tile"
+                      style={DMS_TILE}
                     >
-                      <div style={{
-                        width: 44, height: 44, borderRadius: 10, background: '#e0f2fe',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, color: '#0284c7',
-                      }}>
-                        📁
-                      </div>
+                      <DmsTileIcon icon="FabricFolder" />
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sfName}</div>
-                        <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <div style={DMS_TILE_TITLE} title={sfName}>{sfName}</div>
+                        <div style={{ ...DMS_TILE_SUB, marginTop: 4 }}>
                           <span>{isAtCategoryLevel ? 'Document Section' : (stackLevel === 3 ? 'Category' : 'Sub-Category')}</span>
                           {(() => {
                             const fc = subfolderFileCountMap.get(sfName) ?? subfolderFileCountMap.get(sfName.trim().toLowerCase()) ?? 0;
                             const fsc = subfolderFolderCountMap.get(sfName) ?? subfolderFolderCountMap.get(sfName.trim().toLowerCase()) ?? 0;
                             return (
                               <>
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: fsc > 0 ? '#e0f2fe' : 'var(--vdms-border-soft)', color: fsc > 0 ? '#0369a1' : 'var(--vdms-text-faint)', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px', whiteSpace: 'nowrap' }}>📁 {fsc}</span>
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: fc > 0 ? '#dcfce7' : 'var(--vdms-border-soft)', color: fc > 0 ? '#15803d' : 'var(--vdms-text-faint)', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700, lineHeight: '16px', whiteSpace: 'nowrap' }}>📄 {fc}</span>
+                                <DmsCountChip icon="FabricFolder" tone="accent" on={fsc > 0} count={fsc} />
+                                <DmsCountChip icon="Page" tone="success" on={fc > 0} count={fc} />
                               </>
                             );
                           })()}
                         </div>
                         {showDebugKeys && (
-                          <div style={{ marginTop: 4, fontSize: 10, color: '#7c3aed', fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                          <div style={{ marginTop: 4, fontSize: 10, color: 'var(--vdms-text-muted)', fontFamily: 'monospace', wordBreak: 'break-all' }}>
                             key: {fullBreadcrumbWithSf} | live:{folderDebugLiveId}
                           </div>
                         )}
                       </div>
-                      <span style={{ color: 'var(--vdms-text-faint)', fontSize: 16 }}>›</span>
+                      <DmsChevron />
                     </div>
                     );
                   })}
@@ -8569,15 +8557,16 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               </div>
             ) : visibleCurrentFolderFiles.length > 0 ? (
               /* Folder File Items List */
-              <div style={{ background: 'var(--vdms-surface)', borderRadius: 12, border: '1px solid var(--vdms-border)', overflow: 'hidden' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <div style={DMS_TABLE_CARD}>
+               <div style={{ overflowX: 'auto' }}>
+                <table className="dms-table" style={DMS_TABLE}>
                   <thead>
-                    <tr style={{ background: 'var(--vdms-surface-alt)', borderBottom: '1px solid var(--vdms-border)', color: 'var(--vdms-text-muted)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', textAlign: 'left' }}>
-                      <th style={{ padding: '10px 16px', width: 40, textAlign: 'center' }}></th>
-                      <th style={{ padding: '10px 16px' }}>FILE NAME</th>
-                      <th style={{ padding: '10px 16px' }}>SIZE</th>
-                      <th style={{ padding: '10px 16px' }}>DATE & TIME UPLOADED</th>
-                      <th style={{ padding: '10px 16px', textAlign: 'right' }}>ACTION</th>
+                    <tr>
+                      <th style={{ ...DMS_TH, width: 40, textAlign: 'center' }}></th>
+                      <th style={DMS_TH}>File name</th>
+                      <th style={DMS_TH}>Size</th>
+                      <th style={DMS_TH}>Date &amp; time uploaded</th>
+                      <th style={{ ...DMS_TH, textAlign: 'right' }}>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -8592,8 +8581,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             ? [currentVesselNameFromStack, docMainFolder, ...folderPathStack.slice(2).map(n => n.name)].filter(Boolean).join(' > ')
                             : (currentFolderNode?.name || '')));
                       return (
-                        <tr key={file.name + idx} style={{ borderBottom: '1px solid var(--vdms-border-soft)' }}>
-                          <td style={{ padding: '12px 16px', textAlign: 'center', width: 40 }}>
+                        <tr key={file.name + idx} style={{ ...DMS_TR, background: isSelected ? clay.accentSoft : undefined }}>
+                          <td style={{ ...DMS_TD, textAlign: 'center', width: 40 }}>
                             <input
                               type="checkbox"
                               checked={isSelected}
@@ -8604,12 +8593,14 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   return { folderViewSelectedFiles: next };
                                 });
                               }}
-                              style={{ width: 16, height: 16, accentColor: '#ef4444', cursor: 'pointer' }}
+                              style={{ width: 15, height: 15, accentColor: clay.accent, cursor: 'pointer', margin: 0, verticalAlign: 'middle' }}
                             />
                           </td>
-                          <td style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--vdms-text)', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                            <span style={{ fontSize: 18 }}>{(file as any).pending ? '⏳' : '📄'}</span>
+                          <td style={DMS_TD_NAME}>
+                           <div style={{ ...DMS_NAME_CELL, flexWrap: 'wrap', gap: 8 }}>
+                            <DmsTileIcon icon={(file as any).pending ? 'History' : 'Page'} tone={(file as any).pending ? 'warning' : 'neutral'} size={28} />
                             <span
+                              className="dms-file-link"
                               onClick={() => {
                                 if ((file as any).pending) {
                                   alert(`File "${file.name}" is pending — it will be available after approval.`);
@@ -8624,12 +8615,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                       : (currentFolderNode?.name || '')));
                                 void host._openDocumentFile(fileId, file.name, currentPath);
                               }}
-                              style={{ cursor: 'pointer', color: '#0284c7', textDecoration: 'underline' }}
+                              style={DMS_FILE_LINK}
                               title={`Click to view/download ${file.name}`}
                             >
                               {file.name}
                             </span>
-                            {(file as any).pending && <span style={{ fontSize: 11, color: '#d97706', fontWeight: 600, background: '#fef3c7', borderRadius: 4, padding: '1px 6px' }}>Pending Approval</span>}
+                            {(file as any).pending && <span style={{ ...LIST_PILL, background: clay.pillWarnBg, color: clay.pillWarnText, fontWeight: 700 }}>Pending Approval</span>}
                             {(() => {
                               const detectedVessel = resolveDetectedVesselForFile(file, host, currentVesselNameFromStack);
                               const isUnidentified = (host?.state?.ocrUnidentifiedFiles || []).some(
@@ -8646,12 +8637,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                     }}
                                     title={`View OCR Vessel Suggestion: ${detectedVessel}`}
                                     style={{
-                                      background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)',
-                                      borderRadius: 6, padding: '1px 6px', fontSize: 10, color: '#0284c7',
-                                      cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 3,
+                                      background: clay.accentSoft, border: '1px solid transparent',
+                                      borderRadius: 10, padding: '1px 8px', fontSize: 11, color: clay.accent,
+                                      cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4,
                                     }}
                                   >
-                                    <span>✨</span> {detectedVessel}
+                                    <Icon iconName="Sparkle" aria-hidden="true" style={{ fontSize: 10 }} /> {detectedVessel}
                                   </button>
                                 );
                               } else {
@@ -8664,21 +8655,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                     }}
                                     title="Vessel name not detected by OCR — click to assign vessel"
                                     style={{
-                                      background: '#fff7ed', border: '1px solid #fed7aa',
-                                      borderRadius: 6, padding: '1px 6px', fontSize: 10, color: '#c2410c',
-                                      cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 3,
+                                      background: clay.pillWarnBg, border: '1px solid transparent',
+                                      borderRadius: 10, padding: '1px 8px', fontSize: 11, color: clay.pillWarnText,
+                                      cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4,
                                     }}
                                   >
-                                    <span>⚠️</span> Vessel: Not detected
+                                    <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 10 }} /> Vessel: Not detected
                                   </button>
                                 );
                               }
                             })()}
+                           </div>
                           </td>
-                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)' }}>{file.size}</td>
-                          <td style={{ padding: '12px 16px', color: 'var(--vdms-text-muted)' }}>{file.date}</td>
-                          <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                            <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                          <td style={{ ...DMS_TD, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{file.size}</td>
+                          <td style={{ ...DMS_TD, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{file.date}</td>
+                          <td style={{ ...DMS_TD, textAlign: 'right' }}>
+                            <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                               <button
                                 onClick={() => {
                                   if ((file as any).pending) {
@@ -8694,35 +8686,35 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         : (currentFolderNode?.name || '')));
                                   void host._openDocumentFile(fileId, file.name, currentPath);
                                 }}
-                                style={{ border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface)', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#0078d4' }}
+                                style={dmsRowBtn('accent')}
                                 title={`View or download ${file.name}`}
                               >
-                                View / Download
+                                <Icon iconName="OpenInNewWindow" aria-hidden="true" style={{ fontSize: 11 }} /> View / Download
                               </button>
                               {!String(fileId).startsWith('file_') && !/^\d+$/.test(String(fileId)) && (
                                 <button
                                   onClick={() => void host._archiveDocumentFile(String(fileId), file.name, currentFolderName || '', docMainFolder || '', currentVesselNameFromStack || '')}
-                                  style={{ border: '1px solid #c4b5fd', background: '#f5f3ff', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', color: '#6d28d9' }}
+                                  style={dmsRowBtn('plain')}
                                   title={`Archive ${file.name}`}
                                 >
-                                  📦 Archive
+                                  <Icon iconName="Archive" aria-hidden="true" style={{ fontSize: 11 }} /> Archive
                                 </button>
                               )}
                               <button
                                 onClick={() => host._openFileDeleteDialog([{ id: fileId, name: file.name, folderId: currentFolderNode?.id || '', folderPath: currentFolderNode?.name || '' }])}
-                                style={{ border: '1px solid #fca5a5', background: '#fff5f5', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', color: '#ef4444' }}
+                                style={dmsRowBtn('danger')}
                                 title="Delete file"
                               >
-                                🗑 Delete
+                                <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 11 }} /> Delete
                               </button>
                               <button
                                 type="button"
                                 onClick={() => void host._openSharePointFolder({ subFolderPath: currentFolderSharePointPath } as any)}
                                 title="Open this folder in SharePoint"
                                 aria-label={`Open ${currentFolderSharePointPath} in SharePoint`}
-                                style={{ width: 28, height: 27, padding: 0, borderRadius: 6, border: '1px solid #bfdbfe', background: '#eff6ff', color: '#1d4ed8', cursor: 'pointer', fontSize: 16, fontWeight: 700, lineHeight: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+                                style={{ ...dmsRowBtn('plain'), width: 28, padding: 0 }}
                               >
-                                ↗
+                                <Icon iconName="SharepointLogo" aria-hidden="true" style={{ fontSize: 13, color: clay.accent }} />
                               </button>
                             </div>
                           </td>
@@ -8731,28 +8723,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     })}
                   </tbody>
                 </table>
+               </div>
               </div>
             ) : (
               /* Empty Folder View (Screenshot 2) */
-              <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '60px 20px', width: '100%' }}>
-                <div style={{
-                  background: 'rgba(240, 249, 255, 0.6)', border: '1px solid #e0f2fe',
-                  borderRadius: 24, padding: '48px 40px', maxWidth: 500, width: '100%',
-                  textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12,
-                }}>
-                  <div style={{
-                    width: 56, height: 56, borderRadius: 14, background: '#e0f2fe',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, color: '#0284c7',
-                    marginBottom: 4,
-                  }}>
-                    📁
-                  </div>
-                  <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: 'var(--vdms-text)' }}>This folder is empty</h3>
-                  <p style={{ margin: 0, fontSize: 13, color: 'var(--vdms-text-muted)', maxWidth: 320, lineHeight: 1.5 }}>
-                    Use the Upload button in the top-right to add a document.
-                  </p>
-                </div>
-              </div>
+              <DmsEmptyState icon="FabricFolder" title="This folder is empty">
+                Use the Upload Files button in the top-right to add a document.
+              </DmsEmptyState>
             )}
 
             {/* ── Segregated Section: Subfolder Level Unmatched Items Inside Vessel ── */}
@@ -8764,11 +8741,14 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               if (subAnomalies.length === 0) return null;
 
               return (
-                <div style={{ background: '#fff7ed', border: '1px solid #ffedd5', borderRadius: 14, padding: 18, marginTop: 16 }}>
-                  <h4 style={{ margin: '0 0 8px', fontSize: 14, fontWeight: 700, color: '#c2410c', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    ⚠️ Other / Unclassified Items Inside Vessel Tree ({subAnomalies.length})
+                <div style={{ background: 'var(--vdms-surface)', border: '1px solid var(--vdms-line)', boxShadow: clay.shadowRaised, borderRadius: 16, padding: 16, marginTop: 4, position: 'relative', overflow: 'hidden' }}>
+                  <span aria-hidden="true" style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: clay.pillWarnText }} />
+                  <h4 style={{ margin: '0 0 6px', fontSize: 15, fontWeight: 700, color: 'var(--vdms-text)', fontFamily: DMS_FONT_DISPLAY, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <DmsTileIcon icon="Warning" tone="warning" size={28} />
+                    Other / Unclassified Items Inside Vessel Tree
+                    <span style={{ fontSize: 11, fontWeight: 700, color: clay.pillWarnText, background: clay.pillWarnBg, borderRadius: 12, padding: '1px 8px', fontFamily: 'inherit' }}>{subAnomalies.length}</span>
                   </h4>
-                  <p style={{ margin: '0 0 12px', fontSize: 12, color: '#9a3412' }}>
+                  <p style={{ margin: '0 0 12px', fontSize: 12.5, color: 'var(--vdms-text-muted)' }}>
                     These items were added inside the vessel folder in SharePoint but are not part of the standard template structure.
                   </p>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -8776,22 +8756,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       <div
                         key={item.id}
                         style={{
-                          background: 'var(--vdms-surface)', borderRadius: 8, border: '1px solid #fed7aa', padding: '10px 14px',
+                          background: 'var(--vdms-surface-alt)', borderRadius: 10, border: '1px solid var(--vdms-border-soft)', padding: '9px 12px',
                           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                          <span style={{ fontSize: 18 }}>{item.item_type === 'folder' ? '📁' : '📄'}</span>
-                          <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                          <Icon iconName={item.item_type === 'folder' ? 'FabricFolder' : 'Page'} aria-hidden="true" style={{ fontSize: 15, color: clay.pillWarnText, flexShrink: 0 }} />
+                          <div style={{ minWidth: 0 }}>
                             <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--vdms-text)' }}>{item.name}</span>
-                            <span style={{ fontSize: 11, color: 'var(--vdms-text-muted)', marginLeft: 8 }}>Path: {item.spo_path}</span>
+                            <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginLeft: 8, wordBreak: 'break-word' }}>Path: {item.spo_path}</span>
                           </div>
                         </div>
                         <button
                           onClick={() => host._dismissAnomaly(item.id)}
-                          style={{ background: 'var(--vdms-surface)', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer' }}
+                          style={dmsRowBtn('plain')}
                         >
-                          ✕ Dismiss
+                          <Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 10 }} /> Dismiss
                         </button>
                       </div>
                     ))}
@@ -8805,7 +8785,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           /* ── LIST VIEW ── */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {/* Table wrapper */}
-            <div style={{ background: 'var(--vdms-surface)', borderRadius: 12, border: '1px solid var(--vdms-border)', boxShadow: '0 1px 2px rgba(15,23,42,0.04)', overflow: 'hidden', width: '100%' }}>
+            <div style={{ ...DMS_TABLE_CARD, width: '100%' }}>
              <div style={{ overflowX: 'auto', maxHeight: '70vh', overflowY: 'auto' }}>
               <table style={{ width: '100%', minWidth: 1420, borderCollapse: 'separate', borderSpacing: 0, tableLayout: 'fixed', fontSize: 12 }}>
                 <colgroup>
@@ -8843,26 +8823,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     <tr>
                       <td colSpan={12} style={{ padding: '48px 16px', textAlign: 'center' }}>
                         {(host.state.loading || (Boolean(vesselLoadingName) && filtered.length === 0) || (documentFilesLoading && allRows.length === 0) || (documentVesselsLoadingMore && filtered.length === 0) || (docScopeType === 'sites' && Array.from(host._siteFolderItemsCache.values()).some(entry => entry.loading))) ? (
-                          <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-                            <div style={{
-                              width: 32, height: 32, border: '3px solid #e0f2fe',
-                              borderTop: '3px solid #0284c7', borderRadius: '50%',
-                              animation: 'spin 0.8s linear infinite',
-                            }} />
-                            <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--vdms-text)' }}>
+                          <div role="status" style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                            <DmsSpinner size={30} />
+                            <div style={{ fontWeight: 600, fontSize: 13.5, color: 'var(--vdms-text)' }}>
                               {vesselLoadingName
                                 ? `Loading documents and attachments for ${vesselLoadingName}...`
                                 : (documentVesselsLoadingMore ? 'Loading more vessels...' : 'Loading vessel documents from SharePoint...')}
                             </div>
-                            <div style={{ fontSize: 11, color: 'var(--vdms-text-muted)', maxWidth: 360 }}>
+                            <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', maxWidth: 360 }}>
                               Please wait while folder structures and live files are loaded.
                             </div>
                           </div>
                         ) : (
-                          <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                            <div style={{ fontSize: 28 }}>🔍</div>
-                            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--vdms-text-secondary)' }}>No documents found</div>
-                            <div style={{ color: 'var(--vdms-text-faint)', fontSize: 12, maxWidth: 400 }}>
+                          <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                            <DmsTileIcon icon="Search" size={44} />
+                            <div style={{ marginTop: 4, fontWeight: 700, fontSize: 15, color: 'var(--vdms-text)' }}>No documents found</div>
+                            <div style={{ color: 'var(--vdms-text-muted)', fontSize: 13, maxWidth: 420 }}>
                               {textFilter || vesselFilter !== 'all' || docGroupFilter !== 'all' || docCategoryFilter !== 'all' || docGroupLevelFilter !== 'all' || docLeafCategoryFilter !== 'all' || docSubCategoryFilter !== 'all'
                                 ? 'No rows match your current filter criteria.'
                                 : 'No documents or folders are available for this section.'}
@@ -8881,19 +8857,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   catFilter: 'all',
                                   docListPage: 0,
                                 })}
-                                style={{
-                                  marginTop: 6,
-                                  background: '#eff6ff',
-                                  color: '#2563eb',
-                                  border: '1px solid #bfdbfe',
-                                  borderRadius: 6,
-                                  padding: '4px 12px',
-                                  fontSize: 12,
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                }}
+                                className="dms-btn dms-btn-secondary"
+                                style={{ ...dmsBtn('secondary'), marginTop: 8, height: 32 }}
                               >
-                                Clear filters
+                                <Icon iconName="Refresh" aria-hidden="true" style={{ fontSize: 12 }} /> Clear filters
                               </button>
                             )}
                           </div>
@@ -8919,27 +8886,27 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     return (
                       <tr key={`${r.groupKey}-${idx}`}
                         style={{ borderBottom: '1px solid var(--vdms-border-soft)', background: zebra ? 'var(--vdms-surface-alt)' : 'var(--vdms-surface)', transition: 'background 0.1s' }}
-                        onMouseEnter={e => (e.currentTarget.style.background = '#f0f9ff')}
+                        onMouseEnter={e => (e.currentTarget.style.background = clay.surfaceHover)}
                         onMouseLeave={e => (e.currentTarget.style.background = zebra ? 'var(--vdms-surface-alt)' : 'var(--vdms-surface)')}
                       >
                         <td style={{ ...LIST_TD, textAlign: 'center', color: 'var(--vdms-text-faint)', fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>{globalIdx}</td>
                         <td style={{ ...LIST_TD, fontWeight: 700, color: 'var(--vdms-text)' }}>
                           {listViewLabels.vessel === 'Not Listed' || listViewLabels.vessel === 'Vessel name not listed' ? (
-                            <span style={{ ...LIST_PILL, background: '#ffedd5', color: '#c2410c' }} title="No vessel associated with this file">
-                              <span aria-hidden="true" style={LIST_X_DOT}>✕</span>
+                            <span style={{ ...LIST_PILL, background: clay.pillWarnBg, color: clay.pillWarnText }} title="No vessel associated with this file">
+                              <span aria-hidden="true" style={LIST_X_DOT}><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 9 }} /></span>
                               Not Listed
                             </span>
                           ) : listViewLabels.vessel === 'Common for all vessels' ? (
-                            <span style={{ ...LIST_PILL, background: '#fef3c7', color: '#92400e' }}>📁 Common for all vessels</span>
+                            <span style={{ ...LIST_PILL, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)', whiteSpace: 'normal' }}><Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 10, flexShrink: 0 }} /> Common for all vessels</span>
                           ) : listViewLabels.vessel === 'Kaizen - Knowledge Bank' ? (
-                            <span style={{ ...LIST_PILL, background: '#ede9fe', color: '#6b21a8' }}>📚 Kaizen - Knowledge Bank</span>
+                            <span style={{ ...LIST_PILL, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)', whiteSpace: 'normal' }}><Icon iconName="Documentation" aria-hidden="true" style={{ fontSize: 10, flexShrink: 0 }} /> Kaizen - Knowledge Bank</span>
                           ) : (
                             <span style={LIST_WRAP} title={listViewLabels.vessel}>{listViewLabels.vessel}</span>
                           )}
                         </td>
                         <td style={LIST_TD}>
                           {rowDomain ? (
-                            <span style={{ ...LIST_PILL, background: '#e0e7ff', color: '#3730a3', whiteSpace: 'normal' }} title={rowDomain}>
+                            <span style={{ ...LIST_PILL, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)', border: '1px solid var(--vdms-border-soft)', whiteSpace: 'normal' }} title={rowDomain}>
                               <span style={LIST_WRAP}>{rowDomain}</span>
                             </span>
                           ) : <ListMissingMark title="No domain tag assigned" />}
@@ -8950,8 +8917,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                               title={listViewLabels.mainFolder}
                               style={{
                                 ...LIST_PILL, maxWidth: '100%', whiteSpace: 'normal',
-                                background: listViewLabels.mainFolder === 'Kaizen - Knowledge Bank' ? '#ede9fe' : (listViewLabels.mainFolder === 'Insurance' ? '#fef3c7' : (listViewLabels.mainFolder === 'Commercial & Chartering' ? '#dcfce7' : '#eff6ff')),
-                                color: listViewLabels.mainFolder === 'Kaizen - Knowledge Bank' ? '#6b21a8' : (listViewLabels.mainFolder === 'Insurance' ? '#b45309' : (listViewLabels.mainFolder === 'Commercial & Chartering' ? '#15803d' : '#2563eb')),
+                                background: clay.accentSoft,
+                                color: clay.accent,
                               }}
                             >
                               <span style={LIST_WRAP}>{listViewLabels.mainFolder}</span>
@@ -8960,7 +8927,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                         </td>
                         <td style={LIST_TD}>
                           {listViewLabels.group ? (
-                            <span style={{ ...LIST_PILL, background: '#f3e8ff', color: '#7e22ce', whiteSpace: 'normal' }}>
+                            <span style={{ ...LIST_PILL, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text)', border: '1px solid var(--vdms-border-soft)', whiteSpace: 'normal' }}>
                               <span style={LIST_WRAP}>{listViewLabels.group}</span>
                             </span>
                           ) : <ListMissingMark title="No group tag assigned" />}
@@ -8980,8 +8947,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             type="button"
                             onClick={() => openFolderViewForListRow(r)}
                             style={{
-                              border: 'none', background: 'transparent', color: '#0369a1', cursor: 'pointer',
-                              textAlign: 'left', padding: 0, fontSize: 11.5, lineHeight: '17px', maxWidth: '100%',
+                              border: 'none', background: 'transparent', color: 'var(--vdms-text-secondary)', cursor: 'pointer',
+                              textAlign: 'left', padding: 0, fontSize: 12, fontWeight: 500, lineHeight: '17px', maxWidth: '100%',
                               display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
                               wordBreak: 'break-word',
                             } as React.CSSProperties}
@@ -8990,7 +8957,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             {shortPath || r.subFolderPath}
                           </button>
                           {showDebugKeys && (
-                            <div style={{ marginTop: 4, color: '#7c3aed', fontSize: 10, fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                            <div style={{ marginTop: 4, color: 'var(--vdms-text-muted)', fontSize: 10, fontFamily: 'monospace', wordBreak: 'break-all' }}>
                               {getRowDebugKey(r)}
                             </div>
                           )}
@@ -9010,10 +8977,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         return { listViewSelectedFiles: next };
                                       });
                                     }}
-                                    style={{ width: 14, height: 14, accentColor: '#0284c7', cursor: 'pointer', flexShrink: 0, margin: 0 }}
+                                    style={{ width: 14, height: 14, accentColor: clay.accent, cursor: 'pointer', flexShrink: 0, margin: 0 }}
                                     aria-label={`Select ${file.name}`}
                                   />
-                                  <span aria-hidden="true" style={{ fontSize: 13, flexShrink: 0 }}>📄</span>
+                                  <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 13, flexShrink: 0, color: 'var(--vdms-text-muted)' }} />
                                   <span
                                     onClick={() => {
                                       if (file.id && !file.id.startsWith('file_')) {
@@ -9022,10 +8989,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         alert(`File "${file.name}" is pending — it will be available after approval.`);
                                       }
                                     }}
-                                    style={{ ...LIST_ELLIPSIS, flex: '1 1 auto', color: '#0369a1', fontWeight: 600, cursor: 'pointer' }}
+                                    className="dms-file-link"
+                                    style={{ ...LIST_ELLIPSIS, flex: '1 1 auto', color: clay.accent, fontWeight: 600, cursor: 'pointer' }}
                                     title={file.id && /^\d+$/.test(file.id) ? `${file.name} (pending approval - click to preview staged copy)` : file.name}
                                   >
-                                    {file.name}{file.id && /^\d+$/.test(file.id) ? ' ⏳' : ''}
+                                    {file.name}{file.id && /^\d+$/.test(file.id) ? <> <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 11 }} /></> : ''}
                                   </span>
                                   {(() => {
                                     const detectedVessel = resolveDetectedVesselForFile(file, host, r.vesselName);
@@ -9042,12 +9010,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         }}
                                         title={`View OCR Vessel Suggestion: ${detectedVessel}`}
                                         style={{
-                                          background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)',
-                                          borderRadius: 6, padding: '1px 6px', fontSize: 10, color: '#0284c7', flexShrink: 0,
+                                          background: clay.accentSoft, border: '1px solid transparent',
+                                          borderRadius: 10, padding: '1px 7px', fontSize: 10.5, color: clay.accent, flexShrink: 0,
                                           cursor: 'pointer', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 3,
                                         }}
                                       >
-                                        <span>✨</span> {detectedVessel}
+                                        <Icon iconName="Sparkle" aria-hidden="true" style={{ fontSize: 9 }} /> {detectedVessel}
                                       </button>
                                     );
                                   })()}
@@ -9096,7 +9064,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   host._openBulkUpload(bulkFiles, r.uploadFolderId, r.subFolderPath, r.vesselName);
                                 }}
                               />
-                              {isUploading ? '⏳' : '↑ Upload'}
+                              {isUploading ? <DmsSpinner size={12} /> : <><Icon iconName="Upload" aria-hidden="true" style={{ fontSize: 11 }} /> Upload</>}
                             </label>
                             <button
                               type="button"
@@ -9113,14 +9081,14 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                               }}
                               style={{
                                 ...LIST_ACTION_BTN,
-                                border: `1px solid ${rowSelectedCount > 0 ? '#fca5a5' : 'var(--vdms-border)'}`,
-                                background: rowSelectedCount > 0 ? '#fff5f5' : 'var(--vdms-surface-alt)',
+                                border: `1px solid ${rowSelectedCount > 0 ? 'transparent' : 'var(--vdms-border-soft)'}`,
+                                background: rowSelectedCount > 0 ? clay.pillDangerBg : 'var(--vdms-surface-alt)',
                                 cursor: rowSelectedCount > 0 ? 'pointer' : 'not-allowed',
-                                color: rowSelectedCount > 0 ? '#ef4444' : 'var(--vdms-text-faint)',
+                                color: rowSelectedCount > 0 ? clay.pillDangerText : 'var(--vdms-text-faint)',
                               }}
                               title={rowSelectedCount > 0 ? `Delete ${rowSelectedCount} selected file(s)` : 'Select files to delete'}
                             >
-                              🗑 {rowSelectedCount > 0 ? `(${rowSelectedCount})` : 'Delete'}
+                              <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 11 }} /> {rowSelectedCount > 0 ? `(${rowSelectedCount})` : 'Delete'}
                             </button>
                             {r.canUpload && r.uploadFolderId && !r.uploadFolderId.includes('/') ? (
                               <button
@@ -9130,10 +9098,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   folderLabel: r.subFolderPath,
                                   vesselName: r.vesselName,
                                 })}
-                                style={{ ...LIST_ACTION_BTN, border: '1px solid #bae6fd', background: '#f0f9ff', color: '#0369a1' }}
+                                style={{ ...LIST_ACTION_BTN, border: '1px solid transparent', background: clay.accentSoft, color: clay.accent }}
                                 title="Add a subfolder here"
                               >
-                                + Folder
+                                <Icon iconName="Add" aria-hidden="true" style={{ fontSize: 10 }} /> Folder
                               </button>
                             ) : <span />}
                             <button
@@ -9141,9 +9109,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                               onClick={() => { void host._openSharePointFolder(r); }}
                               title="Open the folder containing these files in SharePoint Online"
                               aria-label={`Open ${r.subFolderPath} in SharePoint Online`}
-                              style={{ ...LIST_ACTION_BTN, border: '1px solid #bfdbfe', background: '#eff6ff', color: '#1d4ed8' }}
+                              style={LIST_ACTION_BTN}
                             >
-                              ↗ Open
+                              <Icon iconName="SharepointLogo" aria-hidden="true" style={{ fontSize: 11, color: clay.accent }} /> Open
                             </button>
                           </div>
                         </td>
@@ -9155,36 +9123,30 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
              </div>
 
               {/* Pagination footer */}
-              <div style={{ padding: '10px 14px', color: 'var(--vdms-text-muted)', fontSize: 11, display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--vdms-surface-alt)', borderTop: '1px solid var(--vdms-border)' }}>
-                <span>
+              <div style={{ padding: '10px 14px', color: 'var(--vdms-text-muted)', fontSize: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, background: 'var(--vdms-surface-alt)', borderTop: '1px solid var(--vdms-line)' }}>
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}>
                   Showing {filtered.length === 0 ? 0 : safePage * PAGE_ROWS + 1}–{Math.min((safePage + 1) * PAGE_ROWS, filtered.length)} of {filtered.length} rows
                 </span>
-                <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
                   <button
                     onClick={() => host.setState({ docListPage: Math.max(0, safePage - 1) })}
                     disabled={safePage === 0}
-                    style={{ border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface)', borderRadius: 4, padding: '3px 8px', fontSize: 11, cursor: safePage === 0 ? 'not-allowed' : 'pointer', opacity: safePage === 0 ? 0.4 : 1 }}
-                  >‹</button>
+                    aria-label="Previous page"
+                    style={dmsPagerBtn(safePage === 0)}
+                  ><Icon iconName="ChevronLeft" aria-hidden="true" style={{ fontSize: 10 }} /></button>
                   {Array.from({ length: totalPages }, (_, i) => (
                     <button
                       key={i}
                       onClick={() => host.setState({ docListPage: i })}
-                      style={{
-                        border: i === safePage ? 'none' : '1px solid var(--vdms-border)',
-                        background: i === safePage ? '#0078d4' : 'var(--vdms-surface)',
-                        color: i === safePage ? '#fff' : 'var(--vdms-text)',
-                        borderRadius: 4, padding: '3px 8px', fontSize: 11,
-                        fontWeight: i === safePage ? 700 : 400,
-                        cursor: 'pointer',
-                        minWidth: 26,
-                      }}
+                      style={dmsPagerBtn(false, i === safePage)}
                     >{i + 1}</button>
                   ))}
                   <button
                     onClick={() => host.setState({ docListPage: Math.min(totalPages - 1, safePage + 1) })}
                     disabled={safePage >= totalPages - 1}
-                    style={{ border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface)', borderRadius: 4, padding: '3px 8px', fontSize: 11, cursor: safePage >= totalPages - 1 ? 'not-allowed' : 'pointer', opacity: safePage >= totalPages - 1 ? 0.4 : 1 }}
-                  >›</button>
+                    aria-label="Next page"
+                    style={dmsPagerBtn(safePage >= totalPages - 1)}
+                  ><Icon iconName="ChevronRight" aria-hidden="true" style={{ fontSize: 10 }} /></button>
                 </div>
               </div>
             </div>

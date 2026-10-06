@@ -11,6 +11,7 @@ const categoryLabels: Record<AlertCategory, string> = {
   crud: 'SPFx activity',
   email: 'Email alerts',
 };
+const tabLabels: Record<'all' | AlertCategory, string> = { all: 'All', dms: 'Vessels', crud: 'SPFx Activity', email: 'Email Alerts' };
 
 function categoryOf(alert: AlertItem): AlertCategory {
   return alert.alert_category === 'crud' || alert.alert_type === 'crud_operation'
@@ -49,38 +50,53 @@ function anomalyForAlert(alert: AlertItem): FolderAnomalyItem {
 
 export function renderAlertsPage(host: VesselEmail): React.ReactElement {
   const category = host.state.alertCategory;
-  const alerts = host.state.alertsList.filter(alert => categoryOf(alert) === category);
+  const unreadOnly = host.state.alertFilter === 'unread';
+  const unreadCount = host._unreadAlertCount();
+  const alerts = host.state.alertsList.filter(alert =>
+    (category === 'all' || categoryOf(alert) === category) && (!unreadOnly || !alert.read));
   const selected = host.state.selectedAlertId
     ? host.state.alertsList.find(alert => alert.id === host.state.selectedAlertId)
     : alerts[0];
 
   return (
-    <div style={{ maxWidth: 1180, margin: '0 auto', padding: '32px 36px', width: '100%', boxSizing: 'border-box' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 20, marginBottom: 24 }}>
-        <div>
-          <div style={{ color: clay.textMuted, fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>Activity center</div>
-          <h1 style={{ margin: '6px 0 6px', color: clay.text, fontSize: 30, lineHeight: 1.1 }}>Alerts</h1>
-          <p style={{ margin: 0, color: clay.textMuted, fontSize: 14 }}>Detailed DMS, application, and email events from the top bar.</p>
+    <div style={{ maxWidth: 1180, margin: '0 auto', padding: 'clamp(8px, 2vw, 32px) clamp(0px, 2vw, 36px)', width: '100%', boxSizing: 'border-box' }}>
+      <style>{`.dms-notif-grid { display: grid; gap: 18px; align-items: start; grid-template-columns: minmax(0, 1fr); }
+        @media (min-width: 900px) { .dms-notif-grid.has-detail { grid-template-columns: minmax(0, 1.4fr) minmax(300px, .8fr); } }
+        .dms-notif-grid > * { min-width: 0; }`}</style>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 24, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
+          <h1 style={{ margin: '0 0 6px', color: clay.text, fontSize: 30, lineHeight: 1.1, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <Icon iconName="Ringer" style={{ fontSize: 24, color: clay.accentDark }} /> Notifications
+            {unreadCount > 0 && <span style={{ background: clay.pillDangerBg, color: clay.pillDangerText, borderRadius: 12, padding: '2px 10px', fontSize: 13, fontWeight: 700, boxShadow: clay.pillDangerShadow }}>{unreadCount}</span>}
+          </h1>
+          <p style={{ margin: 0, color: clay.textMuted, fontSize: 14 }}>All your application notifications in one place.</p>
         </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {unreadCount > 0 && <button type="button" onClick={host._markAllAlertsRead} style={{ border: 'none', background: clay.pillWarnBg, color: clay.pillWarnText, borderRadius: clay.radiusButton, padding: '8px 14px', cursor: 'pointer', fontWeight: 700, boxShadow: clay.pillWarnShadow }}>Mark all as read</button>}
         <button type="button" onClick={() => host._goToView('list')} style={{ border: 'none', background: clay.surface, color: clay.text, borderRadius: clay.radiusButton, padding: '8px 14px', cursor: 'pointer', fontWeight: 600, boxShadow: clay.shadowRaised }}>
           <Icon iconName="ChevronLeft" /> Back
         </button>
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-        {(Object.keys(categoryLabels) as AlertCategory[]).map(key => (
+        {(Object.keys(tabLabels) as Array<'all' | AlertCategory>).map(key => (
           <button key={key} type="button" onClick={() => { host._setAlertCategory(key); host.setState({ selectedAlertId: null }); }} style={{ border: 'none', background: category === key ? clay.accentGradient : clay.surface, color: category === key ? '#fff' : clay.text, borderRadius: clay.radiusButton, padding: '10px 16px', cursor: 'pointer', fontWeight: 700, boxShadow: category === key ? clay.shadowIcon : clay.shadowRaised }}>
-            {categoryLabels[key]}
-            <span style={{ marginLeft: 8, opacity: 0.75 }}>{host.state.alertsList.filter(alert => categoryOf(alert) === key).length}</span>
+            {tabLabels[key]}
+            <span style={{ marginLeft: 8, opacity: 0.75 }}>{host.state.alertsList.filter(alert => key === 'all' || categoryOf(alert) === key).length}</span>
           </button>
         ))}
+        <button type="button" onClick={() => { host._setAlertFilter(unreadOnly ? 'all' : 'unread'); host.setState({ selectedAlertId: null }); }} aria-pressed={unreadOnly} style={{ border: 'none', background: unreadOnly ? clay.accentGradient : clay.surface, color: unreadOnly ? '#fff' : clay.text, borderRadius: clay.radiusButton, padding: '10px 16px', cursor: 'pointer', fontWeight: 700, boxShadow: unreadOnly ? clay.shadowIcon : clay.shadowRaised }}>
+          Unread
+          <span style={{ marginLeft: 8, opacity: 0.75 }}>{unreadCount}</span>
+        </button>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: selected ? 'minmax(0, 1.4fr) minmax(300px, .8fr)' : '1fr', gap: 18, alignItems: 'start' }}>
+      <div className={`dms-notif-grid${selected ? ' has-detail' : ''}`}>
         <section style={{ background: clay.surface, border: 'none', borderRadius: clay.radiusCard, overflow: 'hidden', boxShadow: clay.shadowRaised }}>
-          <div style={{ padding: '14px 18px', borderBottom: `1px solid ${clay.accentSoft}`, fontWeight: 700, color: clay.text }}>{categoryLabels[category]}</div>
+          <div style={{ padding: '14px 18px', borderBottom: `1px solid ${clay.accentSoft}`, fontWeight: 700, color: clay.text }}>{tabLabels[category]}{unreadOnly ? ' · Unread' : ''}</div>
           {alerts.length === 0 ? (
-            <div style={{ padding: 48, textAlign: 'center', color: clay.textMuted }}>No alerts in this category.</div>
+            <div style={{ padding: 48, textAlign: 'center', color: clay.textMuted }}>No notifications here.</div>
           ) : alerts.map(alert => (
             <button key={alert.id} type="button" onClick={() => host._openAlertsPage(alert.id)} style={{ width: '100%', textAlign: 'left', border: 0, borderBottom: `1px solid ${clay.accentSoft}`, background: selected?.id === alert.id ? clay.bg : 'transparent', padding: '15px 18px', cursor: 'pointer' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
@@ -116,6 +132,39 @@ export function renderAlertsPage(host: VesselEmail): React.ReactElement {
             })()}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 20 }}>
               {!selected.read && <button type="button" onClick={() => host._markAlertRead(selected.id)} style={{ border: 'none', background: clay.accentSoft, color: clay.accentDark, borderRadius: 7, padding: '8px 12px', cursor: 'pointer', fontWeight: 700 }}>Mark as read</button>}
+              {(selected.alert_type === 'vessel_deleted' || selected.alert_type === 'document_deleted') && (
+                <button type="button" onClick={() => { host._markAlertRead(selected.id); void host._goToView('recycle'); }} style={{ border: '1px solid #fca5a5', background: '#fff5f5', color: '#dc2626', borderRadius: 7, padding: '8px 12px', cursor: 'pointer', fontWeight: 700 }}>View in Recycle Bin</button>
+              )}
+              {selected.alert_type === 'vessel_unrecognised' && (
+                <>
+                  <button type="button" onClick={() => {
+                    host._markAlertRead(selected.id);
+                    void host._goToView('vessels');
+                    host.setState({ spoClassifyDialog: { anomaly: anomalyForAlert(selected), provisioning: false, done: false, error: null } });
+                  }} style={{ border: '1px solid #bae6fd', background: '#e0f2fe', color: '#0369a1', borderRadius: 7, padding: '8px 12px', cursor: 'pointer', fontWeight: 700 }}>Make it a Vessel</button>
+                  <button type="button" onClick={() => {
+                    host._markAlertRead(selected.id);
+                    void host._goToView('vessels');
+                    host.setState({ spoClassifyDialog: { anomaly: anomalyForAlert(selected), provisioning: false, done: false, doneNormal: false, error: null } });
+                  }} style={{ border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)', borderRadius: 7, padding: '8px 12px', cursor: 'pointer', fontWeight: 600 }}>Normal Folder</button>
+                </>
+              )}
+              {(selected.alert_type === 'file_outside_structure' || selected.alert_type === 'subfolder_anomaly') && (
+                <button type="button" onClick={() => {
+                  host._markAlertRead(selected.id);
+                  void host._goToView('vessels');
+                  if (selected.alert_type === 'file_outside_structure') {
+                    const normName = (v: string): string => (v || '').trim().toLowerCase();
+                    const vName = selected.vessel_name;
+                    const subFolderOptions = vName
+                      ? Array.from(new Map(host.state.rows
+                          .filter(r => normName(r.vesselName) === normName(vName) && r.canUpload)
+                          .map(r => [r.groupKey, { label: r.subFolderPath, groupKey: r.groupKey, uploadFolderId: r.uploadFolderId, subFolderPath: r.subFolderPath }])).values()).slice(0, 40)
+                      : [];
+                    host.setState({ spoFileAlertDialog: { fileId: selected.drive_item_id || '', fileName: selected.folder_name, spoPath: selected.spo_path || selected.folder_path, vesselName: selected.vessel_name, subFolderOptions, moving: false, moved: false, error: null } });
+                  }
+                }} style={{ border: '1px solid #bfdbfe', background: '#eff6ff', color: clay.accentDark, borderRadius: 7, padding: '8px 12px', cursor: 'pointer', fontWeight: 700 }}>{selected.alert_type === 'file_outside_structure' ? 'Review File' : 'Track in Vessels'}</button>
+              )}
               {(selected.alert_type === 'vessel_unrecognised' || selected.alert_type === 'file_outside_structure') && (
                 <>
                   <button type="button" onClick={() => {

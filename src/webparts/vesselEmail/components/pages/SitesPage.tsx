@@ -3,8 +3,11 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
+import { Icon } from '@fluentui/react/lib/Icon';
 import { clay } from '../clayTheme';
 import { CopilotSearchPanel } from '../copilot/CopilotSearchPanel';
+import { SiteManagementSection } from './SiteManagementSection';
+import { DmsPageHeader, dmsControlStyle, dmsBtn, dmsRowBtn, dmsTone, DMS_ON_ACCENT } from '../dmsDesignSystem';
 
  type Site = { id: string; site_key?: string; name?: string; display_name: string; web_url?: string; description?: string; thumbnail?: string; is_default?: boolean };
 type Drive = { id: string; name: string; web_url?: string; is_system?: boolean; item_count?: number | null };
@@ -1488,7 +1491,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
   const renderTags = (item: Item): React.ReactElement => (
     <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
       {tagNames.filter(([key]) => item.tags?.[key]).map(([key, label]) => (
-        <span key={key} style={{ background: '#e0f2fe', color: '#075985', borderRadius: 12, padding: '3px 8px', fontSize: 11, fontWeight: 500 }}>
+        <span key={key} style={{ background: dmsTone('accent').bg, color: dmsTone('accent').fg, borderRadius: 12, padding: '3px 8px', fontSize: 11, fontWeight: 500 }}>
           {label}: {item.tags?.[key]}
         </span>
       ))}
@@ -1498,7 +1501,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           onClick={() => void applyBulkVessel([item.id], detectedVessel || bulkVessel)}
           title={`Click to set vessel "${detectedVessel || bulkVessel || 'vessel'}" without scanning`}
           style={{
-            background: '#fef3c7', color: '#92400e', border: '1px dashed #f59e0b',
+            background: dmsTone('warning').bg, color: dmsTone('warning').fg, border: `1px dashed ${clay.pillWarnText}`,
             borderRadius: 12, padding: '2px 8px', fontSize: 11, fontWeight: 600,
             cursor: (detectedVessel || bulkVessel) ? 'pointer' : 'default',
             display: 'inline-flex', alignItems: 'center', gap: 3,
@@ -1520,7 +1523,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           : `${count} file${count === 1 ? '' : 's'}`;
         return (
           <span style={{ color: 'var(--vdms-text-muted)', fontSize: 11, fontStyle: 'italic', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            📁 Sub-folder ({label})
+            <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 11 }} /> Sub-folder ({label})
           </span>
         );
       })()}
@@ -1528,23 +1531,23 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
   );
 
   const reviewPanel = scanResults.length > 0 ? (
-    <div style={{ marginTop: 16, marginBottom: 20, background: '#fff7ed', border: '1px solid #fed7aa', padding: 16, borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+    <div style={{ marginTop: 16, marginBottom: 20, background: dmsTone('warning').bg, border: `1px solid ${clay.pillWarnText}33`, padding: 16, borderRadius: 8, boxShadow: clay.shadowRaised }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <strong style={{ fontSize: 15, color: '#9a3412' }}>🔍 Review OCR & AI Tag Suggestions ({scanResults.length} item{scanResults.length > 1 ? 's' : ''})</strong>
+        <strong style={{ fontSize: 15, color: dmsTone('warning').fg }}><Icon iconName="Search" aria-hidden="true" style={{ fontSize: 15 }} /> Review OCR & AI Tag Suggestions ({scanResults.length} item{scanResults.length > 1 ? 's' : ''})</strong>
         <button
           onClick={() => setScanResults([])}
-          style={{ border: 0, background: 'transparent', cursor: 'pointer', fontSize: 16, color: '#9a3412' }}
+          style={{ border: 0, background: 'transparent', cursor: 'pointer', fontSize: 16, color: dmsTone('warning').fg }}
           title="Close review panel"
-        >✕</button>
+        ><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 16 }} /></button>
       </div>
 
       {/* Quick vessel apply bar */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, padding: '8px 12px', background: '#fef9c3', border: '1px solid #fde68a', borderRadius: 6 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: '#854d0e', whiteSpace: 'nowrap' }}>⚓ Apply vessel to all:</span>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, padding: '8px 12px', background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-line)', borderRadius: 6 }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: dmsTone('warning').fg, whiteSpace: 'nowrap' }}><Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 12 }} /> Apply vessel to all:</span>
         <select
           value={bulkVessel}
           onChange={e => setBulkVessel(e.target.value)}
-          style={{ flex: 1, maxWidth: 260, padding: '5px 8px', borderRadius: 4, border: '1px solid #fbbf24', fontSize: 12, background: 'var(--vdms-surface)' }}
+          style={{ ...dmsControlStyle(), flex: 1, maxWidth: 260, padding: '5px 8px' }}
         >
           <option value="">— Select vessel —</option>
           {vesselOptions.map(v => <option key={v} value={v}>{v}</option>)}
@@ -1564,40 +1567,36 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
               return next;
             });
           }}
-          style={{
-            padding: '5px 14px', background: bulkVessel ? '#b45309' : '#d1d5db', color: '#fff',
-            border: 0, borderRadius: 4, cursor: bulkVessel ? 'pointer' : 'not-allowed',
-            fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
-          }}
+          style={{ ...dmsBtn('primary', Boolean(bulkVessel)), height: 'auto', padding: '5px 14px' }}
         >
           Apply to all
         </button>
       </div>
 
       {scanResults.map(result => (
-        <div key={result.item_id} style={{ padding: '14px 0', borderBottom: '1px solid #fed7aa' }}>
+        <div key={result.item_id} style={{ padding: '14px 0', borderBottom: `1px solid ${clay.pillWarnText}33` }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--vdms-text)' }}>
-                📄 {result.filename || result.item_id}
+                <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 13 }} /> {result.filename || result.item_id}
               </span>
               {result.subfolder_name && (
                 <span style={{ background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-border)', color: 'var(--vdms-text-secondary)', fontSize: 11, padding: '2px 8px', borderRadius: 12, fontWeight: 600 }}>
-                  📁 {result.subfolder_name}
+                  <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 11 }} /> {result.subfolder_name}
                 </span>
               )}
               {Boolean(result.vessel_in_filename_only || (result.ocr_suggestion?.vessel as any)?.vessel_in_filename_only) && (
-                <span style={{ background: '#fff7ed', border: '1px solid #fdba74', color: '#c2410c', fontSize: 11, padding: '2px 8px', borderRadius: 12, fontWeight: 600 }}>
-                  ⚠️ Vessel name not in file
+                <span style={{ background: dmsTone('warning').bg, border: `1px solid ${clay.pillWarnText}55`, color: dmsTone('warning').fg, fontSize: 11, padding: '2px 8px', borderRadius: 12, fontWeight: 600 }}>
+                  <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 11 }} /> Vessel name not in file
                 </span>
               )}
             </div>
             <span>
               {result.status === 'confirmed'
-                ? <span style={{ color: '#15803d', fontWeight: 600 }}>✓ Confirmed and saved to SharePoint</span>
+                ? <span style={{ color: dmsTone('success').fg, fontWeight: 600 }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 13 }} /> Confirmed and saved to SharePoint</span>
                 : result.error
-                  ? <span style={{ color: '#b91c1c', fontWeight: 600 }}>✗ {result.error}</span>
-                  : <span style={{ color: '#c2410c', fontWeight: 600 }}>⚠ Ready for review & confirmation</span>
+                  ? <span style={{ color: dmsTone('danger').fg, fontWeight: 600 }}><Icon iconName="ErrorBadge" aria-hidden="true" style={{ fontSize: 13 }} /> {result.error}</span>
+                  : <span style={{ color: dmsTone('warning').fg, fontWeight: 600 }}><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 13 }} /> Ready for review & confirmation</span>
               }
             </span>
           </div>
@@ -1612,7 +1611,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 const isVessel = field === 'vessel';
                 const isVesselNotInFile = isVessel && Boolean(result.vessel_in_filename_only || (ocr as any)?.vessel_in_filename_only);
                 return (
-                  <div key={field} style={{ background: 'var(--vdms-surface)', border: '1px solid #fed7aa', borderRadius: 6, padding: '8px 10px' }}>
+                  <div key={field} style={{ background: 'var(--vdms-surface)', border: `1px solid ${clay.pillWarnText}33`, borderRadius: 6, padding: '8px 10px' }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--vdms-text-secondary)', marginBottom: 4 }}>
                       {fieldLabel}
                     </div>
@@ -1622,7 +1621,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                         ...previous,
                         [result.item_id]: { ...emptyTags, ...(previous[result.item_id] || {}), [field]: event.target.value },
                       }))}
-                      style={{ width: '100%', padding: '6px 8px', border: '1px solid var(--vdms-border)', borderRadius: 4, fontSize: 12, background: 'var(--vdms-surface)' }}
+                      style={{ ...dmsControlStyle(), width: '100%', padding: '6px 8px' }}
                     >
                       <option value="skip">Skip / Keep unchanged</option>
                       <option value="ocr" disabled={!ocr?.value}>
@@ -1634,8 +1633,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                       <option value="manual">Enter manually</option>
                     </select>
                     {isVesselNotInFile && (
-                      <div style={{ marginTop: 4, fontSize: 11, color: '#c2410c', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
-                        <span>⚠️ Vessel name not in file (matched from term store)</span>
+                      <div style={{ marginTop: 4, fontSize: 11, color: dmsTone('warning').fg, display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
+                        <span><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 11 }} /> Vessel name not in file (matched from term store)</span>
                       </div>
                     )}
                     {choice === 'manual' && (
@@ -1643,7 +1642,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                         <select
                           value={result.proposed_tags?.vessel || ''}
                           onChange={event => updateProposedTag(result.item_id, 'vessel', event.target.value)}
-                          style={{ width: '100%', boxSizing: 'border-box', marginTop: 6, padding: 6, border: '1px solid var(--vdms-border)', borderRadius: 4, fontSize: 12, background: 'var(--vdms-surface)' }}
+                          style={{ ...dmsControlStyle(), width: '100%', boxSizing: 'border-box', marginTop: 6, padding: 6 }}
                         >
                           <option value="">— Select vessel —</option>
                           {vesselOptions.map(v => <option key={v} value={v}>{v}</option>)}
@@ -1654,7 +1653,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                           value={result.proposed_tags?.[field] || ''}
                           onChange={event => updateProposedTag(result.item_id, field, event.target.value)}
                           placeholder={`Enter ${fieldLabel}`}
-                          style={{ width: '100%', boxSizing: 'border-box', marginTop: 6, padding: 6, border: '1px solid var(--vdms-border)', borderRadius: 4, fontSize: 12 }}
+                          style={{ ...dmsControlStyle(), width: '100%', boxSizing: 'border-box', marginTop: 6, padding: 6 }}
                         />
                       )
                     )}
@@ -1692,25 +1691,17 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
               return next;
             });
           }}
-          style={{
-            padding: '10px 16px', background: '#0f766e', color: '#fff', border: 0, borderRadius: 7,
-            cursor: loading || !scanResults.some(result => result.status === 'needs_selection') ? 'not-allowed' : 'pointer',
-            fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6,
-          }}
+          style={{ ...dmsBtn('secondary', !(loading || !scanResults.some(result => result.status === 'needs_selection'))), height: 'auto', padding: '10px 16px' }}
         >
-          ⚡ Auto-Select All High Confidence
+          <Icon iconName="LightningBolt" aria-hidden="true" style={{ fontSize: 13 }} /> Auto-Select All High Confidence
         </button>
 
         <button
           disabled={loading || !scanResults.some(result => result.status === 'needs_selection')}
           onClick={() => void confirmTags()}
-          style={{
-            padding: '10px 18px', background: '#0369a1', color: '#fff', border: 0, borderRadius: 7,
-            cursor: loading || !scanResults.some(result => result.status === 'needs_selection') ? 'not-allowed' : 'pointer',
-            fontWeight: 600, fontSize: 13, opacity: scanResults.some(result => result.status === 'needs_selection') ? 1 : 0.6,
-          }}
+          style={{ ...dmsBtn('primary', !(loading || !scanResults.some(result => result.status === 'needs_selection'))), height: 'auto', padding: '10px 18px' }}
         >
-          ✓ Confirm & Apply Selected Tags
+          <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 13 }} /> Confirm & Apply Selected Tags
         </button>
       </div>
     </div>
@@ -1732,7 +1723,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
         }}>
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 40, height: 40, borderRadius: 10, background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>⚓</div>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: clay.accentSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}><Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 20 }} /></div>
             <div>
               <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--vdms-text)' }}>{taggingModal.title}</div>
               <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2 }}>
@@ -1745,7 +1736,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           <div style={{ height: 6, background: 'var(--vdms-surface-alt)', borderRadius: 99, overflow: 'hidden' }}>
             <div style={{
               height: '100%', borderRadius: 99,
-              background: taggingModal.finished && taggingModal.feed.some(f => f.status === 'failed') ? '#ef4444' : '#0284c7',
+              background: taggingModal.finished && taggingModal.feed.some(f => f.status === 'failed') ? clay.pillDangerText : clay.accent,
               width: `${pct}%`, transition: 'width 0.3s ease',
             }} />
           </div>
@@ -1759,11 +1750,11 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
             {taggingModal.feed.map((entry, idx) => (
               <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, padding: '3px 0' }}>
                 <span style={{ fontSize: 15, flexShrink: 0 }}>
-                  {entry.status === 'pending' ? '⏳' : entry.status === 'ok' ? '✅' : '❌'}
+                  {entry.status === 'pending' ? <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 15 }} /> : entry.status === 'ok' ? <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 15 }} /> : <Icon iconName="ErrorBadge" aria-hidden="true" style={{ fontSize: 15 }} />}
                 </span>
                 <span style={{
                   flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  color: entry.status === 'pending' ? 'var(--vdms-text-muted)' : entry.status === 'ok' ? '#15803d' : '#dc2626',
+                  color: entry.status === 'pending' ? 'var(--vdms-text-muted)' : entry.status === 'ok' ? dmsTone('success').fg : dmsTone('danger').fg,
                   fontWeight: entry.status !== 'pending' ? 600 : 400,
                 }}>
                   {entry.name}
@@ -1771,13 +1762,13 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 {entry.status === 'failed' && entry.error && (
                   <span
                     style={{
-                      fontSize: 11, color: '#dc2626', background: '#fee2e2', padding: '2px 8px',
+                      fontSize: 11, color: dmsTone('danger').fg, background: dmsTone('danger').bg, padding: '2px 8px',
                       borderRadius: 4, whiteSpace: 'nowrap', maxWidth: 320, overflow: 'hidden',
                       textOverflow: 'ellipsis', flexShrink: 0, fontWeight: 600,
                     }}
                     title={entry.error}
                   >
-                    ⚠️ {entry.error}
+                    <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 11 }} /> {entry.error}
                   </span>
                 )}
               </div>
@@ -1789,8 +1780,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
             <>
               <div style={{
                 padding: '12px 16px', borderRadius: 10,
-                background: taggingModal.feed.every(f => f.status !== 'failed') ? '#dcfce7' : '#fff7ed',
-                color: taggingModal.feed.every(f => f.status !== 'failed') ? '#15803d' : '#92400e',
+                background: taggingModal.feed.every(f => f.status !== 'failed') ? dmsTone('success').bg : dmsTone('warning').bg,
+                color: taggingModal.feed.every(f => f.status !== 'failed') ? dmsTone('success').fg : dmsTone('warning').fg,
                 fontWeight: 700, fontSize: 14, textAlign: 'center',
               }}>
                 {taggingModal.summary}
@@ -1798,12 +1789,9 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
               <button
                 type="button"
                 onClick={() => setTaggingModal(null)}
-                style={{
-                  padding: '10px 20px', background: '#0284c7', color: '#fff', border: 0,
-                  borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: 'pointer', alignSelf: 'flex-end',
-                }}
+                style={{ ...dmsBtn('primary'), height: 'auto', padding: '10px 20px', fontSize: 14, alignSelf: 'flex-end' }}
               >
-                ✓ Close
+                <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 14 }} /> Close
               </button>
             </>
           )}
@@ -1825,7 +1813,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           boxShadow: '0 20px 60px rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: 16,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 36, height: 36, borderRadius: 8, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>⚠️</div>
+            <div style={{ width: 36, height: 36, borderRadius: 8, background: dmsTone('warning').bg, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 18 }} /></div>
             <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--vdms-text)' }}>Overwrite Existing Vessel Tags?</div>
           </div>
           <div style={{ fontSize: 13, color: 'var(--vdms-text-secondary)', lineHeight: 1.5 }}>
@@ -1835,10 +1823,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
             <button
               type="button"
               onClick={() => setConfirmOverwrite(null)}
-              style={{
-                padding: '8px 16px', background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)', border: '1px solid var(--vdms-border)',
-                borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: 'pointer',
-              }}
+              style={{ ...dmsBtn('secondary'), height: 'auto', padding: '8px 16px' }}
             >
               Cancel
             </button>
@@ -1848,12 +1833,9 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 setConfirmOverwrite(null);
                 void applyBulkVessel(undefined, undefined, { overwriteExisting: true, confirmed: true });
               }}
-              style={{
-                padding: '8px 16px', background: '#0284c7', color: '#fff', border: 0,
-                borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: 'pointer',
-              }}
+              style={{ ...dmsBtn('primary'), height: 'auto', padding: '8px 16px' }}
             >
-              ✓ Confirm Overwrite
+              <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 13 }} /> Confirm Overwrite
             </button>
           </div>
         </div>
@@ -1868,16 +1850,16 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
     const isSingle = isSelection && count === 1;
 
     let modalTitle = 'Auto-Tag & Review OCR';
-    let icon = '⚡🔍';
-    let iconBg = 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)';
+    let icon: React.ReactNode = <><Icon iconName="LightningBolt" aria-hidden="true" style={{ fontSize: 18 }} /><Icon iconName="Search" aria-hidden="true" style={{ fontSize: 18 }} /></>;
+    let iconBg = clay.accentGradient;
     if (mode === 'scan') {
       modalTitle = 'Scan & Review OCR';
-      icon = '🔍';
-      iconBg = 'linear-gradient(135deg, #0f766e 0%, #115e59 100%)';
+      icon = <Icon iconName="Search" aria-hidden="true" style={{ fontSize: 18 }} />;
+      iconBg = clay.accentGradient;
     } else if (mode === 'autoTagFromPath') {
       modalTitle = 'Auto-Tag from Folder Path';
-      icon = '⚡';
-      iconBg = 'linear-gradient(135deg, #059669 0%, #047857 100%)';
+      icon = <Icon iconName="LightningBolt" aria-hidden="true" style={{ fontSize: 18 }} />;
+      iconBg = clay.accentGradient;
     }
 
     return (
@@ -1893,7 +1875,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={{
               width: 42, height: 42, borderRadius: 10, background: iconBg,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, color: '#fff',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, color: DMS_ON_ACCENT,
               flexShrink: 0,
             }}>
               {icon}
@@ -1915,7 +1897,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                   padding: '10px 14px', fontSize: 13, fontWeight: 600, color: 'var(--vdms-text)',
                   display: 'flex', alignItems: 'center', gap: 8, wordBreak: 'break-all',
                 }}>
-                  📄 {names[0] || 'Selected file'}
+                  <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 13 }} /> {names[0] || 'Selected file'}
                 </div>
                 <div style={{ color: 'var(--vdms-text-muted)', fontSize: 12 }}>
                   {mode === 'autoTagFromPath'
@@ -1932,7 +1914,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                   overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4,
                 }}>
                   {names.slice(0, 10).map((name, idx) => (
-                    <div key={idx} style={{ wordBreak: 'break-all' }}>📄 {name}</div>
+                    <div key={idx} style={{ wordBreak: 'break-all' }}><Icon iconName="Page" aria-hidden="true" style={{ fontSize: 12 }} /> {name}</div>
                   ))}
                   {names.length > 10 && (
                     <div style={{ color: 'var(--vdms-text-muted)', fontStyle: 'italic' }}>
@@ -1960,10 +1942,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
             <button
               type="button"
               onClick={() => setConfirmScanModal(null)}
-              style={{
-                padding: '8px 16px', background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)', border: '1px solid var(--vdms-border)',
-                borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer',
-              }}
+              style={{ ...dmsBtn('secondary'), height: 'auto', padding: '8px 16px' }}
             >
               Cancel
             </button>
@@ -1972,16 +1951,16 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 <button
                   type="button"
                   onClick={() => { const target = confirmScanModal.targetItemIds; setConfirmScanModal(null); void autoTagAndReview(target, 'missing_only'); }}
-                  style={{ padding: '8px 14px', background: '#0284c7', color: '#fff', border: 0, borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                  style={{ ...dmsBtn('primary'), height: 'auto', padding: '8px 14px' }}
                 >
-                  ⚡ Tag Missing Files Only {(missingCount || 0) > 0 ? `(${missingCount})` : ''}
+                  <Icon iconName="LightningBolt" aria-hidden="true" style={{ fontSize: 13 }} /> Tag Missing Files Only {(missingCount || 0) > 0 ? `(${missingCount})` : ''}
                 </button>
                 <button
                   type="button"
                   onClick={() => { const target = confirmScanModal.targetItemIds; setConfirmScanModal(null); void autoTagAndReview(target, 'all'); }}
-                  style={{ padding: '8px 14px', background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)', border: '1px solid var(--vdms-border)', borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                  style={{ ...dmsBtn('secondary'), height: 'auto', padding: '8px 14px' }}
                 >
-                  🔍 Scan All Files ({count})
+                  <Icon iconName="Search" aria-hidden="true" style={{ fontSize: 13 }} /> Scan All Files ({count})
                 </button>
               </>
             ) : mode === 'scan' && ((missingCount || 0) > 0 || isRecursive) && !isSingle ? (
@@ -1989,14 +1968,14 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 <button
                   type="button"
                   onClick={() => { const target = confirmScanModal.targetItemIds; setConfirmScanModal(null); void scan(target, 'missing_only'); }}
-                  style={{ padding: '8px 14px', background: '#0f766e', color: '#fff', border: 0, borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                  style={{ ...dmsBtn('primary'), height: 'auto', padding: '8px 14px' }}
                 >
-                  🔍 Scan Missing Files Only {(missingCount || 0) > 0 ? `(${missingCount})` : ''}
+                  <Icon iconName="Search" aria-hidden="true" style={{ fontSize: 13 }} /> Scan Missing Files Only {(missingCount || 0) > 0 ? `(${missingCount})` : ''}
                 </button>
                 <button
                   type="button"
                   onClick={() => { const target = confirmScanModal.targetItemIds; setConfirmScanModal(null); void scan(target, 'all'); }}
-                  style={{ padding: '8px 14px', background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)', border: '1px solid var(--vdms-border)', borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+                  style={{ ...dmsBtn('secondary'), height: 'auto', padding: '8px 14px' }}
                 >
                   Scan All Files ({count})
                 </button>
@@ -2012,17 +1991,12 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                   else if (m === 'autoTagAndReview') void autoTagAndReview(target, 'all');
                   else void autoTagFromPath(target);
                 }}
-                style={{
-                  padding: '8px 18px',
-                  background: mode === 'scan' ? '#0f766e' : mode === 'autoTagAndReview' ? '#0284c7' : '#059669',
-                  color: '#fff', border: 0, borderRadius: 7, fontWeight: 600, fontSize: 13, cursor: 'pointer',
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                }}
+                style={{ ...dmsBtn('primary'), height: 'auto', padding: '8px 18px' }}
               >
                 {isSingle
-                  ? (mode === 'autoTagFromPath' ? 'Tag Selected File' : '⚡🔍 Start OCR on Selected File')
+                  ? (mode === 'autoTagFromPath' ? 'Tag Selected File' : <><Icon iconName="LightningBolt" aria-hidden="true" style={{ fontSize: 13 }} /><Icon iconName="Search" aria-hidden="true" style={{ fontSize: 13 }} /> Start OCR on Selected File</>)
                   : mode === 'autoTagAndReview'
-                    ? `⚡🔍 Scan All Files (${count})`
+                    ? <><Icon iconName="LightningBolt" aria-hidden="true" style={{ fontSize: 13 }} /><Icon iconName="Search" aria-hidden="true" style={{ fontSize: 13 }} /> Scan All Files ({count})</>
                     : `Proceed (${count} file${count === 1 ? '' : 's'})`}
               </button>
             )}
@@ -2039,48 +2013,46 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
       {renderTaggingModal()}
       {renderConfirmOverwriteModal()}
       {renderConfirmScanModal()}
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', background: clay.bg, borderRadius: clay.radiusCard, padding: '16px 22px', boxShadow: clay.shadowRaised }}>
-        <div>
-          <h1 style={{ margin: 0, color: clay.text, fontSize: 28, fontWeight: 800 }}>Sites</h1>
-          <p style={{ color: clay.text, fontWeight: 600, margin: '6px 0 0' }}>Browse libraries and tag documents across your tenant.</p>
-        </div>
-        {sites.length > 1 && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: clay.text, fontWeight: 600 }}>
-            SharePoint site
-            <select
-              aria-label="Select SharePoint site"
-              value={selectedSiteKey}
-              onChange={event => {
-                setSelectedSiteKey(event.target.value || '');
-                setContext(null);
-                setItems([]);
-                setCrumbs([]);
-                setExpanded(null);
-                setMessage('');
-              }}
-              style={{ minWidth: 230, padding: '9px 12px', border: 'none', borderRadius: clay.radiusButton, background: clay.surface, color: clay.text, boxShadow: clay.shadowRaised }}
-            >
-              {sites.map(site => (
-                <option key={site.site_key || site.id} value={site.site_key || site.id}>
-                  {site.display_name || getSiteName(site)}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        <input
-          aria-label="Search sites"
-          value={query}
-          onChange={event => setQuery(event.target.value)}
-          placeholder="Search sites"
-          style={{ width: 260, padding: '11px 14px', border: 'none', borderRadius: clay.radiusButton, background: clay.surface, boxShadow: 'inset 2px 2px 5px rgba(120,190,185,0.22), inset -2px -2px 4px rgba(255,255,255,0.9)' }}
-        />
+      <div style={{ marginBottom: 20 }}>
+        <DmsPageHeader title="Sites" subtitle="Browse libraries and tag documents across your tenant.">
+          {sites.length > 1 && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--vdms-text)', fontWeight: 600 }}>
+              SharePoint site
+              <select
+                aria-label="Select SharePoint site"
+                value={selectedSiteKey}
+                onChange={event => {
+                  setSelectedSiteKey(event.target.value || '');
+                  setContext(null);
+                  setItems([]);
+                  setCrumbs([]);
+                  setExpanded(null);
+                  setMessage('');
+                }}
+                style={{ ...dmsControlStyle(), minWidth: 230 }}
+              >
+                {sites.map(site => (
+                  <option key={site.site_key || site.id} value={site.site_key || site.id}>
+                    {site.display_name || getSiteName(site)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <input
+            aria-label="Search sites"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder="Search sites"
+            style={{ ...dmsControlStyle(), width: 260 }}
+          />
+        </DmsPageHeader>
       </div>
 
       {message && (
-        <div style={{ padding: 12, marginBottom: 16, background: '#fff7ed', color: '#9a3412', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ padding: 12, marginBottom: 16, background: dmsTone('warning').bg, color: dmsTone('warning').fg, borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>{message}</span>
-          <button onClick={() => setMessage('')} style={{ border: 0, background: 'transparent', cursor: 'pointer', fontSize: 16, color: '#9a3412' }}>✕</button>
+          <button onClick={() => setMessage('')} style={{ border: 0, background: 'transparent', cursor: 'pointer', fontSize: 16, color: dmsTone('warning').fg }}><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 16 }} /></button>
         </div>
       )}
 
@@ -2088,6 +2060,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
 
       {/* Sites grid */}
       {!context && (
+        <>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 16 }}>
           {sitesLoading && <div style={{ color: clay.textMuted }}>Loading sites...</div>}
           {selectedSites.map(site => (
@@ -2102,9 +2075,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
               <p style={{ color: clay.text, fontWeight: 600, fontSize: 13, minHeight: 34 }}>{site.description || 'SharePoint site'}</p>
               <button
                 onClick={() => void loadDrives(site)}
-                onMouseEnter={e => { e.currentTarget.style.background = clay.accentSoftHover; e.currentTarget.style.boxShadow = clay.shadowRaisedHover; }}
-                onMouseLeave={e => { e.currentTarget.style.background = clay.accentSoft; e.currentTarget.style.boxShadow = 'none'; }}
-                style={{ padding: '9px 12px', border: 'none', color: clay.accentDark, background: clay.accentSoft, borderRadius: 7, cursor: 'pointer', transition: 'all 0.18s ease', boxShadow: 'none', fontWeight: 700 }}
+                style={dmsBtn('secondary')}
               >
                 {expanded === site.id ? 'Hide libraries' : 'Show libraries'}
               </button>
@@ -2130,7 +2101,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                           style={{ textAlign: 'left', padding: 10, border: 'none', background: clay.bg, color: clay.text, fontWeight: 700, borderRadius: 6, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
                         >
                           <span>
-                            {drive.is_system ? '🗂️' : '📚'} {drive.name}
+                            {drive.is_system ? <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 13 }} /> : <Icon iconName="Library" aria-hidden="true" style={{ fontSize: 13 }} />} {drive.name}
                             {drive.is_system && <span style={{ marginLeft: 6, fontSize: 11, color: clay.textMuted }}>(system library)</span>}
                           </span>
                           {hasCount && (
@@ -2155,6 +2126,12 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
             </div>
           ))}
         </div>
+
+        {/* Site Management — moved here from Settings → Site Management;
+            same component/state/handlers, just relocated + given a card
+            that matches this page instead of Settings' left-nav shell. */}
+        <SiteManagementSection host={host} />
+        </>
       )}
 
       {/* Folder / file browser */}
@@ -2195,10 +2172,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 }}
                 title="Open current folder in SharePoint Online"
                 aria-label="Open current folder in SharePoint Online"
-                style={{
-                  padding: '9px 13px', background: clay.accentSoft, color: clay.accentDark, border: 'none', borderRadius: 7,
-                  cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6,
-                }}
+                style={{ ...dmsBtn('secondary'), height: 'auto', padding: '9px 13px' }}
               >
                 ↗ Open in SharePoint
               </button>
@@ -2206,62 +2180,47 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 <input type="checkbox" checked={recursive} onChange={event => setRecursive(event.target.checked)} />
                 Recursive
               </label>
-              <label style={{ fontSize: 13, display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer', color: rescanAll ? '#b45309' : 'var(--vdms-text-secondary)' }} title="By default only files missing a tag (Department, Vessel, Group, or Category) are processed">
+              <label style={{ fontSize: 13, display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer', color: rescanAll ? dmsTone('warning').fg : 'var(--vdms-text-secondary)' }} title="By default only files missing a tag (Department, Vessel, Group, or Category) are processed">
                 <input type="checkbox" checked={rescanAll} onChange={event => setRescanAll(event.target.checked)} />
                 Re-scan all files
               </label>
               <button
                 disabled={loading}
                 onClick={() => void promptAutoTagAndReview()}
-                style={{
-                  padding: '9px 13px', background: '#0284c7', color: '#fff', border: 0, borderRadius: 7,
-                  cursor: loading ? 'not-allowed' : 'pointer',
-                  opacity: loading ? 0.6 : 1,
-                  fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6,
-                }}
+                style={{ ...dmsBtn('primary', !loading), height: 'auto', padding: '9px 13px' }}
                 title="Automatically tag from folder path & AI, and open interactive review at the same time"
               >
-                ⚡🔍 Auto-Tag & Review{selected.size > 0 ? ` (${selected.size})` : ''}
+                <Icon iconName="LightningBolt" aria-hidden="true" style={{ fontSize: 13 }} /><Icon iconName="Search" aria-hidden="true" style={{ fontSize: 13 }} /> Auto-Tag & Review{selected.size > 0 ? ` (${selected.size})` : ''}
               </button>
               <button
                 disabled={selected.size === 0 || loading}
                 onClick={() => void promptScan()}
-                style={{
-                  padding: '9px 13px', background: '#0f766e', color: '#fff', border: 0, borderRadius: 7,
-                  cursor: selected.size === 0 || loading ? 'not-allowed' : 'pointer',
-                  opacity: selected.size === 0 || loading ? 0.6 : 1,
-                  fontWeight: 600,
-                }}
+                style={{ ...dmsBtn('secondary', !(selected.size === 0 || loading)), height: 'auto', padding: '9px 13px' }}
               >
-                {loading ? 'Scanning...' : `🔍 Scan & Review${selected.size > 0 ? ` (${selected.size})` : ''}`}
+                {loading ? 'Scanning...' : <><Icon iconName="Search" aria-hidden="true" style={{ fontSize: 13 }} /> Scan & Review{selected.size > 0 ? ` (${selected.size})` : ''}</>}
               </button>
               <button
                 disabled={loading || !scanResults.some(result => result.status === 'needs_selection')}
                 onClick={() => void confirmTags()}
-                style={{
-                  padding: '9px 13px', background: '#0369a1', color: '#fff', border: 0, borderRadius: 7,
-                  cursor: scanResults.some(result => result.status === 'needs_selection') ? 'pointer' : 'not-allowed',
-                  opacity: scanResults.some(result => result.status === 'needs_selection') ? 1 : 0.5,
-                  fontWeight: 600,
-                }}
+                style={{ ...dmsBtn('primary', scanResults.some(result => result.status === 'needs_selection') && !loading), height: 'auto', padding: '9px 13px' }}
               >
-                ✓ Confirm Tags
+                <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 13 }} /> Confirm Tags
               </button>
             </div>
           </div>
 
           {tagFailures.length > 0 && (
-            <div style={{ marginBottom: 16, padding: 14, background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8 }}>
+            <div style={{ marginBottom: 16, padding: 14, background: dmsTone('warning').bg, border: `1px solid ${clay.pillWarnText}33`, borderRadius: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <strong style={{ color: '#9a3412' }}>Needs Attention ({tagFailures.length})</strong>
-                <button type="button" onClick={() => void retryFailures()} disabled={loading} style={{ marginLeft: 'auto', padding: '6px 10px', border: 0, borderRadius: 6, background: '#c2410c', color: '#fff', cursor: 'pointer' }}>Retry All</button>
+                <strong style={{ color: dmsTone('warning').fg }}>Needs Attention ({tagFailures.length})</strong>
+                <button type="button" onClick={() => void retryFailures()} disabled={loading} style={{ ...dmsBtn('danger', !loading), height: 'auto', padding: '6px 10px', marginLeft: 'auto' }}>Retry All</button>
               </div>
               <div style={{ display: 'grid', gap: 6, maxHeight: 180, overflowY: 'auto' }}>
                 {tagFailures.map(failure => (
-                  <div key={failure.file_id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: '#7c2d12' }}>
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={failure.error_reason}>{failure.filename} <span style={{ color: '#a16207' }}>({failure.attempt_count} attempts)</span></span>
-                    <button type="button" onClick={() => void retryFailures([failure.file_id])} disabled={loading} style={{ padding: '4px 8px', border: '1px solid #fdba74', borderRadius: 5, background: 'var(--vdms-surface)', color: '#9a3412', cursor: 'pointer' }}>Retry</button>
-                    <button type="button" onClick={() => void dismissFailures([failure.file_id])} style={{ padding: '4px 8px', border: '1px solid #fdba74', borderRadius: 5, background: 'var(--vdms-surface)', color: '#7c2d12', cursor: 'pointer' }}>Dismiss</button>
+                  <div key={failure.file_id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, color: dmsTone('warning').fg }}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={failure.error_reason}>{failure.filename} <span style={{ color: dmsTone('warning').fg, opacity: 0.8 }}>({failure.attempt_count} attempts)</span></span>
+                    <button type="button" onClick={() => void retryFailures([failure.file_id])} disabled={loading} style={{ ...dmsRowBtn('plain'), height: 'auto', padding: '4px 8px' }}>Retry</button>
+                    <button type="button" onClick={() => void dismissFailures([failure.file_id])} style={{ ...dmsRowBtn('plain'), height: 'auto', padding: '4px 8px' }}>Dismiss</button>
                   </div>
                 ))}
               </div>
@@ -2271,11 +2230,11 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           {/* Folder and file count summary (matching Documents module with recursive accuracy) */}
           <div style={{ fontSize: 13, color: 'var(--vdms-text-secondary)', marginBottom: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ fontWeight: 700, color: 'var(--vdms-text)' }}>
-              📁 {summaryCounts ? summaryCounts.direct_folders : items.filter(i => i.folder).length} {(summaryCounts ? summaryCounts.direct_folders : items.filter(i => i.folder).length) === 1 ? 'folder' : 'folders'}
+              <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 13 }} /> {summaryCounts ? summaryCounts.direct_folders : items.filter(i => i.folder).length} {(summaryCounts ? summaryCounts.direct_folders : items.filter(i => i.folder).length) === 1 ? 'folder' : 'folders'}
             </span>
             <span>•</span>
             <span style={{ fontWeight: 700, color: 'var(--vdms-text)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              📄 {summaryCounts ? `${summaryCounts.total_files} total files` : `${items.filter(i => !i.folder).length} files`}
+              <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 13 }} /> {summaryCounts ? `${summaryCounts.total_files} total files` : `${items.filter(i => !i.folder).length} files`}
               {summaryCounts && summaryCounts.direct_files === 0 && summaryCounts.direct_folders > 0 && (
                 <span style={{ fontWeight: 400, color: 'var(--vdms-text-muted)' }}>(0 at this level)</span>
               )}
@@ -2283,7 +2242,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 <span style={{ fontWeight: 400, color: 'var(--vdms-text-muted)' }}>({summaryCounts.direct_files} at this level)</span>
               )}
               {countsLoading && (
-                <span style={{ fontSize: 11, color: '#0284c7', fontWeight: 500 }}>
+                <span style={{ fontSize: 11, color: clay.accent, fontWeight: 500 }}>
                   (calculating subfolders...)
                 </span>
               )}
@@ -2298,16 +2257,13 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
               borderRadius: 8, marginBottom: 14,
             }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--vdms-text)', display: 'flex', alignItems: 'center', gap: 6 }}>
-                ⚓ Vessel:
+                <Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 13 }} /> Vessel:
               </span>
 
               <select
                 value={bulkVessel}
                 onChange={e => setBulkVessel(e.target.value)}
-                style={{
-                  padding: '6px 10px', fontSize: 13, borderRadius: 6,
-                  border: '1px solid var(--vdms-text-faint)', background: 'var(--vdms-surface)', minWidth: 180, fontWeight: 500,
-                }}
+                style={{ ...dmsControlStyle(), padding: '6px 10px', fontSize: 13, minWidth: 180, fontWeight: 500 }}
               >
                 <option value="">-- Choose vessel --</option>
                 {detectedVessel && (
@@ -2323,10 +2279,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 placeholder="Or type vessel name..."
                 value={bulkVessel}
                 onChange={e => setBulkVessel(e.target.value)}
-                style={{
-                  padding: '6px 10px', fontSize: 13, borderRadius: 6,
-                  border: '1px solid var(--vdms-text-faint)', width: 170,
-                }}
+                style={{ ...dmsControlStyle(), padding: '6px 10px', fontSize: 13, width: 170 }}
               />
 
               {(() => {
@@ -2348,18 +2301,12 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                         type="button"
                         disabled={!bulkVessel.trim() || loading}
                         onClick={() => void applyBulkVessel(undefined, undefined, { onlyMissing: true })}
-                        style={{
-                          padding: '7px 14px', background: '#0284c7', color: '#fff', border: 0,
-                          borderRadius: 6, fontWeight: 700, fontSize: 13,
-                          cursor: (!bulkVessel.trim() || loading) ? 'not-allowed' : 'pointer',
-                          display: 'inline-flex', alignItems: 'center', gap: 6,
-                          opacity: (!bulkVessel.trim() || loading) ? 0.5 : 1,
-                        }}
+                        style={{ ...dmsBtn('primary', Boolean(bulkVessel.trim()) && !loading), height: 'auto', padding: '7px 14px' }}
                         title={missingCount > 0
                           ? `Update vessel tag "${bulkVessel.trim()}" directly on the ${missingCount} file(s) missing a vessel tag`
                           : 'Update vessel tag on missing files across sub-folders'}
                       >
-                        ⚓ Tag Missing Vessels {missingCount > 0 ? `(${missingCount})` : (hasFolders ? '(missing only)' : '')}
+                        <Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 13 }} /> Tag Missing Vessels {missingCount > 0 ? `(${missingCount})` : (hasFolders ? '(missing only)' : '')}
                       </button>
                     )}
 
@@ -2369,16 +2316,10 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                         type="button"
                         disabled={!bulkVessel.trim() || loading}
                         onClick={() => void applyBulkVessel(undefined, undefined, { overwriteExisting: true })}
-                        style={{
-                          padding: '7px 14px', background: '#059669', color: '#fff', border: 0,
-                          borderRadius: 6, fontWeight: 600, fontSize: 13,
-                          cursor: (!bulkVessel.trim() || loading) ? 'not-allowed' : 'pointer',
-                          display: 'inline-flex', alignItems: 'center', gap: 6,
-                          opacity: (!bulkVessel.trim() || loading) ? 0.5 : 1,
-                        }}
+                        style={{ background: dmsTone('success').bg, color: dmsTone('success').fg, border: '1px solid transparent', borderRadius: 6, fontWeight: 600, fontSize: 13, height: 'auto', padding: '7px 14px', cursor: (!bulkVessel.trim() || loading) ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, opacity: (!bulkVessel.trim() || loading) ? 0.5 : 1 }}
                         title={`All ${totalTargetCount} file(s) already have a vessel tag. Click to overwrite (confirmation required).`}
                       >
-                        ✓ All Tagged — Overwrite ({totalTargetCount})
+                        <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 13 }} /> All Tagged — Overwrite ({totalTargetCount})
                       </button>
                     )}
 
@@ -2388,16 +2329,10 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                         type="button"
                         disabled={!bulkVessel.trim() || loading}
                         onClick={() => void applyBulkVessel(undefined, undefined, { overwriteExisting: true })}
-                        style={{
-                          padding: '7px 12px', background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-secondary)',
-                          border: '1px solid var(--vdms-border)', borderRadius: 6, fontWeight: 500, fontSize: 12,
-                          cursor: (!bulkVessel.trim() || loading) ? 'not-allowed' : 'pointer',
-                          display: 'inline-flex', alignItems: 'center', gap: 5,
-                          opacity: (!bulkVessel.trim() || loading) ? 0.5 : 1,
-                        }}
+                        style={{ ...dmsBtn('secondary', Boolean(bulkVessel.trim()) && !loading), height: 'auto', padding: '7px 12px', fontWeight: 500, fontSize: 12 }}
                         title={`Overwrite vessel tag on all ${totalTargetCount} file(s) including the ${taggedCount} already-tagged file(s) (requires confirmation)`}
                       >
-                        🔄 Overwrite All ({totalTargetCount})
+                        <Icon iconName="Refresh" aria-hidden="true" style={{ fontSize: 12 }} /> Overwrite All ({totalTargetCount})
                       </button>
                     )}
                   </>
@@ -2408,16 +2343,12 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 type="button"
                 disabled={loading}
                 onClick={() => void promptAutoTagFromPath()}
-                style={{
-                  padding: '7px 12px', background: '#f0fdf4', color: '#15803d', border: '1px solid #bbf7d0',
-                  borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: 'pointer',
-                  display: 'inline-flex', alignItems: 'center', gap: 5,
-                }}
+                style={{ background: dmsTone('success').bg, color: dmsTone('success').fg, border: '1px solid transparent', borderRadius: 6, fontWeight: 600, fontSize: 12, height: 'auto', padding: '7px 12px', cursor: loading ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, opacity: loading ? 0.6 : 1 }}
                 title={selected.size > 0
                   ? `Automatically tag ${selected.size} selected item(s) from folder path and taxonomy`
                   : 'Automatically tag all files from folder path and taxonomy across selected items and sub-folders'}
               >
-                ⚡ Auto-Tag from Folder Path {selected.size > 0 ? `(${selected.size} selected)` : (detectedVessel ? `(${detectedVessel})` : '')}
+                <Icon iconName="LightningBolt" aria-hidden="true" style={{ fontSize: 12 }} /> Auto-Tag from Folder Path {selected.size > 0 ? `(${selected.size} selected)` : (detectedVessel ? `(${detectedVessel})` : '')}
               </button>
 
               {/* Direct OCR run on exactly the files missing a tag — no modal, since scope is already known here */}
@@ -2429,14 +2360,10 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                     type="button"
                     disabled={loading}
                     onClick={() => void autoTagAndReview(missingTagFiles.map(i => i.id), 'missing_only')}
-                    style={{
-                      padding: '7px 12px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe',
-                      borderRadius: 6, fontWeight: 600, fontSize: 12, cursor: loading ? 'not-allowed' : 'pointer',
-                      display: 'inline-flex', alignItems: 'center', gap: 5, opacity: loading ? 0.6 : 1,
-                    }}
+                    style={{ background: dmsTone('accent').bg, color: dmsTone('accent').fg, border: '1px solid transparent', borderRadius: 6, fontWeight: 600, fontSize: 12, height: 'auto', padding: '7px 12px', cursor: loading ? 'not-allowed' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, opacity: loading ? 0.6 : 1 }}
                     title={`Run OCR & AI classification directly on the ${missingTagFiles.length} file(s) missing a vessel tag. Files with an existing vessel tag are skipped.`}
                   >
-                    🔍 Run OCR on Missing Tags ({missingTagFiles.length})
+                    <Icon iconName="Search" aria-hidden="true" style={{ fontSize: 12 }} /> Run OCR on Missing Tags ({missingTagFiles.length})
                   </button>
                 );
               })()}
@@ -2448,20 +2375,20 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                     disabled={loading || !bulkVessel.trim()}
                     onClick={() => void applyBulkVessel(undefined, undefined, { onlyMissing: true })}
                     style={{
-                      color: '#b45309', fontWeight: 600, background: '#fef3c7', padding: '5px 12px',
-                      borderRadius: 6, border: '1px solid #fde68a', cursor: bulkVessel.trim() && !loading ? 'pointer' : 'default',
+                      color: dmsTone('warning').fg, fontWeight: 600, background: dmsTone('warning').bg, padding: '5px 12px',
+                      borderRadius: 6, border: '1px solid transparent', cursor: bulkVessel.trim() && !loading ? 'pointer' : 'default',
                       display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12,
                     }}
                     title={bulkVessel.trim()
                       ? `Click to tag these ${items.filter(i => !i.folder && !i.tags?.vessel).length} missing files with "${bulkVessel.trim()}"`
                       : 'Select or enter a vessel name to tag these missing files'}
                   >
-                    ⚠️ {items.filter(i => !i.folder && !i.tags?.vessel).length} file{items.filter(i => !i.folder && !i.tags?.vessel).length > 1 ? 's' : ''} missing vessel tag
+                    <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> {items.filter(i => !i.folder && !i.tags?.vessel).length} file{items.filter(i => !i.folder && !i.tags?.vessel).length > 1 ? 's' : ''} missing vessel tag
                     {bulkVessel.trim() && <span style={{ textDecoration: 'underline', fontWeight: 700, marginLeft: 2 }}>— Tag Now</span>}
                   </button>
                 ) : (
-                  <span style={{ color: '#16a34a', fontWeight: 600, background: '#dcfce7', padding: '5px 10px', borderRadius: 6 }}>
-                    ✓ Ready to auto-tag
+                  <span style={{ color: dmsTone('success').fg, fontWeight: 600, background: dmsTone('success').bg, padding: '5px 10px', borderRadius: 6 }}>
+                    <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} /> Ready to auto-tag
                   </span>
                 )}
               </span>
@@ -2469,13 +2396,13 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
           )}
 
           {/* Item list table */}
-          <div style={{ background: 'var(--vdms-surface)', border: '1px solid #dbe5ec', borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--vdms-surface)', border: '1px solid var(--vdms-line)', borderRadius: 14, boxShadow: clay.shadowRaised, overflow: 'hidden' }}>
             {/* Column header */}
             <div style={{
               display: 'grid', gridTemplateColumns: '30px 30px minmax(180px,1fr) minmax(200px,2fr) 140px',
-              gap: 12, alignItems: 'center', padding: '10px 16px',
-              background: 'var(--vdms-surface-alt)', borderBottom: '1px solid var(--vdms-border)',
-              fontSize: 12, fontWeight: 700, color: 'var(--vdms-text-secondary)',
+              gap: 12, alignItems: 'center', padding: '10px 14px',
+              background: 'var(--vdms-surface-alt)', borderBottom: '1px solid var(--vdms-line)',
+              fontSize: 11, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--vdms-text-muted)',
             }}>
               <input
                 type="checkbox"
@@ -2498,7 +2425,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                   const selFolders = selItems.filter(i => i.folder).length;
                   const selFiles = selItems.filter(i => !i.folder).length;
                   return (
-                    <span style={{ fontSize: 11, background: '#e0f2fe', color: '#0369a1', padding: '1px 8px', borderRadius: 10, fontWeight: 600 }}>
+                    <span style={{ fontSize: 11, background: dmsTone('accent').bg, color: dmsTone('accent').fg, padding: '1px 8px', borderRadius: 10, fontWeight: 600 }}>
                       {selFolders > 0 && selFiles > 0
                         ? `${selFolders} folder${selFolders > 1 ? 's' : ''}, ${selFiles} file${selFiles > 1 ? 's' : ''} selected`
                         : selFolders > 0
@@ -2517,8 +2444,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                 key={item.id}
                 style={{
                   display: 'grid', gridTemplateColumns: '30px 30px minmax(180px,1fr) minmax(200px,2fr) 140px',
-                  gap: 12, alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid #eef2f6',
-                  background: editing === item.id ? '#f0f9ff' : undefined,
+                  gap: 12, alignItems: 'center', padding: '12px 14px', borderBottom: '1px solid var(--vdms-border-soft)',
+                  background: editing === item.id ? dmsTone('accent').bg : undefined,
                 }}
               >
                 {/* Checkbox */}
@@ -2544,8 +2471,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                   }}
                   title={item.folder ? `Open folder ${item.name}` : `Preview ${item.name}`}
                   style={{
-                    width: 26, height: 26, padding: 0, border: '1px solid #bfdbfe', background: '#eff6ff',
-                    color: '#1d4ed8', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 700,
+                    width: 26, height: 26, padding: 0, border: '1px solid transparent', background: dmsTone('accent').bg,
+                    color: dmsTone('accent').fg, borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 700,
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                   }}
                 >
@@ -2562,9 +2489,9 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                       openSiteFile(item);
                     }
                   }}
-                  style={{ textAlign: 'left', border: 0, background: 'transparent', color: item.folder ? '#0369a1' : '#123044', cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
+                  style={{ textAlign: 'left', border: 0, background: 'transparent', color: item.folder ? clay.accent : 'var(--vdms-text)', cursor: 'pointer', fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
                 >
-                  <span>{item.folder ? '📁' : '📄'} {item.name}</span>
+                  <span>{item.folder ? <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 13 }} /> : <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 13 }} />} {item.name}</span>
                   {item.folder && (() => {
                     const fc = item.folder_counts;
                     if (fc) {
@@ -2577,8 +2504,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                               display: 'inline-flex',
                               alignItems: 'center',
                               justifyContent: 'center',
-                              background: totalFiles > 0 ? '#0284c7' : 'var(--vdms-text-faint)',
-                              color: '#fff',
+                              background: totalFiles > 0 ? clay.accent : 'var(--vdms-text-faint)',
+                              color: DMS_ON_ACCENT,
                               borderRadius: 20,
                               padding: '2px 10px',
                               fontSize: 11,
@@ -2588,7 +2515,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                             }}
                             title={`${fc.direct_subfolders} direct subfolder${fc.direct_subfolders === 1 ? '' : 's'}, ${totalFiles} total file${totalFiles === 1 ? '' : 's'} across all subfolders`}
                           >
-                            📁 {fc.direct_subfolders} {fc.direct_subfolders === 1 ? 'subfolder' : 'subfolders'} · {totalFiles} {totalFiles === 1 ? 'file' : 'files'}
+                            <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 11 }} /> {fc.direct_subfolders} {fc.direct_subfolders === 1 ? 'subfolder' : 'subfolders'} · {totalFiles} {totalFiles === 1 ? 'file' : 'files'}
                           </span>
                         );
                       } else {
@@ -2598,8 +2525,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                               display: 'inline-flex',
                               alignItems: 'center',
                               justifyContent: 'center',
-                              background: totalFiles > 0 ? '#0284c7' : 'var(--vdms-text-faint)',
-                              color: '#fff',
+                              background: totalFiles > 0 ? clay.accent : 'var(--vdms-text-faint)',
+                              color: DMS_ON_ACCENT,
                               borderRadius: 20,
                               padding: '1px 8px',
                               fontSize: 10,
@@ -2623,8 +2550,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                           display: 'inline-flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          background: fallbackCount > 0 ? '#0284c7' : 'var(--vdms-text-faint)',
-                          color: '#fff',
+                          background: fallbackCount > 0 ? clay.accent : 'var(--vdms-text-faint)',
+                          color: DMS_ON_ACCENT,
                           borderRadius: 20,
                           padding: '1px 8px',
                           fontSize: 10,
@@ -2652,7 +2579,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                             onChange={event => setTagDraft(previous => ({ ...previous, vessel: event.target.value }))}
                             placeholder={label}
                             list="vessel-options-list"
-                            style={{ width: 115, padding: 5, border: '1px solid var(--vdms-border)', borderRadius: 4, fontSize: 12 }}
+                            style={{ ...dmsControlStyle(), width: 115, padding: 5 }}
                           />
                           <datalist id="vessel-options-list">
                             {detectedVessel && <option value={detectedVessel} />}
@@ -2666,7 +2593,7 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                           value={tagDraft[key]}
                           onChange={event => setTagDraft(previous => ({ ...previous, [key]: event.target.value }))}
                           placeholder={label}
-                          style={{ width: 105, padding: 5, border: '1px solid var(--vdms-border)', borderRadius: 4, fontSize: 12 }}
+                          style={{ ...dmsControlStyle(), width: 105, padding: 5 }}
                         />
                       )
                     ))}
@@ -2682,14 +2609,14 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                       <button
                         type="button"
                         onClick={() => void saveTags(item)}
-                        style={{ border: 0, background: '#0369a1', color: '#fff', borderRadius: 6, padding: '5px 9px', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}
+                        style={{ ...dmsRowBtn('accent'), padding: '5px 9px' }}
                       >
                         Save
                       </button>
                       <button
                         type="button"
                         onClick={() => setEditing(null)}
-                        style={{ border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface)', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', fontSize: 12 }}
+                        style={{ ...dmsRowBtn('plain'), padding: '5px 8px' }}
                       >
                         Cancel
                       </button>
@@ -2701,19 +2628,9 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                           type="button"
                           onClick={() => void promptAutoTagFromPath([item.id])}
                           title={`Auto-tag all files inside ${item.name} from folder path`}
-                          style={{
-                            border: '1px solid #7dd3fc',
-                            background: '#f0f9ff',
-                            color: '#0284c7',
-                            borderRadius: 6,
-                            padding: '5px 9px',
-                            cursor: 'pointer',
-                            fontSize: 12,
-                            fontWeight: 600,
-                            whiteSpace: 'nowrap',
-                          }}
+                          style={{ ...dmsRowBtn('accent'), padding: '5px 9px' }}
                         >
-                          ⚡ Auto-Tag Files
+                          <Icon iconName="LightningBolt" aria-hidden="true" style={{ fontSize: 12 }} /> Auto-Tag Files
                         </button>
                       ) : (
                         <button
@@ -2727,9 +2644,9 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                               vessel: existing.vessel || detectedVessel || bulkVessel || '',
                             });
                           }}
-                          style={{ border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface)', borderRadius: 6, padding: '5px 8px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap' }}
+                          style={{ ...dmsRowBtn('plain'), padding: '5px 8px' }}
                         >
-                          ✏ Tags
+                          <Icon iconName="Edit" aria-hidden="true" style={{ fontSize: 12 }} /> Tags
                         </button>
                       )}
                       {/* Open in SharePoint arrow — exact same button as Documents module */}
@@ -2739,8 +2656,8 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
                         title={item.folder ? `Open ${item.name} folder in SharePoint` : `Open ${item.name} in SharePoint`}
                         aria-label={`Open ${item.name} in SharePoint`}
                         style={{
-                          width: 28, height: 27, padding: 0, borderRadius: 6, border: '1px solid #bfdbfe',
-                          background: '#eff6ff', color: '#1d4ed8', cursor: 'pointer', fontSize: 16,
+                          width: 28, height: 27, padding: 0, borderRadius: 6, border: '1px solid transparent',
+                          background: dmsTone('accent').bg, color: dmsTone('accent').fg, cursor: 'pointer', fontSize: 16,
                           fontWeight: 700, lineHeight: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                         }}
                       >

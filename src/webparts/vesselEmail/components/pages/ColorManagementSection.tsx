@@ -1,9 +1,10 @@
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import {
-  applyColorTheme, CLAY_COLOR_PRESETS, DEFAULT_CLAY_COLORS,
+  applyColorTheme, CLAY_COLOR_PRESETS, DEFAULT_CLAY_COLORS, clay,
 } from '../clayTheme';
 import type { ClayColorSet, ClayColorTheme } from '../clayTheme';
+import { dmsBtn } from '../dmsDesignSystem';
 
 /**
  * Settings → Color Management.
@@ -24,19 +25,13 @@ import type { ClayColorSet, ClayColorTheme } from '../clayTheme';
  */
 
 const C = {
-  text: '#0f172a', sub: '#64748b', border: '#e2e8f0', blue: '#0a66d0', blueBg: '#e8f1ff',
-  redBg: '#fef2f2', red: '#b91c1c', greenBg: '#ecfdf5', green: '#047857',
+  text: 'var(--vdms-text)', sub: 'var(--vdms-text-muted)', border: 'var(--vdms-line)', blue: clay.accent, blueBg: clay.accentSoft,
+  redBg: clay.pillDangerBg, red: clay.pillDangerText, greenBg: clay.pillActiveBg, green: clay.pillActiveText,
 };
 
 interface ConfigResponse { colors: ClayColorTheme; defaults: ClayColorTheme; presets: { id: string; label: string; colors: ClayColorTheme }[]; is_admin: boolean; }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
-
-const btn = (primary: boolean, disabled: boolean): React.CSSProperties => ({
-  border: primary ? 'none' : `1px solid ${C.border}`, background: disabled ? '#cbd5e1' : primary ? C.blue : '#fff',
-  color: primary ? '#fff' : C.text, fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 6,
-  cursor: disabled ? 'not-allowed' : 'pointer',
-});
 
 async function readError(r: Response): Promise<string> {
   try {
@@ -86,7 +81,8 @@ function ColorField({ label, hint, value, disabled, onChange }: {
         placeholder="#RRGGBB"
         style={{
           width: 96, fontSize: 12, fontFamily: 'monospace', padding: '6px 8px', borderRadius: 6,
-          border: `1px solid ${invalid ? '#fca5a5' : C.border}`, color: C.text, textTransform: 'uppercase',
+          border: `1px solid ${invalid ? clay.pillDangerText : C.border}`, color: C.text, textTransform: 'uppercase',
+          background: 'var(--vdms-glass)',
         }}
       />
     </div>
@@ -97,7 +93,7 @@ function ModeGroup({ title, colors, disabled, onChange }: {
   title: string; colors: ClayColorSet; disabled: boolean; onChange: (key: keyof ClayColorSet, hex: string) => void;
 }): React.ReactElement {
   return (
-    <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: '4px 14px', background: '#fff' }}>
+    <div style={{ border: `1px solid ${C.border}`, borderRadius: clay.radiusCard, padding: '4px 14px', background: 'var(--vdms-surface)', boxShadow: clay.shadowRaised }}>
       <div style={{ fontSize: 12, fontWeight: 700, color: C.sub, textTransform: 'uppercase', letterSpacing: 0.4, padding: '10px 0 0' }}>{title}</div>
       <div style={{ display: 'flex', flexDirection: 'column' }}>
         {FIELDS.map((f, idx) => (
@@ -121,7 +117,7 @@ function PresetSwatch({ label, colors, active, disabled, onClick }: {
       title={label}
       style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, padding: 8, borderRadius: 8,
-        border: active ? `2px solid ${C.blue}` : `1px solid ${C.border}`, background: active ? C.blueBg : '#fff',
+        border: active ? `2px solid ${C.blue}` : `1px solid ${C.border}`, background: active ? C.blueBg : 'var(--vdms-surface)',
         cursor: disabled ? 'not-allowed' : 'pointer', width: 92,
       }}
     >
@@ -215,7 +211,7 @@ export function ColorManagementSection({ host }: { host: VesselEmail }): React.R
     return (
       <div style={{ padding: 12, borderRadius: 8, background: C.redBg, color: C.red, fontSize: 13 }}>
         {error || 'Color settings are unavailable.'}{' '}
-        <button style={btn(false, false)} onClick={() => { load().catch(() => undefined); }}>Retry</button>
+        <button style={dmsBtn('secondary', true)} onClick={() => { load().catch(() => undefined); }}>Retry</button>
       </div>
     );
   }
@@ -261,10 +257,10 @@ export function ColorManagementSection({ host }: { host: VesselEmail }): React.R
       </div>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button style={btn(true, disabled || !dirty)} disabled={disabled || !dirty} onClick={() => { save().catch(() => undefined); }}>
+        <button style={dmsBtn('primary', !(disabled || !dirty))} disabled={disabled || !dirty} onClick={() => { save().catch(() => undefined); }}>
           {saving ? 'Saving…' : 'Save changes'}
         </button>
-        <button style={btn(false, disabled || isDefault)} disabled={disabled || isDefault} onClick={resetToDefault}>
+        <button style={dmsBtn('secondary', !(disabled || isDefault))} disabled={disabled || isDefault} onClick={resetToDefault}>
           Reset to default
         </button>
         {dirty && !saving && <span style={{ fontSize: 12, color: C.sub }}>You have unsaved changes — previewing live.</span>}

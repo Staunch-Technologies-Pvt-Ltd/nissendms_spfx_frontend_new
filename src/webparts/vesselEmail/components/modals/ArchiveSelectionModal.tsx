@@ -1,5 +1,6 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
+import { Icon } from '@fluentui/react/lib/Icon';
 import type VesselEmail from '../VesselEmail';
 import { isMobileWidth } from '../responsive';
 
@@ -178,7 +179,7 @@ function ArchivePickerDialog({ host, dialog }: { host: VesselEmail; dialog: Arch
               color: 'var(--vdms-text-muted)', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}
           >
-            {isExpanded ? '▾' : '▸'}
+            {isExpanded ? <Icon iconName="ChevronDown" aria-hidden="true" style={{ fontSize: 12 }} /> : <Icon iconName="ChevronRight" aria-hidden="true" style={{ fontSize: 12 }} />}
           </button>
           <input
             type="checkbox"
@@ -190,7 +191,7 @@ function ArchivePickerDialog({ host, dialog }: { host: VesselEmail; dialog: Arch
             }}
             style={{ width: 15, height: 15, accentColor: '#d97706', cursor: isScanning ? 'wait' : 'pointer' }}
           />
-          <span style={{ fontSize: 14 }}>📁</span>
+          <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 14 }} />
           <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--vdms-text)', flex: 1 }}>{folderName}</span>
           {isScanning && <span style={{ fontSize: 11, color: 'var(--vdms-text-faint)' }}>Scanning…</span>}
         </div>
@@ -226,7 +227,7 @@ function ArchivePickerDialog({ host, dialog }: { host: VesselEmail; dialog: Arch
                         onChange={() => toggleFile({ id: f.id, name: f.name, folderPath })}
                         style={{ width: 15, height: 15, accentColor: '#d97706', cursor: 'pointer' }}
                       />
-                      <span style={{ fontSize: 13 }}>📄</span>
+                      <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 13 }} />
                       <span style={{ fontSize: 12.5, color: 'var(--vdms-text)', flex: 1, wordBreak: 'break-all' }}>{f.name}</span>
                     </label>
                   );
@@ -321,14 +322,14 @@ function ArchivePickerDialog({ host, dialog }: { host: VesselEmail; dialog: Arch
       >
         {resultMsg ? (
           <div style={{ textAlign: 'center', padding: '20px 0 4px' }}>
-            <div style={{ fontSize: 44, marginBottom: 10 }}>✅</div>
+            <div style={{ fontSize: 44, marginBottom: 10 }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 44 }} /></div>
             <div style={{ fontSize: 17, fontWeight: 700, color: '#059669', marginBottom: 6 }}>Archived</div>
             <p style={{ fontSize: 13, color: 'var(--vdms-text-muted)', margin: 0 }}>{resultMsg}</p>
           </div>
         ) : (
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexShrink: 0 }}>
-              <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>📦</div>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}><Icon iconName="Package" aria-hidden="true" style={{ fontSize: 20 }} /></div>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--vdms-text)' }}>Archive files</div>
                 <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -365,12 +366,12 @@ function ArchivePickerDialog({ host, dialog }: { host: VesselEmail; dialog: Arch
 
             {error && (
               <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#dc2626', marginBottom: 12 }}>
-                ⚠️ {error}
+                <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> {error}
               </div>
             )}
 
             <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#c2410c', marginBottom: 16, flexShrink: 0 }}>
-              📦 {selectedCount} file{selectedCount !== 1 ? 's' : ''} selected to archive.
+              <Icon iconName="Package" aria-hidden="true" style={{ fontSize: 12 }} /> {selectedCount} file{selectedCount !== 1 ? 's' : ''} selected to archive.
             </div>
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexDirection: isMobile ? 'column' : 'row', flexShrink: 0 }}>

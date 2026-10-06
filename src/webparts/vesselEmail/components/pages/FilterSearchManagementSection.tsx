@@ -1,5 +1,7 @@
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
+import { clay } from '../clayTheme';
+import { dmsBtn } from '../dmsDesignSystem';
 
 /**
  * Settings → Filter Search Management.
@@ -20,15 +22,9 @@ import type VesselEmail from '../VesselEmail';
 interface ConfigResponse { mode: 'dropdown' | 'panel'; is_admin: boolean; }
 
 const C = {
-  text: '#0f172a', sub: '#64748b', border: '#e2e8f0', blue: '#0a66d0', blueBg: '#e8f1ff',
-  redBg: '#fef2f2', red: '#b91c1c', greenBg: '#ecfdf5', green: '#047857',
+  text: 'var(--vdms-text)', sub: 'var(--vdms-text-muted)', border: 'var(--vdms-line)', blue: clay.accent, blueBg: clay.accentSoft,
+  redBg: clay.pillDangerBg, red: clay.pillDangerText, greenBg: clay.pillActiveBg, green: clay.pillActiveText,
 };
-
-const btn = (primary: boolean, disabled: boolean): React.CSSProperties => ({
-  border: primary ? 'none' : `1px solid ${C.border}`, background: disabled ? '#cbd5e1' : primary ? C.blue : '#fff',
-  color: primary ? '#fff' : C.text, fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 6,
-  cursor: disabled ? 'not-allowed' : 'pointer',
-});
 
 async function readError(r: Response): Promise<string> {
   try {
@@ -106,7 +102,7 @@ export function FilterSearchManagementSection({ host }: { host: VesselEmail }): 
     return (
       <div style={{ padding: 12, borderRadius: 8, background: C.redBg, color: C.red, fontSize: 13 }}>
         {error || 'Filter settings are unavailable.'}{' '}
-        <button style={btn(false, false)} onClick={() => { load().catch(() => undefined); }}>Retry</button>
+        <button style={dmsBtn('secondary', true)} onClick={() => { load().catch(() => undefined); }}>Retry</button>
       </div>
     );
   }
@@ -133,7 +129,7 @@ export function FilterSearchManagementSection({ host }: { host: VesselEmail }): 
               style={{
                 display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px',
                 border: `1px solid ${selected ? C.blue : C.border}`, borderRadius: 8,
-                background: selected ? C.blueBg : '#fff',
+                background: selected ? C.blueBg : 'var(--vdms-surface)',
                 cursor: config.is_admin && !saving ? 'pointer' : 'not-allowed',
               }}
             >
@@ -155,7 +151,7 @@ export function FilterSearchManagementSection({ host }: { host: VesselEmail }): 
       </div>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <button style={btn(true, !config.is_admin || !dirty || saving)} disabled={!config.is_admin || !dirty || saving} onClick={() => { save().catch(() => undefined); }}>
+        <button style={dmsBtn('primary', !(!config.is_admin || !dirty || saving))} disabled={!config.is_admin || !dirty || saving} onClick={() => { save().catch(() => undefined); }}>
           {saving ? 'Saving…' : 'Save changes'}
         </button>
         {dirty && !saving && <span style={{ fontSize: 12, color: C.sub }}>You have unsaved changes.</span>}

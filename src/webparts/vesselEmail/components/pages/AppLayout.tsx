@@ -1,4 +1,5 @@
 import * as React from 'react';
+import * as ReactDOM from 'react-dom';
 import { Icon } from '@fluentui/react/lib/Icon';
 import type VesselEmail from '../VesselEmail';
 import {
@@ -23,16 +24,6 @@ import { injectFuturisticTheme } from '../futuristicTheme';
 import { ShipTransitions } from './ShipScenes';
 import { injectRefreshTheme } from '../refreshTheme';
 
-// Phase 6 — Ocean Clay: previously each module had its own vivid top-bar
-// accent (matching Sidebar.tsx's rainbow NAV_ACCENTS). Per explicit decision
-// (2026-09-22), fully converted to the single Ocean Clay teal — map kept so
-// every VIEW_ACCENTS[view] call site below needs no change.
-const VIEW_ACCENTS: Record<string, string> = {
-  dashboard: clay.accent, list: clay.accent, vessels: clay.accent, templates: clay.accent,
-  users: clay.accent, settings: clay.accent, bento_email: clay.accent, email_notify: clay.accent,
-  bento_compose: clay.accent, recycle: clay.accent, archive: clay.accent, migration: clay.accent,
-};
-
 // View → display label
 const VIEW_LABELS: Record<string, string> = {
   dashboard: 'Dashboard',
@@ -43,6 +34,7 @@ const VIEW_LABELS: Record<string, string> = {
   users: 'User Management',
   settings: 'Settings',
   profile: 'Profile',
+  alerts: 'Notifications',
   bento_email: 'AI Bento Email',
   email_notify: 'AI Bento Email',
   recycle: 'Recycle Bin',
@@ -70,73 +62,73 @@ function injectFullScreenStyles(): void {
        input styles further down) so nothing clashes. */
     [data-vessel-theme="light"] {
       --vdms-surface: #ffffff;
-      --vdms-surface-alt: #f8fafc;
+      --vdms-surface-alt: #f6f8fb;
       --vdms-border: #e2e8f0;
-      --vdms-border-soft: #f1f5f9;
-      --vdms-text: #0f172a;
+      --vdms-border-soft: #eef1f5;
+      --vdms-text: #101b2d;
       --vdms-text-secondary: #475569;
       --vdms-text-muted: #64748b;
       --vdms-text-faint: #94a3b8;
-      --vdms-toggle-active-bg: #0f172a;
+      --vdms-toggle-active-bg: #0b2a4a;
       --vdms-toggle-active-text: #ffffff;
       /* clay.* tokens (clayTheme.ts) */
-      --clay-bg: #dcefff;
-      --clay-surface: #f1f9ff;
-      --clay-surface-raised: #e1f0fc;
-      --clay-surface-hover: #c7e4f6;
-      --clay-text: #08243a;
-      --clay-text-muted: #5d7589;
-      --clay-accent-soft: #cee5ee;
-      --clay-accent-soft-hover: #badbe7;
-      --clay-icon-bg: linear-gradient(150deg, #e3f4fd, #bfe4f7);
-      --clay-shadow-raised: 0 12px 32px rgba(20,80,130,0.14), inset 0 1px 0 rgba(255,255,255,0.7);
-      --clay-shadow-raised-hover: 0 18px 42px rgba(20,80,130,0.2), inset 0 1px 0 rgba(255,255,255,0.8);
-      --clay-shadow-button: 0 10px 26px rgba(10,126,168,0.32), inset 0 1px 0 rgba(255,255,255,0.35);
-      --clay-shadow-icon: inset 0 1px 0 rgba(255,255,255,0.75), inset 0 0 0 1px rgba(10,126,168,0.12);
-      --clay-pill-active-bg: #cdeedb;
-      --clay-pill-active-text: #245a3d;
-      --clay-pill-active-shadow: inset 0 1px 2px rgba(255,255,255,0.6), inset 0 -2px 3px rgba(36,90,61,0.18);
-      --clay-pill-warn-bg: #e3d9c2;
-      --clay-pill-warn-text: #7a6420;
-      --clay-pill-warn-shadow: inset 0 1px 2px rgba(255,255,255,0.6), inset 0 -2px 3px rgba(122,100,32,0.18);
-      --clay-pill-danger-bg: #ecccc8;
-      --clay-pill-danger-text: #8a3226;
-      --clay-pill-danger-shadow: inset 0 1px 2px rgba(255,255,255,0.6), inset 0 -2px 3px rgba(138,50,38,0.18);
+      --clay-bg: #eef2f7;
+      --clay-surface: #ffffff;
+      --clay-surface-raised: #f6f8fb;
+      --clay-surface-hover: #eaf0f6;
+      --clay-text: #101b2d;
+      --clay-text-muted: #5b6b7f;
+      --clay-accent-soft: #dceef2;
+      --clay-accent-soft-hover: #c7e4ea;
+      --clay-icon-bg: linear-gradient(150deg, #e3f2f4, #cfe8ec);
+      --clay-shadow-raised: 0 1px 2px rgba(16,27,45,0.05), 0 4px 12px rgba(16,27,45,0.06);
+      --clay-shadow-raised-hover: 0 2px 4px rgba(16,27,45,0.06), 0 8px 20px rgba(16,27,45,0.10);
+      --clay-shadow-button: 0 1px 2px rgba(16,27,45,0.08), 0 4px 10px rgba(14,116,144,0.25);
+      --clay-shadow-icon: inset 0 0 0 1px rgba(14,116,144,0.14);
+      --clay-pill-active-bg: #dcfce7;
+      --clay-pill-active-text: #15803d;
+      --clay-pill-active-shadow: none;
+      --clay-pill-warn-bg: #fef3c7;
+      --clay-pill-warn-text: #b45309;
+      --clay-pill-warn-shadow: none;
+      --clay-pill-danger-bg: #fee2e2;
+      --clay-pill-danger-text: #b91c1c;
+      --clay-pill-danger-shadow: none;
     }
     [data-vessel-theme="night"] {
-      --vdms-surface: rgba(9,34,56,0.82);
-      --vdms-surface-alt: rgba(12,44,70,0.85);
-      --vdms-border: rgba(140,210,240,0.18);
-      --vdms-border-soft: rgba(140,210,240,0.1);
-      --vdms-text: #eaf6fd;
-      --vdms-text-secondary: #b2cadb;
-      --vdms-text-muted: #9ab4c6;
-      --vdms-text-faint: #7f9bb0;
-      --vdms-toggle-active-bg: #34d5ea;
-      --vdms-toggle-active-text: #02202b;
+      --vdms-surface: #101d2e;
+      --vdms-surface-alt: #152536;
+      --vdms-border: rgba(148,178,204,0.18);
+      --vdms-border-soft: rgba(148,178,204,0.1);
+      --vdms-text: #e7eef5;
+      --vdms-text-secondary: #aebfd1;
+      --vdms-text-muted: #8ca0b5;
+      --vdms-text-faint: #71869b;
+      --vdms-toggle-active-bg: #2dd4bf;
+      --vdms-toggle-active-text: #04211d;
       /* clay.* tokens (clayTheme.ts) — night values */
-      --clay-bg: #031423;
-      --clay-surface: #122230;
-      --clay-surface-raised: #21303d;
-      --clay-surface-hover: #303e4b;
-      --clay-text: #eaf6fd;
-      --clay-text-muted: #8e9ca6;
-      --clay-accent-soft: #145159;
-      --clay-accent-soft-hover: #18626c;
-      --clay-icon-bg: linear-gradient(150deg, #145159, #18626c);
-      --clay-shadow-raised: 6px 6px 14px rgba(0,0,0,0.45), -4px -4px 10px rgba(255,255,255,0.03);
-      --clay-shadow-raised-hover: 8px 8px 18px rgba(0,0,0,0.55), -5px -5px 12px rgba(255,255,255,0.04);
-      --clay-shadow-button: 0 8px 18px rgba(0,0,0,0.45), inset 0 1px 2px rgba(255,255,255,0.18), inset 0 -3px 6px rgba(0,0,0,0.3);
-      --clay-shadow-icon: inset 0 1px 2px rgba(255,255,255,0.12), inset 0 -3px 5px rgba(0,0,0,0.35);
-      --clay-pill-active-bg: #1f3b2c;
-      --clay-pill-active-text: #9fe0bb;
-      --clay-pill-active-shadow: inset 0 1px 2px rgba(255,255,255,0.06), inset 0 -2px 3px rgba(0,0,0,0.3);
-      --clay-pill-warn-bg: #3d3420;
-      --clay-pill-warn-text: #e5c97a;
-      --clay-pill-warn-shadow: inset 0 1px 2px rgba(255,255,255,0.06), inset 0 -2px 3px rgba(0,0,0,0.3);
-      --clay-pill-danger-bg: #45231f;
-      --clay-pill-danger-text: #f2a79c;
-      --clay-pill-danger-shadow: inset 0 1px 2px rgba(255,255,255,0.06), inset 0 -2px 3px rgba(0,0,0,0.3);
+      --clay-bg: #0a1626;
+      --clay-surface: #101d2e;
+      --clay-surface-raised: #182536;
+      --clay-surface-hover: #202f42;
+      --clay-text: #e7eef5;
+      --clay-text-muted: #8ca0b5;
+      --clay-accent-soft: #113b38;
+      --clay-accent-soft-hover: #15473f;
+      --clay-icon-bg: linear-gradient(150deg, #113b38, #15473f);
+      --clay-shadow-raised: 0 1px 2px rgba(0,0,0,0.3), 0 4px 14px rgba(0,0,0,0.35);
+      --clay-shadow-raised-hover: 0 2px 4px rgba(0,0,0,0.35), 0 8px 22px rgba(0,0,0,0.4);
+      --clay-shadow-button: 0 1px 2px rgba(0,0,0,0.35), 0 4px 12px rgba(45,212,191,0.2);
+      --clay-shadow-icon: inset 0 0 0 1px rgba(45,212,191,0.18);
+      --clay-pill-active-bg: rgba(34,197,94,0.16);
+      --clay-pill-active-text: #86efac;
+      --clay-pill-active-shadow: none;
+      --clay-pill-warn-bg: rgba(245,158,11,0.16);
+      --clay-pill-warn-text: #fcd34d;
+      --clay-pill-warn-shadow: none;
+      --clay-pill-danger-bg: rgba(239,68,68,0.16);
+      --clay-pill-danger-text: #fca5a5;
+      --clay-pill-danger-shadow: none;
     }
 
     /* Force web part zone to not clip our fixed overlay */
@@ -283,7 +275,7 @@ function DeletionToastLayer({ host }: { host: VesselEmail }): React.ReactElement
             aria-label="Dismiss"
             style={{ border: 'none', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: 14, padding: 0, alignSelf: 'flex-start' }}
           >
-            ✕
+            <Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 14 }} />
           </button>
         </div>
       ))}
@@ -311,7 +303,16 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
   const colorSet = isNight ? host.state.colorTheme.night : host.state.colorTheme.light;
   const fluentTheme = buildDeepHarborTheme(colorSet, isNight);
 
-  return (
+  // Rendered via a portal straight onto <body>: the SharePoint modern-page
+  // shell wraps the web part zone in ancestor elements that establish their
+  // own containing block for `position: fixed` (a known SPFx/SharePoint
+  // quirk), so this overlay's `inset: 0` was being measured against that
+  // ancestor's box instead of the real viewport — leaving a stray strip of
+  // page chrome visible above the app on every page. Mounting on <body>
+  // (never transformed by SharePoint) makes `fixed` pin to the true
+  // viewport. React event handling is unaffected — portals still bubble
+  // through the React tree, not the DOM tree.
+  return ReactDOM.createPortal((
     <ThemeProvider theme={fluentTheme}>
     <div className="vessel-dms-app" style={{
       display: 'flex', alignItems: 'stretch',
@@ -330,10 +331,10 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
         {/* ── Top Bar ── */}
         <div className="vessel-dms-topbar" style={{
           height: 76, flexShrink: 0,
-          background: 'var(--vdms-glass)',
-          borderBottom: `3px solid ${VIEW_ACCENTS[host.state.view] || clay.accent}`,
-          boxShadow: 'var(--vdms-shadow)',
-          transition: 'background 0.4s ease, box-shadow 0.4s ease',
+          background: 'var(--vdms-surface)',
+          borderBottom: '1px solid var(--vdms-border)',
+          boxShadow: '0 1px 2px rgba(16,27,45,0.04)',
+          transition: 'background 0.3s ease, box-shadow 0.3s ease',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: phone ? '0 12px' : tabletOrBelow ? '0 18px' : '0 36px',
           gap: 10,
@@ -370,21 +371,6 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
             <span style={{ color: 'var(--vdms-text)', fontSize: phone ? 18 : 26, fontWeight: 700, letterSpacing: '-0.02em', fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif" }}>
               {viewLabel}
             </span>
-            <button
-              type="button"
-              onClick={() => { void host._refreshCurrentModule(); }}
-              title={`Refresh ${viewLabel}`}
-              aria-label={`Refresh ${viewLabel}`}
-              style={{
-                width: 34, height: 34, marginLeft: 4, borderRadius: '50%',
-                border: '1px solid var(--vdms-line-strong)',
-                background: 'var(--vdms-field)', color: 'var(--vdms-text)',
-                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                cursor: 'pointer', flexShrink: 0,
-              }}
-            >
-              <Icon iconName="Refresh" style={{ fontSize: 15 }} />
-            </button>
           </div>
 
           {/* Right controls */}
@@ -444,346 +430,6 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                 )}
               </button>
 
-              {/* Alert Dropdown */}
-              {host.state.alertOpen && (
-                <div
-                  data-alert-bell="true"
-                  style={{
-                    position: 'absolute', top: 'calc(100% + 10px)', right: 0,
-                    width: phone ? Math.min(360, Math.max(290, viewportWidth - 24)) : 400, background: clay.surface, border: 'none',
-                    borderRadius: clay.radiusCard, boxShadow: clay.shadowRaisedHover,
-                    overflow: 'hidden', zIndex: 9999,
-                  }}
-                >
-                  {/* Dropdown header */}
-                  <div style={{
-                    padding: '14px 18px', borderBottom: `1px solid ${clay.accentSoft}`,
-                    background: clay.bg,
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <Icon iconName="Ringer" style={{ fontSize: 16, color: clay.accentDark }} />
-                      <span style={{ fontSize: 15, fontWeight: 700, color: clay.text }}>Alerts</span>
-                      {host._unreadAlertCount() > 0 && (
-                        <span style={{ background: clay.pillDangerBg, color: clay.pillDangerText, borderRadius: 10, padding: '1px 8px', fontSize: 11, fontWeight: 700, boxShadow: clay.pillDangerShadow }}>
-                          {host._unreadAlertCount()}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {([
-                        ['dms', 'Vessels'],
-                        ['crud', 'SPFx activity'],
-                        ['email', 'Email alerts'],
-                      ] as const).map(([category, label]) => (
-                        <button
-                          key={category}
-                          onClick={() => host._setAlertCategory(category)}
-                          style={{
-                            padding: '4px 9px', borderRadius: 16, border: 'none',
-                            background: host.state.alertCategory === category ? clay.accentGradient : clay.surfaceRaised,
-                            color: host.state.alertCategory === category ? '#fff' : clay.textMuted,
-                            fontSize: 11, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
-                            boxShadow: host.state.alertCategory === category ? clay.shadowIcon : 'none',
-                          }}
-                        >{label}</button>
-                      ))}
-                      {(['all', 'unread'] as const).map(f => (
-                        <button
-                          key={f}
-                          onClick={() => host._setAlertFilter(f)}
-                          style={{
-                            padding: '4px 12px', borderRadius: 16, border: 'none',
-                            background: host.state.alertFilter === f ? clay.accentGradient : clay.surfaceRaised,
-                            color: host.state.alertFilter === f ? '#fff' : clay.textMuted,
-                            fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                            textTransform: 'capitalize',
-                            boxShadow: host.state.alertFilter === f ? clay.shadowIcon : 'none',
-                          }}
-                        >{f}</button>
-                      ))}
-                      {host._unreadAlertCount() > 0 && (
-                        <button
-                          onClick={host._markAllAlertsRead}
-                          style={{
-                            padding: '4px 10px', borderRadius: 16, border: 'none',
-                            background: clay.pillWarnBg, color: clay.pillWarnText,
-                            fontSize: 11, fontWeight: 600, cursor: 'pointer', boxShadow: clay.pillWarnShadow,
-                          }}
-                        >Mark all read</button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => host._openAlertsPage()}
-                        title="Open full alerts page"
-                        style={{ padding: '4px 9px', borderRadius: 16, border: 'none', background: clay.accentSoft, color: clay.accentDark, fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
-                      >⛶ Maximize</button>
-                    </div>
-                  </div>
-
-                  <div style={{ maxHeight: 420, overflowY: 'auto' }}>
-                    {(() => {
-                      const filtered = host.state.alertsList.filter(
-                          a => (a.alert_category === 'crud' || a.alert_type === 'crud_operation' ? 'crud'
-                          : a.alert_category === 'email' || a.alert_type === 'email_alert' ? 'email'
-                          : 'dms'
-                        ) === host.state.alertCategory && (host.state.alertFilter === 'all' || !a.read)
-                      );
-                      if (filtered.length === 0) {
-                        return (
-                          <div style={{ padding: '32px 20px', textAlign: 'center' }}>
-                            <Icon iconName="CheckMark" style={{ fontSize: 32, color: '#10b981', display: 'block', margin: '0 auto 10px' }} />
-                            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--vdms-text)', marginBottom: 4 }}>
-                              {host.state.alertsList.length === 0 ? 'No alerts yet' : 'All caught up!'}
-                            </div>
-                            <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>
-                              {host.state.alertsList.length === 0
-                                ? 'New SharePoint folder/vessel creations will appear here.'
-                                : 'No unread alerts.'}
-                            </div>
-                          </div>
-                        );
-                      }
-                      return (
-                        <>
-                          {filtered.map((alert: AlertItem) => {
-                            const isAnomaly = alert.alert_type === 'vessel_unrecognised'
-                              || alert.alert_type === 'file_outside_structure'
-                              || alert.alert_type === 'subfolder_anomaly';
-
-                            const iconName = alert.alert_type === 'vessel_provisioned' ? 'Ferry'
-                              : alert.alert_type === 'vessel_deleted' ? 'Delete'
-                              : alert.alert_type === 'document_deleted' ? 'Delete'
-                              : alert.alert_type === 'vessel_unrecognised' ? 'Warning'
-                              : alert.alert_type === 'file_outside_structure' ? 'PageSolid'
-                              : alert.alert_type === 'subfolder_anomaly' ? 'FabricNewFolder'
-                              : 'FabricNewFolder';
-
-                            const iconBg = alert.alert_type === 'vessel_provisioned' ? '#dcfce7'
-                              : alert.alert_type === 'vessel_deleted' ? '#fee2e2'
-                              : alert.alert_type === 'document_deleted' ? '#fee2e2'
-                              : alert.alert_type === 'vessel_unrecognised' ? '#fef3c7'
-                              : alert.alert_type === 'file_outside_structure' ? '#f3e8ff'
-                              : alert.alert_type === 'subfolder_anomaly' ? '#fff7ed'
-                              : '#dbeafe';
-
-                            const iconColor = alert.alert_type === 'vessel_provisioned' ? '#166534'
-                              : alert.alert_type === 'vessel_deleted' ? '#991b1b'
-                              : alert.alert_type === 'document_deleted' ? '#991b1b'
-                              : alert.alert_type === 'vessel_unrecognised' ? '#92400e'
-                              : alert.alert_type === 'file_outside_structure' ? '#6b21a8'
-                              : alert.alert_type === 'subfolder_anomaly' ? '#9a3412'
-                              : '#1e40af';
-
-                            const typeLabel = alert.alert_type === 'vessel_provisioned' ? 'Provisioned'
-                              : alert.alert_type === 'vessel_deleted' ? 'Deleted'
-                              : alert.alert_type === 'document_deleted' ? 'Deleted'
-                              : alert.alert_type === 'vessel_unrecognised' ? 'Unrecognised'
-                              : alert.alert_type === 'file_outside_structure' ? 'File'
-                              : alert.alert_type === 'subfolder_anomaly' ? 'Anomaly'
-                              : 'New Folder';
-
-                            return (
-                              <div
-                                key={alert.id}
-                                onClick={() => host._openAlertsPage(alert.id)}
-                                style={{
-                                  padding: '12px 18px', borderBottom: '1px solid var(--vdms-border-soft)',
-                                  background: alert.read ? 'transparent' : '#f8faff',
-                                  cursor: 'pointer', transition: 'background 0.1s ease',
-                                }}
-                              >
-                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                                  <div style={{
-                                    width: 36, height: 36, borderRadius: 10,
-                                    background: iconBg, color: iconColor,
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    fontSize: 18, flexShrink: 0,
-                                  }}>
-                                    <Icon iconName={iconName} />
-                                  </div>
-                                  <div style={{ flex: 1, minWidth: 0 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                      <span style={{
-                                        fontSize: 13, fontWeight: 600, color: 'var(--vdms-text)',
-                                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                                        maxWidth: 180,
-                                      }}>
-                                        {alert.folder_name}
-                                      </span>
-                                      <span style={{
-                                        fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
-                                        background: iconBg, color: iconColor,
-                                        textTransform: 'uppercase', letterSpacing: '0.4px', flexShrink: 0,
-                                      }}>
-                                        {typeLabel}
-                                      </span>
-                                      {!alert.read && (
-                                        <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#ef4444', flexShrink: 0 }} />
-                                      )}
-                                    </div>
-                                    <div style={{ marginTop: 2, fontSize: 11, color: 'var(--vdms-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                      {alert.folder_path}
-                                    </div>
-                                    {(alert.vessel_name || alert.department) && (
-                                      <div style={{ marginTop: 4, fontSize: 11, color: 'var(--vdms-text-faint)', display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                                        {alert.vessel_name && (
-                                          <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                                            <Icon iconName="Ferry" style={{ fontSize: 10 }} /> {alert.vessel_name}
-                                          </span>
-                                        )}
-                                        {alert.department && alert.department !== 'All Departments' && (
-                                          <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                                            <Icon iconName="Org" style={{ fontSize: 10 }} /> {alert.department}
-                                          </span>
-                                        )}
-                                      </div>
-                                    )}
-                                    <div style={{ marginTop: 4, fontSize: 10, color: 'var(--vdms-text-faint)' }}>
-                                      {isAnomaly
-                                        ? 'Detected in SharePoint Online — needs classification'
-                                        : alert.alert_type === 'vessel_deleted'
-                                          ? `Moved to Recycle Bin by ${alert.created_by_name || alert.created_by_email}`
-                                          : alert.alert_type === 'document_deleted'
-                                            ? `Moved to Recycle Bin by ${alert.created_by_name || alert.created_by_email}`
-                                          : `Created by ${alert.created_by_name || alert.created_by_email}`}
-                                      {alert.created_at && ` • ${new Date(alert.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}
-                                    </div>
-                                    {alert.alert_type === 'vessel_deleted' && (
-                                      <button
-                                        onClick={e => {
-                                          e.stopPropagation();
-                                          if (!alert.read) host._markAlertRead(alert.id);
-                                          host._closeAlertBell();
-                                          void host._goToView('recycle');
-                                        }}
-                                        style={{
-                                          marginTop: 7, padding: '4px 12px', borderRadius: 6,
-                                          border: '1px solid #fca5a5', background: '#fff5f5',
-                                          color: '#dc2626', fontSize: 11, fontWeight: 600,
-                                          cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4,
-                                        }}
-                                      >
-                                        <Icon iconName="NavigateForward" style={{ fontSize: 10 }} />
-                                        View in Recycle Bin
-                                      </button>
-                                    )}
-                                    {alert.alert_type === 'document_deleted' && (
-                                      <button onClick={e => { e.stopPropagation(); if (!alert.read) host._markAlertRead(alert.id); host._closeAlertBell(); void host._goToView('recycle'); }} style={{ marginTop: 7, padding: '4px 12px', borderRadius: 6, border: '1px solid #fca5a5', background: '#fff5f5', color: '#dc2626', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
-                                        <Icon iconName="NavigateForward" style={{ fontSize: 10 }} /> View in Recycle Bin
-                                      </button>
-                                    )}
-                                    {alert.alert_type === 'vessel_unrecognised' && (() => {
-                                      const anomaly = host.state.folderAnomalies.find(
-                                        a => a.id === alert.anomaly_id ||
-                                          (a.drive_item_id === alert.drive_item_id && a.name === alert.folder_name)
-                                      ) || {
-                                        id: alert.anomaly_id ?? Date.now(),
-                                        drive_item_id: alert.drive_item_id || '',
-                                        name: alert.folder_name,
-                                        item_type: 'folder' as const,
-                                        anomaly_type: 'vessel_level_unmatched' as const,
-                                        department: alert.department,
-                                        vessel_name: alert.vessel_name,
-                                        spo_path: alert.spo_path || alert.folder_path,
-                                        resolved: false,
-                                        detected_at: alert.created_at,
-                                      };
-                                      return (
-                                        <div style={{ marginTop: 7, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                                          <button
-                                            onClick={e => {
-                                              e.stopPropagation();
-                                              if (!alert.read) host._markAlertRead(alert.id);
-                                              host._closeAlertBell();
-                                              void host._goToView('vessels');
-                                              host.setState({ spoClassifyDialog: { anomaly, provisioning: false, done: false, error: null } });
-                                            }}
-                                            style={{
-                                              padding: '4px 10px', borderRadius: 6,
-                                              border: '1px solid #bae6fd', background: '#e0f2fe',
-                                              color: '#0369a1', fontSize: 11, fontWeight: 700,
-                                              cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4,
-                                            }}
-                                          >
-                                            🚢 Make it a Vessel
-                                          </button>
-                                          <button
-                                            onClick={e => {
-                                              e.stopPropagation();
-                                              if (!alert.read) host._markAlertRead(alert.id);
-                                              host._closeAlertBell();
-                                              void host._goToView('vessels');
-                                              host.setState({ spoClassifyDialog: { anomaly, provisioning: false, done: false, doneNormal: false, error: null } });
-                                            }}
-                                            style={{
-                                              padding: '4px 10px', borderRadius: 6,
-                                              border: '1px solid var(--vdms-border)', background: 'var(--vdms-surface-alt)',
-                                              color: 'var(--vdms-text-secondary)', fontSize: 11, fontWeight: 600,
-                                              cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4,
-                                            }}
-                                          >
-                                            📁 Normal Folder
-                                          </button>
-                                        </div>
-                                      );
-                                    })()}
-                                    {(alert.alert_type === 'file_outside_structure' || alert.alert_type === 'subfolder_anomaly') && (
-                                      <button
-                                        onClick={e => {
-                                          e.stopPropagation();
-                                          if (!alert.read) host._markAlertRead(alert.id);
-                                          host._closeAlertBell();
-                                          void host._goToView('vessels');
-                                          if (alert.alert_type === 'file_outside_structure') {
-                                            // Build subfolder options from known rows for this vessel
-                                            const normName = (s: string) => (s || '').trim().toLowerCase();
-                                            const vName = alert.vessel_name;
-                                            const subFolderOptions = vName
-                                              ? Array.from(
-                                                  new Map(
-                                                    host.state.rows
-                                                      .filter(r => normName(r.vesselName) === normName(vName) && r.canUpload)
-                                                      .map(r => [r.groupKey, { label: r.subFolderPath, groupKey: r.groupKey, uploadFolderId: r.uploadFolderId, subFolderPath: r.subFolderPath }])
-                                                  ).values()
-                                                ).slice(0, 40)
-                                              : [];
-                                            host.setState({
-                                              spoFileAlertDialog: {
-                                                fileId: alert.drive_item_id || '',
-                                                fileName: alert.folder_name,
-                                                spoPath: alert.spo_path || alert.folder_path,
-                                                vesselName: alert.vessel_name,
-                                                subFolderOptions,
-                                                moving: false,
-                                                moved: false,
-                                                error: null,
-                                              },
-                                            });
-                                          }
-                                        }}
-                                        style={{
-                                          marginTop: 7, padding: '4px 12px', borderRadius: 6,
-                                          border: '1px solid #bfdbfe', background: '#eff6ff',
-                                          color: clay.accentDark, fontSize: 11, fontWeight: 600,
-                                          cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4,
-                                        }}
-                                      >
-                                        <Icon iconName="NavigateForward" style={{ fontSize: 10 }} />
-                                        {alert.alert_type === 'file_outside_structure' ? '📁 Review File' : 'Track in Vessels'}
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </>
-                      );
-                    })()}
-                  </div>
-                </div>
-              )}
             </div>
             {/* End Alert Bell */}
 
@@ -831,5 +477,5 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
       </div>
     </div>
     </ThemeProvider>
-  );
+  ), document.body);
 }

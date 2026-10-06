@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Icon } from '@fluentui/react/lib/Icon';
 
 /**
  * Live results list rendered directly under the Documents page's search
@@ -29,7 +30,7 @@ export interface SearchResultsDropdownProps {
 }
 
 const KIND_ICON: Record<SearchDropdownItem['kind'], string> = {
-  vessel: '🚢', folder: '📁', file: '📄',
+  vessel: 'Ferry', folder: 'FabricFolder', file: 'Page',
 };
 
 export function SearchResultsDropdown(props: SearchResultsDropdownProps): React.ReactElement | null {
@@ -67,7 +68,7 @@ export function SearchResultsDropdown(props: SearchResultsDropdownProps): React.
               borderBottom: idx === items.length - 1 ? 'none' : '1px solid var(--vdms-border-soft, #f1f5f9)',
             }}
           >
-            <span aria-hidden="true">{KIND_ICON[item.kind]}</span>
+            <Icon iconName={KIND_ICON[item.kind]} aria-hidden="true" style={{ fontSize: 13 }} />
             <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
               <span style={{
                 fontWeight: 600, color: 'var(--vdms-text)', overflow: 'hidden',

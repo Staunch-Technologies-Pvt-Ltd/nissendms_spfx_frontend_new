@@ -1,5 +1,7 @@
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
+import { clay } from '../clayTheme';
+import { dmsBtn, DMS_ON_ACCENT } from '../dmsDesignSystem';
 
 /**
  * Settings → Settings Management.
@@ -18,15 +20,9 @@ interface SettingsTabInfo { id: string; label: string; }
 interface ConfigResponse { tabs: SettingsTabInfo[]; hidden: string[]; is_admin: boolean; }
 
 const C = {
-  text: '#0f172a', sub: '#64748b', border: '#e2e8f0', blue: '#0a66d0', blueBg: '#e8f1ff',
-  redBg: '#fef2f2', red: '#b91c1c', greenBg: '#ecfdf5', green: '#047857',
+  text: 'var(--vdms-text)', sub: 'var(--vdms-text-muted)', border: 'var(--vdms-line)', blue: clay.accent, blueBg: clay.accentSoft,
+  redBg: clay.pillDangerBg, red: clay.pillDangerText, greenBg: clay.pillActiveBg, green: clay.pillActiveText,
 };
-
-const btn = (primary: boolean, disabled: boolean): React.CSSProperties => ({
-  border: primary ? 'none' : `1px solid ${C.border}`, background: disabled ? '#cbd5e1' : primary ? C.blue : '#fff',
-  color: primary ? '#fff' : C.text, fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 6,
-  cursor: disabled ? 'not-allowed' : 'pointer',
-});
 
 async function readError(r: Response): Promise<string> {
   try {
@@ -48,15 +44,15 @@ function Toggle({ on, disabled, onChange }: { on: boolean; disabled: boolean; on
       onClick={onChange}
       style={{
         position: 'relative', flexShrink: 0, width: trackW, height: trackH, borderRadius: trackH,
-        border: `1px solid ${on ? C.blue : C.border}`, background: on ? C.blue : '#e2e8f0',
+        border: `1px solid ${on ? C.blue : C.border}`, background: on ? C.blue : 'var(--vdms-surface-alt)',
         cursor: disabled ? 'not-allowed' : 'pointer', padding: 0, opacity: disabled ? 0.6 : 1,
         transition: 'background 0.2s ease, border-color 0.2s ease',
       }}
     >
       <span style={{
         position: 'absolute', top: pad - 1, left: on ? trackW - knob - pad - 1 : pad - 1,
-        width: knob, height: knob, borderRadius: '50%', background: '#fff',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.3)', transition: 'left 0.2s ease',
+        width: knob, height: knob, borderRadius: '50%', background: on ? DMS_ON_ACCENT : 'var(--vdms-surface)',
+        boxShadow: clay.shadowRaised, transition: 'left 0.2s ease',
       }} />
     </button>
   );
@@ -132,7 +128,7 @@ export function SettingsTabManagementSection({ host }: { host: VesselEmail }): R
     return (
       <div style={{ padding: 12, borderRadius: 8, background: C.redBg, color: C.red, fontSize: 13 }}>
         {error || 'Settings management is unavailable.'}{' '}
-        <button style={btn(false, false)} onClick={() => { load().catch(() => undefined); }}>Retry</button>
+        <button style={dmsBtn('secondary', true)} onClick={() => { load().catch(() => undefined); }}>Retry</button>
       </div>
     );
   }
@@ -157,7 +153,7 @@ export function SettingsTabManagementSection({ host }: { host: VesselEmail }): R
             <div key={t.id} style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               padding: '12px 14px', borderTop: idx === 0 ? 'none' : `1px solid ${C.border}`,
-              background: '#fff',
+              background: 'var(--vdms-surface)',
             }}>
               <div>
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{t.label}</div>
@@ -172,7 +168,7 @@ export function SettingsTabManagementSection({ host }: { host: VesselEmail }): R
       </div>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <button style={btn(true, !config.is_admin || !dirty || saving)} disabled={!config.is_admin || !dirty || saving} onClick={() => { save().catch(() => undefined); }}>
+        <button style={dmsBtn('primary', !(!config.is_admin || !dirty || saving))} disabled={!config.is_admin || !dirty || saving} onClick={() => { save().catch(() => undefined); }}>
           {saving ? 'Saving…' : 'Save changes'}
         </button>
         {dirty && !saving && <span style={{ fontSize: 12, color: C.sub }}>You have unsaved changes.</span>}

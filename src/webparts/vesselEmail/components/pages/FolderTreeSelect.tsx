@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Icon } from '@fluentui/react/lib/Icon';
 
 /** One node of a vessel's live sub-folder hierarchy. `id` is the live
  *  SharePoint folder id when known, otherwise a synthetic key (the folder's
@@ -223,7 +224,7 @@ export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactEleme
               {depth > 0 ? '└' : ''}
             </span>
             <span style={{ fontSize: 13, flexShrink: 0, opacity: hasChildren ? 1 : 0.7 }}>
-              {kids.length > 0 ? '📂' : '📁'}
+              {kids.length > 0 ? <Icon iconName="OpenFolderHorizontal" aria-hidden="true" style={{ fontSize: 13 }} /> : <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 13 }} />}
             </span>
             <span
               style={{
@@ -278,7 +279,7 @@ export function FolderTreeSelect(props: FolderTreeSelectProps): React.ReactEleme
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
           {selectedLabel}
         </span>
-        <span style={{ fontSize: 10, flexShrink: 0 }}>▾</span>
+        <span style={{ fontSize: 10, flexShrink: 0 }}><Icon iconName="ChevronDown" aria-hidden="true" style={{ fontSize: 10 }} /></span>
       </button>
 
       {open && !disabled && (

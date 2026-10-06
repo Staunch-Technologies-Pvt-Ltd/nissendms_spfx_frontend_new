@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Icon } from '@fluentui/react/lib/Icon';
 import type { IVesselEmailProps } from './IVesselEmailProps';
 import { getVesselImageForId, pickRandomVesselImage, resolveImgUrl } from './vesselImagePool';
 import { MAIN_FOLDERS } from './vesselFolderTemplate';
@@ -21,8 +22,7 @@ export interface FolderResult {
 }
 import {
   createSyncScheduler, SyncScheduler, DeltaSyncResult,
-  mergeNodeIntoMap, removeNodeFromMap, SpoFolderNode, fetchFolderChildren,
-} from './deltaSync';
+  mergeNodeIntoMap, removeNodeFromMap, SpoFolderNode, fetchFolderChildren, repathDescendants } from './deltaSync';
 
 
 
@@ -89,7 +89,7 @@ class PageErrorBoundary extends React.Component<
           margin: 24, padding: 32, borderRadius: 14, border: '1px solid #fecaca',
           background: '#fff5f5', color: '#991b1b', fontFamily: 'sans-serif',
         }}>
-          <div style={{ fontSize: 22, marginBottom: 8 }}>⚠️ Something went wrong</div>
+          <div style={{ fontSize: 22, marginBottom: 8 }}><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 22 }} /> Something went wrong</div>
           <div style={{ fontSize: 13, marginBottom: 4, fontWeight: 600 }}>
             {this.props.pageName || 'Page'} encountered an error and could not render.
           </div>
@@ -263,7 +263,7 @@ interface State {
   // never mistakes old, already-existing deletion alerts for fresh ones.
   alertsLoaded: boolean;
   alertFilter: 'all' | 'unread';
-  alertCategory: 'dms' | 'crud' | 'email';
+  alertCategory: 'all' | 'dms' | 'crud' | 'email';
   selectedAlertId: string | null;
   alertOpen: boolean;
   usersList: UserItem[];
@@ -471,7 +471,7 @@ interface State {
 
   // File delete dialog
   fileDeleteDialog: {
-    files: Array<{ id: string; name: string; folderId: string; folderPath: string; vesselName?: string }>;
+    files: Array<{ id: string; name: string; folderId: string; folderPath: string; vesselName?: string; siteId?: string; driveId?: string }>;
     selected: Set<string>;
     busy: boolean;
     error: string | null;
@@ -769,7 +769,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       alertsList: [],
       alertsLoaded: false,
       alertFilter: 'all',
-      alertCategory: 'dms',
+      alertCategory: 'all',
       selectedAlertId: null,
       alertOpen: false,
       usersList: [],
@@ -2301,8 +2301,26 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     const { graphClient, siteId, driveId } = this.props;
     if (!graphClient || !siteId || !driveId) return;
 
+    // What SharePoint changed directly, keyed by stable Graph item id (never
+    // by name), so the Documents lists can follow it:
+    //  goneIds      deleted file, or deleted folder and everything under it
+    //  movedFileIds files whose parent folder changed
+    //  renamedFiles file id -> new name
+    //  changedNodes renamed/moved files and folders (for the folder listings)
+    const goneIds = new Set<string>();
+    const movedFileIds = new Set<string>();
+    const renamedFiles = new Map<string, string>();
+    const changedNodes: Array<{ node: import('./deltaSync').SpoFolderNode; renamed: boolean; moved: boolean }> = [];
+
     this.setState(prev => {
       const map = new Map(prev.spoFolderMap);
+      goneIds.clear(); movedFileIds.clear(); renamedFiles.clear(); changedNodes.length = 0;
+      const collectGone = (id: string): void => {
+        if (goneIds.has(id)) return;
+        goneIds.add(id);
+        const n = map.get(id);
+        if (n) n.children.forEach(c => collectGone(c.id));
+      };
 
       // Process deletions first — check for vessel folder deletions before removing from map
       for (const id of result.deleted) {
@@ -2327,6 +2345,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           // immediate UI alert/popup by resolving from recycle-bin metadata.
           setTimeout(() => this._handleUnknownSpoDeletion(id), 0);
         }
+        collectGone(id);
         removeNodeFromMap(map, id);
       }
 
@@ -2336,8 +2355,39 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         // Skip nodes we locally deleted — Graph delta may lag before reporting deletion
         if (this._appDeletedItemIds.has(node.id)) continue;
 
+        // Snapshot before merging: the merge updates the stored node in place.
+        const before = map.get(node.id);
+        const prevName = before ? before.name : null;
+        const prevParentId = before ? before.parentId : null;
+        const prevPath = before ? before.serverRelativePath : '';
+
         const { missingParentId } = mergeNodeIntoMap(map, node);
         if (missingParentId) missingParentIds.add(missingParentId);
+
+        // Same id, different name or parent => renamed / moved in SharePoint,
+        // not a new item.
+        let renamed = false;
+        let moved = false;
+        if (before && !result.isBaseline) {
+          renamed = prevName !== null && prevName !== node.name;
+          moved = prevParentId !== node.parentId;
+          if (renamed || moved) {
+            changedNodes.push({ node, renamed, moved });
+            if (node.isFolder) {
+              repathDescendants(map.get(node.id)!, prevPath, node.serverRelativePath);
+            } else if (moved) {
+              movedFileIds.add(node.id);
+            } else {
+              renamedFiles.set(node.id, node.name);
+            }
+            console.info('[VesselDMS] SharePoint change applied', { id: node.id, kind: node.isFolder ? 'folder' : 'file', from: prevName, to: node.name, moved });
+          }
+        }
+        if (renamed || moved) {
+          // A renamed/moved item is not new: skip new-folder / new-file handling.
+          if (!node.isFolder && moved && renamed) renamedFiles.set(node.id, node.name);
+          continue;
+        }
 
         // Detect new folders added anywhere in SPO.
         // Skip during baseline scan so existing folders do not create alerts.
@@ -2376,6 +2426,63 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       const updatedByFolder = { ...prev.uploadedFilesByFolder };
       let updatedRows = [...prev.rows];
       const addedFiles = result.added.filter(n => !n.isFolder && n.parentId);
+
+      // Apply SharePoint-side delete / rename / move to the Documents lists
+      // before re-adding files, matched by item id. A moved file is removed
+      // from its old folder here and re-added under its new parent below.
+      if (goneIds.size > 0 || movedFileIds.size > 0 || renamedFiles.size > 0) {
+        const dropIds = new Set<string>(Array.from(goneIds).concat(Array.from(movedFileIds)));
+        for (const key of Object.keys(updatedByFolder)) {
+          if (goneIds.has(key)) { delete updatedByFolder[key]; continue; }
+          const current = updatedByFolder[key] as any[];
+          let touched = false;
+          const next: any[] = [];
+          for (const f of current) {
+            const fid = String(f?.id ?? '');
+            if (dropIds.has(fid)) { touched = true; continue; }
+            const newName = renamedFiles.get(fid);
+            if (newName !== undefined && f.name !== newName) { touched = true; next.push({ ...f, name: newName }); continue; }
+            next.push(f);
+          }
+          if (touched) updatedByFolder[key] = next;
+        }
+        updatedRows = updatedRows.map(r => {
+          const fid = r.fileId ? String(r.fileId) : '';
+          if (!fid) return r;
+          if (dropIds.has(fid)) return { ...r, fileName: null, fileId: null };
+          const newName = renamedFiles.get(fid);
+          return newName !== undefined && r.fileName !== newName ? { ...r, fileName: newName } : r;
+        });
+      }
+
+      // Same for the cached SharePoint folder listings (SharePoint Sites view).
+      if (goneIds.size > 0 || changedNodes.length > 0) {
+        this._siteFolderItemsCache.forEach((entry, key) => {
+          let items: any[] = entry.items as any[];
+          let touched = false;
+          if (goneIds.size > 0) {
+            const kept = items.filter(it => !goneIds.has(String(it?.id ?? '')));
+            if (kept.length !== items.length) { items = kept; touched = true; }
+          }
+          for (const c of changedNodes) {
+            const idx = items.findIndex(it => it?.id === c.node.id);
+            if (idx < 0) continue;
+            if (c.moved) { items = items.filter((_, i) => i !== idx); touched = true; }
+            else if (c.renamed) { items = items.map((it, i) => (i === idx ? { ...it, name: c.node.name } : it)); touched = true; }
+          }
+          for (const c of changedNodes) {
+            if (c.moved && c.node.parentId && key.endsWith(`::${c.node.parentId}`) && !items.some(it => it?.id === c.node.id)) {
+              items = items.concat([{
+                id: c.node.id, name: c.node.name,
+                ...(c.node.isFolder ? { folder: { childCount: 0 } } : { file: {} }),
+                size: c.node.size, lastModifiedDateTime: c.node.lastModifiedDateTime, webUrl: '',
+              }]);
+              touched = true;
+            }
+          }
+          if (touched) this._siteFolderItemsCache.set(key, { ...entry, items } as any);
+        });
+      }
 
       if (addedFiles.length > 0) {
         for (const fileNode of addedFiles) {
@@ -4261,11 +4368,10 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     return this.state.alertsList.filter(a => !a.read).length;
   }
 
+  // The bell no longer opens a popup: it opens the Notifications page.
   public _toggleAlertBell = (): void => {
-    this.setState(prev => ({ alertOpen: !prev.alertOpen }));
-    if (!this.state.alertOpen) {
-      this._fetchAlerts();
-    }
+    this._fetchAlerts();
+    this._openAlertsPage();
   };
 
   public _closeAlertBell = (): void => {
@@ -4301,7 +4407,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     this.setState({ alertFilter: filter });
   };
 
-  public _setAlertCategory = (category: 'dms' | 'crud' | 'email'): void => {
+  public _setAlertCategory = (category: 'all' | 'dms' | 'crud' | 'email'): void => {
     this.setState({ alertCategory: category });
   };
 
@@ -5943,11 +6049,15 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         // path ever told the user a duplicate existed.
         try {
           const existingFile = await graphClient
-            .api(`/sites/${effectiveSiteId}/drives/${effectiveDriveId}/items/${folder.id}:/${encodeURIComponent(file.name)}?$select=id,name,file`)
+            .api(`/sites/${effectiveSiteId}/drives/${effectiveDriveId}/items/${folder.id}:/${encodeURIComponent(file.name)}?$select=id,name,file,webUrl`)
             .get();
           if (existingFile?.id && existingFile.file) {
+            console.warn('[VesselDMS] Duplicate-name guard: existing file found', {
+              name: existingFile.name, webUrl: existingFile.webUrl, folderId: folder.id, folderName: folder.name,
+              siteId: effectiveSiteId, driveId: effectiveDriveId,
+            });
             throw new Error(
-              `A file named "${file.name}" already exists in this folder. Rename the file, delete the existing one, or upload it to a different vessel/folder before trying again.`
+              `A file named "${file.name}" already exists in this folder${existingFile.webUrl ? ` (${existingFile.webUrl})` : ''}. Rename the file, delete the existing one, or upload it to a different vessel/folder before trying again.`
             );
           }
         } catch (dupCheckErr: any) {
@@ -8573,7 +8683,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
   /** Open the file-delete confirmation dialog for one or more files in a folder. */
   public _openFileDeleteDialog(
-    files: Array<{ id: string; name: string; folderId: string; folderPath: string; vesselName?: string }>
+    files: Array<{ id: string; name: string; folderId: string; folderPath: string; vesselName?: string; siteId?: string; driveId?: string }>
   ): void {
     const validFiles = files.filter(f => f.id && f.name);
     if (validFiles.length === 0) {
@@ -8616,11 +8726,16 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
     for (const file of toDelete) {
       try {
+        // Files browsed in the SharePoint Sites view live in that site's own
+        // drive, not necessarily the web part's: use the file's own site/drive
+        // when the caller supplied them.
+        const fileSiteId = file.siteId || siteId;
+        const fileDriveId = file.driveId || driveId;
         // Graph DELETE on a drive item moves it to SharePoint's own Recycle Bin (soft delete).
         // Only use Graph for real drive item IDs — numeric-only IDs are backend DB IDs.
-        if (graphClient && siteId && driveId && file.id && !/^file_/.test(file.id) && !/^\d+$/.test(file.id)) {
+        if (graphClient && fileSiteId && fileDriveId && file.id && !/^file_/.test(file.id) && !/^\d+$/.test(file.id)) {
           // DELETE /drives/{driveId}/items/{itemId} → soft delete (moves to SPO Recycle Bin)
-          await graphClient.api(`/sites/${siteId}/drives/${driveId}/items/${file.id}`).delete();
+          await graphClient.api(`/sites/${fileSiteId}/drives/${fileDriveId}/items/${file.id}`).delete();
         } else {
           // Fallback: backend soft-delete
           const res = await fetch(`${this._base()}/api/files/${encodeURIComponent(file.id)}`, {
@@ -8630,7 +8745,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         }
         deletedIds.push(file.id);
 
-        const usedGraph = graphClient && siteId && driveId && file.id && !/^file_/.test(file.id) && !/^\d+$/.test(file.id);
+        const usedGraph = graphClient && fileSiteId && fileDriveId && file.id && !/^file_/.test(file.id) && !/^\d+$/.test(file.id);
         let recycleBinItemId: string | undefined;
         if (usedGraph && this.props.siteUrl) {
           try {
@@ -8708,6 +8823,14 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       return;
     }
 
+    // Drop the deleted files from the cached SharePoint folder listings so the
+    // Sites / Folder view updates immediately (matched by item id).
+    const deletedIdSet = new Set(deletedIds.map(String));
+    this._siteFolderItemsCache.forEach((entry, key) => {
+      const kept = (entry.items as any[]).filter(it => !deletedIdSet.has(String(it?.id ?? '')));
+      if (kept.length !== entry.items.length) this._siteFolderItemsCache.set(key, { ...entry, items: kept } as any);
+    });
+
     // Remove deleted files from uploadedFilesByFolder and rows
     const deletedNames = new Set(toDelete.map(f => f.name.toLowerCase()));
     this.setState(prev => {
@@ -8779,7 +8902,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           boxShadow: '0 8px 40px rgba(0,0,0,0.18)', fontFamily: "'Segoe UI', sans-serif",
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-            <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>🗑</div>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}><Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 20 }} /></div>
             <div>
               <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--vdms-text, #0f172a)' }}>Delete Files</div>
               <div style={{ fontSize: 12, color: 'var(--vdms-text-muted, #64748b)', marginTop: 2 }}>Check files to move to Recycle Bin</div>
@@ -8799,7 +8922,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                   onChange={() => toggle(f.id)}
                   style={{ width: 16, height: 16, accentColor: '#ef4444', cursor: 'pointer' }}
                 />
-                <span style={{ fontSize: 16 }}>📄</span>
+                <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 16 }} />
                 <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--vdms-text, #0f172a)', flex: 1, wordBreak: 'break-all' }}>{f.name}</span>
               </label>
             ))}
@@ -8814,7 +8937,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 140, overflowY: 'auto' }}>
                 {additionalFiles.map(f => (
                   <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 8, border: '1px dashed var(--vdms-border, #e2e8f0)', background: 'var(--vdms-surface-alt, #f8fafc)' }}>
-                    <span style={{ fontSize: 14 }}>📄</span>
+                    <Icon iconName="Page" aria-hidden="true" style={{ fontSize: 14 }} />
                     <span style={{ fontSize: 12, color: 'var(--vdms-text, #0f172a)', flex: 1, wordBreak: 'break-all' }}>{f.name}</span>
                     <button
                       onClick={() => addFileToDialog(f)}
@@ -8848,12 +8971,12 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
           {error && (
             <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#dc2626', marginBottom: 12 }}>
-              ⚠️ {error}
+              <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> {error}
             </div>
           )}
 
           <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '8px 12px', fontSize: 12, color: '#c2410c', marginBottom: 20 }}>
-            ⚠️ {selected.size} file{selected.size !== 1 ? 's' : ''} will be moved to the Recycle Bin. This can be undone from the Recycle Bin page.
+            <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> {selected.size} file{selected.size !== 1 ? 's' : ''} will be moved to the Recycle Bin. This can be undone from the Recycle Bin page.
           </div>
 
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexDirection: isMobile ? 'column' : 'row' }}>
@@ -8872,7 +8995,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                 background: busy || selected.size === 0 ? '#fca5a5' : '#ef4444', color: '#fff',
               }}
             >
-              {busy ? '⏳ Deleting…' : `🗑 Delete ${selected.size} file${selected.size !== 1 ? 's' : ''}`}
+              {busy ? <><Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 13 }} /> Deleting…</> : <><Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 13 }} /> {`Delete ${selected.size} file${selected.size !== 1 ? 's' : ''}`}</>}
             </button>
           </div>
         </div>
@@ -8993,7 +9116,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           <div style={{ padding: '20px 24px 16px', background: clay.accentSoft }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ width: 46, height: 46, borderRadius: clay.radiusIcon, background: clay.iconBgGradient, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, boxShadow: clay.shadowIcon }}>
-                📁
+                <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 22 }} />
               </div>
               <div>
                 <div style={{ fontSize: 17, fontWeight: 700, color: clay.text }}>Add Folder</div>
@@ -9007,7 +9130,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           <div style={{ padding: '20px 24px' }}>
             {error && (
               <div style={{ background: '#fde8e0', color: '#9a3f1f', padding: '10px 14px', borderRadius: 12, fontSize: 12, marginBottom: 14 }}>
-                ⚠️ {error}
+                <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> {error}
               </div>
             )}
             <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: clay.text, marginBottom: 6 }}>
@@ -9047,7 +9170,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                 style={{ width: 15, height: 15, accentColor: '#2563eb', cursor: 'pointer' }}
               />
               <span style={{ fontSize: 12.5, color: clay.text }}>
-                🚢 This is a new vessel — open the Add Vessel form instead
+                <Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 12 }} /> This is a new vessel — open the Add Vessel form instead
               </span>
             </label>
           </div>
@@ -9512,7 +9635,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           <div style={{ padding: '20px 24px 16px', background: '#fff1f2', borderBottom: '1px solid #fecdd3' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               <div style={{ width: 42, height: 42, borderRadius: 10, background: '#ffe4e6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>
-                🗑️
+                <Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 22 }} />
               </div>
               <div>
                 <div style={{ fontSize: 17, fontWeight: 700, color: '#9f1239' }}>
@@ -9529,7 +9652,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           <div style={{ padding: '20px 24px' }}>
             {error && (
               <div style={{ background: '#fee2e2', color: '#991b1b', padding: '10px 14px', borderRadius: 8, fontSize: 12, marginBottom: 14 }}>
-                ⚠️ {error}
+                <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> {error}
               </div>
             )}
 
@@ -9560,7 +9683,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                       onChange={() => {}}
                       style={{ width: 18, height: 18, accentColor: '#e11d48', cursor: 'pointer' }}
                     />
-                    <span style={{ fontSize: 20 }}>📁</span>
+                    <Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 20 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--vdms-text)' }}>
                         {folder.name} {folder.isCurrent ? <span style={{ fontSize: 11, color: '#e11d48', fontWeight: 600 }}>(Current Folder)</span> : ''}
@@ -9620,7 +9743,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                 opacity: busy ? 0.65 : 1, display: 'inline-flex', alignItems: 'center', gap: 6,
               }}
             >
-              {busy ? 'Moving to Recycle Bin…' : '🗑 Move to Recycle Bin'}
+              {busy ? 'Moving to Recycle Bin…' : <><Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 13 }} /> Move to Recycle Bin</>}
             </button>
           </div>
         </div>
@@ -9839,7 +9962,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
               background: p.isPending ? '#fef3c7' : '#dcfce7',
               display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0,
             }}>
-              {p.isPending ? '⏳' : '✅'}
+              {p.isPending ? <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 18 }} /> : <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 18 }} />}
             </div>
             <div>
               <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--vdms-text)' }}>
@@ -9854,17 +9977,17 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             onClick={() => { clearInterval(this._uploadSuccessTimer!); this.setState({ uploadSuccessPopup: null }); }}
             style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--vdms-text-faint)', minHeight: 44, minWidth: 44, fontSize: 18, padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
             title="Close"
-          >✕</button>
+          ><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 18 }} /></button>
         </div>
         {/* File info */}
         <div style={{ background: 'var(--vdms-surface-alt)', borderRadius: 8, padding: '8px 12px', marginBottom: 12 }}>
-          <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginBottom: 3 }}>📄 File</div>
+          <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginBottom: 3 }}><Icon iconName="Page" aria-hidden="true" style={{ fontSize: 12 }} /> File</div>
           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--vdms-text)', wordBreak: 'break-all' }}>{p.fileName}</div>
-          <div style={{ fontSize: 11, color: 'var(--vdms-text-muted)', marginTop: 6 }}>📁 Path</div>
+          <div style={{ fontSize: 11, color: 'var(--vdms-text-muted)', marginTop: 6 }}><Icon iconName="FabricFolder" aria-hidden="true" style={{ fontSize: 11 }} /> Path</div>
           <div style={{ fontSize: 12, color: 'var(--vdms-text)', marginTop: 2, wordBreak: 'break-all' }}>{p.destinationPath}</div>
           {Array.isArray(p.unidentifiedFiles) && p.unidentifiedFiles.length > 0 && (
             <div style={{ marginTop: 10, background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, padding: '8px 10px' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#9a3412' }}>⚠ Vessel name not identified files</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#9a3412' }}><Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 12 }} /> Vessel name not identified files</div>
               <div style={{ marginTop: 4, fontSize: 11, color: '#9a3412' }}>
                 Sent to Templates & OCR Need Review for manual classification.
               </div>
@@ -9884,8 +10007,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           <button
             onClick={() => {
               clearInterval(this._uploadSuccessTimer!);
-              this.setState({ uploadSuccessPopup: null, alertOpen: true });
-              this._fetchAlerts();
+              this.setState({ uploadSuccessPopup: null });
+              this._toggleAlertBell();
             }}
             style={{
               flex: 1, background: clay.accentGradient, color: '#fff', border: 'none', borderRadius: 8,
@@ -9907,7 +10030,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
                 cursor: 'pointer', boxShadow: clay.shadowButton,
               }}
             >
-              🔗 Open in SharePoint
+              <Icon iconName="Link" aria-hidden="true" style={{ fontSize: 12 }} /> Open in SharePoint
             </a>
           )}
           <button
@@ -12037,7 +12160,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         <div style={{
           width: 36, height: 36, borderRadius: 10, background: '#fee2e2',
           display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0,
-        }}>🗑</div>
+        }}><Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 18 }} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14, color: '#fca5a5' }}>Vessel deleted in SharePoint</div>
           <div style={{ fontSize: 12, color: 'var(--vdms-text-faint)', marginTop: 3 }}>
@@ -12102,7 +12225,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           display: 'flex', alignItems: 'flex-start', gap: 12, flexDirection: isMobile ? 'column' : 'row', width: isMobile ? 'calc(100vw - 20px)' : 'auto', minWidth: isMobile ? 0 : 360, maxWidth: isMobile ? 'calc(100vw - 20px)' : 560,
           fontFamily: "'Segoe UI', sans-serif", border: '1.5px solid #ef4444',
         }}>
-        <div style={{ width: 36, height: 36, borderRadius: 10, background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>🗑</div>
+        <div style={{ width: 36, height: 36, borderRadius: 10, background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}><Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 18 }} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14, color: '#fca5a5' }}>{items.length === 1 ? label : `${items.length} ${itemType}s`} moved to Recycle Bin</div>
           <div style={{ fontSize: 12, color: 'var(--vdms-text-faint)', marginTop: 3 }}>
@@ -12183,6 +12306,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
     targetSiteId?: string,
     targetDriveId?: string,
   ): void => {
+    console.info('[VesselDMS] _openBulkUpload', { count: files ? files.length : 0, folderId, subFolderPath, vesselName });
     if (!files || files.length === 0) return;
     this.setState({
       bulkUploadDialog: {
@@ -12210,7 +12334,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         currentFolderNode={bulkUploadDialog.currentFolderNode}
         targetSiteId={bulkUploadDialog.targetSiteId}
         targetDriveId={bulkUploadDialog.targetDriveId}
-        onClose={() => this.setState({ bulkUploadDialog: null })}
+        onClose={() => { console.info('[VesselDMS] bulk upload dialog onClose', new Error().stack); this.setState({ bulkUploadDialog: null }); }}
       />
     );
   }
@@ -12251,7 +12375,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             borderRadius: 28, padding: '44px 48px', maxWidth: 460,
             textAlign: 'center', boxShadow: 'var(--vdms-shadow)', border: '1px solid var(--vdms-line)',
           }}>
-            <div style={{ width: 64, height: 64, margin: '0 auto 18px', borderRadius: 20, background: clay.accentGradient, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30, boxShadow: clay.shadowButton }}>🔒</div>
+            <div style={{ width: 64, height: 64, margin: '0 auto 18px', borderRadius: 20, background: clay.accentGradient, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30, boxShadow: clay.shadowButton }}><Icon iconName="Lock" aria-hidden="true" style={{ fontSize: 30 }} /></div>
             <h2 style={{ margin: '0 0 10px', fontSize: 24, fontWeight: 800, color: 'var(--vdms-text)', fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif" }}>Session Expired</h2>
             <p style={{ margin: '0 0 26px', fontSize: 15, color: 'var(--vdms-text-secondary)', lineHeight: 1.6 }}>
               Your session has expired or is no longer valid. Please sign out and sign back in to continue.

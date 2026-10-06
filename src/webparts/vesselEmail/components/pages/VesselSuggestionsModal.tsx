@@ -2,6 +2,7 @@ import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import type { VesselSuggestion } from '../types/ui';
 import { isMobileWidth } from '../responsive';
+import { Icon } from '@fluentui/react/lib/Icon';
 
 // ── Vessel Suggestions Modal ───────────────────────────────────────────────
 // Full-screen wizard that:
@@ -80,7 +81,7 @@ function StepIndicator({ step }: { step: string }): React.ReactElement {
                 boxShadow: isActive ? '0 0 16px rgba(59,130,246,0.5)' : 'none',
                 transition: 'all 0.3s ease',
               }}>
-                {isDone ? '✓' : i + 1}
+                {isDone ? <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 13 }} /> : i + 1}
               </div>
               <span style={{ fontSize: 10, color: isActive ? '#93c5fd' : isDone ? '#86efac' : 'rgba(255,255,255,0.4)', fontWeight: isActive ? 600 : 400 }}>
                 {s.label}
@@ -119,7 +120,7 @@ function ExtractRow({ label, value, delay }: { label: string; value: string; del
       }}>
         {value || 'Not detected'}
       </span>
-      {value && <span style={{ marginLeft: 'auto', fontSize: 11, color: '#4ade80' }}>✓</span>}
+      {value && <span style={{ marginLeft: 'auto', fontSize: 11, color: '#4ade80' }}><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 11 }} /></span>}
     </div>
   );
 }
@@ -222,7 +223,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>🚢</div>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}><Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 18 }} /></div>
                 <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#f1f5f9' }}>Vessel Suggestions</h2>
               </div>
               <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>
@@ -231,7 +232,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
                   : 'Review detected suggestions, scan documents, or create new vessels in the Term Store'}
               </p>
             </div>
-            <button className="vsm-btn" onClick={close} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, width: 44, height: 44, color: '#94a3b8', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>✕</button>
+            <button className="vsm-btn" onClick={close} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, width: 44, height: 44, color: '#94a3b8', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 18 }} /></button>
           </div>
 
           <StepIndicator step={step} />
@@ -243,7 +244,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
                 {extracting ? (
                   <div className="vsm-spinner" style={{ width: 20, height: 20, border: '2px solid rgba(99,179,237,0.2)', borderTopColor: '#60a5fa', borderRadius: '50%', flexShrink: 0 }} />
                 ) : (
-                  <span style={{ fontSize: 18 }}>🔍</span>
+                  <span style={{ fontSize: 18 }}><Icon iconName="Search" aria-hidden="true" style={{ fontSize: 18 }} /></span>
                 )}
                 <span style={{ color: '#93c5fd', fontSize: 13, fontWeight: 600 }}>
                   {step === 'extract' ? 'Scanning file names & OCR content for vessel identity…' : 'Matching against Term Store…'}
@@ -251,7 +252,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 20 }}>
                 {files.slice(0, 6).map((f, i) => (
-                  <div key={i} style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 6, padding: '3px 10px', fontSize: 11, color: '#93c5fd', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📄 {f.name}</div>
+                  <div key={i} style={{ background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.25)', borderRadius: 6, padding: '3px 10px', fontSize: 11, color: '#93c5fd', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><Icon iconName="Page" aria-hidden="true" style={{ fontSize: 11 }} /> {f.name}</div>
                 ))}
                 {files.length > 6 && <div style={{ fontSize: 11, color: '#64748b', padding: '3px 4px' }}>+{files.length - 6} more</div>}
               </div>
@@ -272,7 +273,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
           {step === 'review' && !suggestion && (
             <div className="vsm-fade" style={{ textAlign: 'center', padding: '32px 16px' }}>
               <div style={{ width: 64, height: 64, borderRadius: '50%', margin: '0 auto 16px', background: 'rgba(74,222,128,0.1)', border: '1px solid rgba(74,222,128,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30 }}>
-                ✨
+                <Icon iconName="Brightness" aria-hidden="true" style={{ fontSize: 30 }} />
               </div>
               <h3 style={{ color: '#f1f5f9', fontSize: 16, fontWeight: 700, margin: '0 0 8px' }}>
                 All Documents Match Existing Vessels
@@ -295,7 +296,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
                       host._openVesselSuggestions(filesList);
                     }}
                   />
-                  <span>📄</span> Scan Document for New Vessel
+                  <span><Icon iconName="Page" aria-hidden="true" style={{ fontSize: 13 }} /></span> Scan Document for New Vessel
                 </label>
                 <button
                   type="button"
@@ -318,7 +319,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
               {allSuggestions && allSuggestions.length > 1 && (
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
-                    🚢 Suggested New Vessels ({allSuggestions.length})
+                    <Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 11 }} /> Suggested New Vessels ({allSuggestions.length})
                   </div>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     {allSuggestions.map((s, idx) => {
@@ -358,7 +359,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
                             boxShadow: isSelected ? '0 4px 12px rgba(59,130,246,0.4)' : 'none',
                           }}
                         >
-                          <span>🚢</span>
+                          <span><Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 12 }} /></span>
                           <span>{s.vesselName}</span>
                           <span style={{ fontSize: 10, opacity: 0.8 }} title={formatLastScanned(s.lastDetectedAt)}>
                             {s.lastDetectedAt ? new Date(s.lastDetectedAt).toLocaleDateString() : ''}
@@ -389,7 +390,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
                 borderColor: hasMatch ? 'rgba(74,222,128,0.35)' : 'rgba(59,130,246,0.35)',
                 background: hasMatch ? 'rgba(74,222,128,0.06)' : 'rgba(59,130,246,0.06)',
               }}>
-                <div style={{ fontSize: 26 }}>{hasMatch ? '🎯' : '🔎'}</div>
+                <div style={{ fontSize: 26 }}>{hasMatch ? <Icon iconName="BullseyeTarget" aria-hidden="true" style={{ fontSize: 26 }} /> : <Icon iconName="Search" aria-hidden="true" style={{ fontSize: 26 }} />}</div>
                 <div style={{ flex: 1 }}>
                   {hasMatch ? (
                     <>
@@ -397,7 +398,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
                         <span>Match Found — {suggestion.matchedExisting!.name}</span>
                         {suggestion.ocrVerified && (
                           <span style={{ background: 'rgba(74,222,128,0.2)', color: '#86efac', border: '1px solid rgba(74,222,128,0.4)', borderRadius: 6, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>
-                            ✓ OCR Verified
+                            <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 10 }} /> OCR Verified
                           </span>
                         )}
                       </div>
@@ -414,7 +415,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
                         <span>Suggested New Vessel — {suggestion.vesselName || 'New Vessel'}</span>
                         {suggestion.ocrVerified && (
                           <span style={{ background: 'rgba(59,130,246,0.2)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.4)', borderRadius: 6, padding: '1px 6px', fontSize: 10, fontWeight: 700 }}>
-                            ✓ OCR Extracted
+                            <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 10 }} /> OCR Extracted
                           </span>
                         )}
                       </div>
@@ -444,7 +445,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
 
               <div style={{ ...GLASS_PANEL, padding: '20px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-                  <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>✏️ Review &amp; Edit Vessel Details</div>
+                  <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}><Icon iconName="Edit" aria-hidden="true" style={{ fontSize: 11 }} /> Review &amp; Edit Vessel Details</div>
                   <label style={{
                     background: 'rgba(99,179,237,0.15)', border: '1px solid rgba(99,179,237,0.3)',
                     borderRadius: 8, padding: '4px 10px', fontSize: 11, color: '#93c5fd',
@@ -461,7 +462,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
                         host._openVesselSuggestions(filesList);
                       }}
                     />
-                    <span>📄</span> Scan Document
+                    <span><Icon iconName="Page" aria-hidden="true" style={{ fontSize: 11 }} /></span> Scan Document
                   </label>
                 </div>
 
@@ -486,14 +487,14 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
 
               {error && (
                 <div style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 10, fontSize: 13, color: '#fca5a5' }}>
-                  ⚠️ {error}
+                  <Icon iconName="Warning" aria-hidden="true" style={{ fontSize: 13 }} /> {error}
                 </div>
               )}
 
               <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
                 {hasMatch && (
                   <button id="vsm-use-existing-btn" className="vsm-btn" onClick={useExisting} disabled={creating} style={{ flex: 1, padding: '13px 20px', borderRadius: 12, background: creating ? 'rgba(16,185,129,0.2)' : 'linear-gradient(135deg, #059669, #10b981)', border: creating ? '1px solid rgba(16,185,129,0.35)' : 'none', color: '#fff', fontSize: 14, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: creating ? 0.85 : 1 }}>
-                    <span style={{ fontSize: 18 }}>{creating ? '⏳' : '✅'}</span>{creating ? 'Routing to Matched Vessel…' : 'Use Existing Vessel'}
+                    <span style={{ fontSize: 18 }}>{creating ? <Icon iconName="Sync" aria-hidden="true" style={{ fontSize: 18 }} /> : <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 18 }} />}</span>{creating ? 'Routing to Matched Vessel…' : 'Use Existing Vessel'}
                   </button>
                 )}
                 <button
@@ -506,7 +507,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
                   {creating ? (
                     <><div className="vsm-spinner" style={{ width: 16, height: 16, border: '2px solid rgba(147,197,253,0.3)', borderTopColor: '#93c5fd', borderRadius: '50%' }} />Creating in Term Store…</>
                   ) : (
-                    <><span style={{ fontSize: 18 }}>➕</span>{hasMatch ? 'Re-create / Update Vessel' : 'Create New Vessel'}</>
+                    <><span style={{ fontSize: 18 }}><Icon iconName="Add" aria-hidden="true" style={{ fontSize: 18 }} /></span>{hasMatch ? 'Re-create / Update Vessel' : 'Create New Vessel'}</>
                   )}
                 </button>
                 <button
@@ -528,7 +529,7 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
           {step === 'done' && (
             <div className="vsm-fade" style={{ textAlign: 'center', padding: '16px 0 8px' }}>
               <div style={{ width: 72, height: 72, borderRadius: '50%', margin: '0 auto 20px', background: 'linear-gradient(135deg, #059669, #10b981)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 34, boxShadow: '0 0 32px rgba(16,185,129,0.4)' }}>
-                {editedSuggestion?.matchedExisting ? '🎯' : '🎉'}
+                {editedSuggestion?.matchedExisting ? <Icon iconName="BullseyeTarget" aria-hidden="true" style={{ fontSize: 34 }} /> : <Icon iconName="Completed" aria-hidden="true" style={{ fontSize: 34 }} />}
               </div>
               <h3 style={{ color: '#f1f5f9', fontSize: 18, fontWeight: 700, margin: '0 0 8px' }}>
                 {editedSuggestion?.matchedExisting ? 'Linked to Existing Vessel' : 'Vessel Created Successfully!'}
@@ -542,10 +543,10 @@ export function renderVesselSuggestionsModal(host: VesselEmail): React.ReactElem
               {editedSuggestion && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginBottom: 24 }}>
                   {[
-                    { icon: '🔢', label: 'IMO', value: editedSuggestion.imoNumber },
-                    { icon: '🏗️', label: 'Hull', value: editedSuggestion.hullNumber },
-                    { icon: '🏭', label: 'Shipyard', value: editedSuggestion.shipyard },
-                    { icon: '🚢', label: 'Type', value: editedSuggestion.vesselType },
+                    { icon: <Icon iconName="NumberSymbol" aria-hidden="true" style={{ fontSize: 12 }} />, label: 'IMO', value: editedSuggestion.imoNumber },
+                    { icon: <Icon iconName="ConstructionCone" aria-hidden="true" style={{ fontSize: 12 }} />, label: 'Hull', value: editedSuggestion.hullNumber },
+                    { icon: <Icon iconName="Manufacturing" aria-hidden="true" style={{ fontSize: 12 }} />, label: 'Shipyard', value: editedSuggestion.shipyard },
+                    { icon: <Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 12 }} />, label: 'Type', value: editedSuggestion.vesselType },
                   ].filter(p => p.value).map((p, i) => (
                     <div key={i} style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '6px 12px', fontSize: 12 }}>
                       <span style={{ marginRight: 6 }}>{p.icon}</span>

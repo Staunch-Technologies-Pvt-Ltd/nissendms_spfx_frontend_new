@@ -3,6 +3,7 @@
 /* eslint-disable @typescript-eslint/no-unused-expressions */
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
+import { Icon } from '@fluentui/react/lib/Icon';
 import {
   badge, GROUP_COLORS, DATASOURCE_TAGS_MAP, VESSEL_TYPES, cleanName, suggestTagFromFilename,
   INITIAL_MOCK_DOCUMENTS, INITIAL_MOCK_TEMPLATES, INITIAL_MOCK_APPROVALS,
@@ -24,6 +25,11 @@ import { ModuleManagementSection } from './ModuleManagementSection';
 import { FilterSearchManagementSection } from './FilterSearchManagementSection';
 import { ColorManagementSection } from './ColorManagementSection';
 import { SettingsTabManagementSection } from './SettingsTabManagementSection';
+import { clay } from '../clayTheme';
+import {
+  DmsPageHeader, dmsBtn, dmsRowBtn, dmsControlStyle, DMS_ON_ACCENT, DMS_FONT_DISPLAY,
+  DMS_TABLE_CARD, DMS_TABLE, DMS_TH, DMS_TR, DMS_TD, DMS_TD_NAME,
+} from '../dmsDesignSystem';
 
 export function renderSettingsPage(host: VesselEmail): React.ReactElement {
   return <SettingsPageView host={host} />;
@@ -31,8 +37,11 @@ export function renderSettingsPage(host: VesselEmail): React.ReactElement {
 
 // Every tab that can be hidden via Settings → Settings Management. Keep in
 // sync with SETTINGS_TAB_CATALOG in backend/app/settings_tab_api.py.
+// Note: 'Site Management' used to be listed here too, but that tab moved to
+// the main Sites page (see SiteManagementSection.tsx), so Settings no
+// longer has a pane for it.
 const HIDEABLE_SETTINGS_TABS = [
-  'Site Management', 'Vessel Settings', 'Tag Configuration', 'Module Management', 'Filter Search Management', 'Color Management', 'Audit Logs'
+  'Vessel Settings', 'Tag Configuration', 'Module Management', 'Filter Search Management', 'Color Management', 'Audit Logs'
 ];
 
 function SettingsPageView({ host }: { host: VesselEmail }): React.ReactElement {
@@ -41,56 +50,118 @@ function SettingsPageView({ host }: { host: VesselEmail }): React.ReactElement {
     // 'Settings Management' is always shown — it's the only place to
     // un-hide everything else, so it can never be hidden itself (the
     // server also strips it from any hidden list it's saved with).
-    const visibleTabs = [
-      ...HIDEABLE_SETTINGS_TABS.filter(tab => hiddenSettingsTabs.indexOf(tab) === -1),
-      'Settings Management',
-    ];
+    // Only admins see the configuration tabs; everyone else gets Appearance and
+    // Audit Logs (their own session history). Admin status comes from the same
+    // is_admin flag the config endpoints already return (null = still loading,
+    // in which case the admin tabs are shown so an admin doesn't get bounced).
+    const [isAdmin, setIsAdmin] = React.useState<boolean | null>(null);
+    React.useEffect(() => {
+      let cancelled = false;
+      fetch(`${host._base()}/api/settings-tab-settings/config`, { headers: host._headers() })
+        .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then(d => { if (!cancelled) setIsAdmin(!!d?.is_admin); })
+        .catch(() => { if (!cancelled) setIsAdmin(false); });
+      return () => { cancelled = true; };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    const showAdminTabs = isAdmin !== false;
+    // Configuration tabs (admin only) stay as plain Settings tabs; Appearance is personal.
+    const configTabs = showAdminTabs ? HIDEABLE_SETTINGS_TABS.filter(tab => tab !== 'Audit Logs' && hiddenSettingsTabs.indexOf(tab) === -1) : [];
+    const topTabs = ['Appearance', ...configTabs];
+    // Administration dropdown (admin only): two items open Settings tabs, two open their own pages.
+    const hiddenMods = host.state.hiddenModules;
+    const adminItems: Array<{ label: string; tab?: string; view?: 'sites' | 'users' }> = showAdminTabs ? [
+      ...(hiddenMods.indexOf('sites') === -1 ? [{ label: 'Site Management', view: 'sites' as const }] : []),
+      ...(hiddenMods.indexOf('users') === -1 ? [{ label: 'User Management', view: 'users' as const }] : []),
+      ...(hiddenSettingsTabs.indexOf('Audit Logs') === -1 ? [{ label: 'Audit Logs', tab: 'Audit Logs' }] : []),
+      { label: 'Settings Management', tab: 'Settings Management' },
+    ] : [];
+    const adminTabNames = adminItems.filter(i => !!i.tab).map(i => i.tab as string);
+    const visibleTabs = [...topTabs, ...adminTabNames];
+    const activeInAdmin = adminTabNames.indexOf(settingsTab) !== -1;
+    const [adminOpen, setAdminOpen] = React.useState<boolean>(false);
+    // Opening one of its tabs (e.g. directly) expands the dropdown so the active item is visible.
+    React.useEffect(() => { if (activeInAdmin) setAdminOpen(true); }, [activeInAdmin]);
 
     // If the currently-selected tab was just hidden (by this admin or
     // another one), land on the first tab that's still visible instead of
     // rendering a blank/unreachable pane.
     React.useEffect(() => {
+      if (isAdmin === null) return;
       if (visibleTabs.indexOf(settingsTab) === -1) {
         host.setState({ settingsTab: visibleTabs[0] as any });
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [settingsTab, hiddenSettingsTabs]);
+    }, [settingsTab, hiddenSettingsTabs, isAdmin]);
+
+    const TAB_ICONS: Record<string, string> = {
+      'Appearance': 'Color', 'Vessel Settings': 'Ferry', 'Tag Configuration': 'Tag', 'Module Management': 'GridViewMedium',
+      'Filter Search Management': 'Filter', 'Color Management': 'Color', 'Audit Logs': 'History', 'Settings Management': 'Settings',
+      'Site Management': 'SharepointLogo', 'User Management': 'People',
+    };
+    const navIcon = (name: string, active: boolean): React.ReactElement => (
+      <Icon iconName={TAB_ICONS[name] || 'Settings'} aria-hidden="true" style={{ fontSize: 16, marginRight: 10, verticalAlign: '-2px', color: active ? DMS_ON_ACCENT : 'var(--vdms-text-muted)' }} />
+    );
+    const navGroupLabel = (text: string): React.ReactElement => (
+      <div style={{ margin: '14px 10px 4px', fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--vdms-text-muted)' }}>{text}</div>
+    );
+    const navBtnStyle = (active: boolean, indent = 0): React.CSSProperties => ({
+      border: 'none',
+      background: active ? clay.accentGradient : 'transparent',
+      color: active ? DMS_ON_ACCENT : 'var(--vdms-text)', fontWeight: active ? 800 : 600,
+      fontSize: 14, padding: indent ? '9px 12px 9px 30px' : '10px 12px', borderRadius: 12, textAlign: 'left', cursor: 'pointer',
+      fontFamily: "'Manrope', 'Segoe UI Variable', sans-serif",
+      boxShadow: active ? clay.shadowButton : 'none',
+    });
 
     return (
       <div className="vdms-settings" style={{ display: 'flex', flexDirection: 'column', gap: 20, width: '100%', minHeight: '100%', boxSizing: 'border-box', padding: '8px 0 0 0' }}>
         <div style={{ paddingLeft: 4 }}>
-          <h2 style={{ margin: 0, fontFamily: "'Sora', 'Segoe UI Variable', sans-serif", fontSize: 30, fontWeight: 800, letterSpacing: '-0.03em', color: 'var(--vdms-text, #08243a)' }}>Settings</h2>
-          <p style={{ margin: '6px 0 0', fontSize: 17, color: 'var(--vdms-text-secondary, #34536a)' }}>Configure application settings and preferences.</p>
+          <DmsPageHeader title="Settings" subtitle="Configure application settings and preferences." />
         </div>
 
-        <div className="vdms-settings-shell" style={{ display: 'grid', gridTemplateColumns: 'minmax(230px, 280px) minmax(0, 1fr)', gap: 0, width: '100%', minHeight: 'calc(100vh - 250px)', background: 'var(--vdms-glass, rgba(255,255,255,0.62))', backdropFilter: 'blur(20px) saturate(1.3)', WebkitBackdropFilter: 'blur(20px) saturate(1.3)', borderRadius: 28, border: '1px solid var(--vdms-line, rgba(16,84,138,0.14))', boxShadow: 'var(--vdms-shadow)', overflow: 'hidden', boxSizing: 'border-box', alignSelf: 'stretch' }}>
+        <div className="vdms-settings-shell" style={{ display: 'grid', gridTemplateColumns: 'minmax(230px, 280px) minmax(0, 1fr)', gap: 0, width: '100%', minHeight: 'calc(100vh - 250px)', background: 'var(--vdms-glass)', backdropFilter: 'blur(20px) saturate(1.3)', WebkitBackdropFilter: 'blur(20px) saturate(1.3)', borderRadius: clay.radiusCard + 16, border: '1px solid var(--vdms-line)', boxShadow: clay.shadowRaised, overflow: 'hidden', boxSizing: 'border-box', alignSelf: 'stretch' }}>
           {/* Settings Left Nav */}
-          <div className="vdms-settings-nav" style={{ display: 'flex', flexDirection: 'column', gap: 6, borderRight: '1px solid var(--vdms-line, rgba(16,84,138,0.14))', background: 'var(--vdms-surface-alt, rgba(236,247,255,0.9))', padding: '22px 16px', boxSizing: 'border-box' }}>
-            {visibleTabs.map(tab => (
-              <button
-                key={tab}
-                onClick={() => host.setState({ settingsTab: tab as any })}
-                style={{
-                  border: 'none',
-                  background: settingsTab === tab ? 'linear-gradient(135deg, #2b9ae0, #0284c7)' : 'transparent',
-                  color: settingsTab === tab ? '#ffffff' : 'var(--vdms-text, #08243a)', fontWeight: settingsTab === tab ? 800 : 600,
-                  fontSize: 16, padding: '13px 16px', borderRadius: 14, textAlign: 'left', cursor: 'pointer',
-                  fontFamily: "'Manrope', 'Segoe UI Variable', sans-serif",
-                  boxShadow: settingsTab === tab ? '0 10px 22px rgba(2,132,199,0.38), inset 0 1px 0 rgba(255,255,255,0.4), inset 0 -3px 0 rgba(0,0,0,0.14)' : 'none'
-                }}
-              >
-                {tab}
+          <div className="vdms-settings-nav" style={{ display: 'flex', flexDirection: 'column', gap: 6, borderRight: '1px solid var(--vdms-line)', background: 'var(--vdms-surface-alt)', padding: '22px 16px', boxSizing: 'border-box' }}>
+            {navGroupLabel('Personal')}
+            {topTabs.filter(t => t === 'Appearance').map(tab => (
+              <button key={tab} onClick={() => host.setState({ settingsTab: tab as any })} style={navBtnStyle(settingsTab === tab)}>
+                {navIcon(tab, settingsTab === tab)}{tab}
               </button>
             ))}
+            {configTabs.length > 0 && navGroupLabel('Configuration')}
+            {configTabs.map(tab => (
+              <button key={tab} onClick={() => host.setState({ settingsTab: tab as any })} style={navBtnStyle(settingsTab === tab)}>
+                {navIcon(tab, settingsTab === tab)}{tab}
+              </button>
+            ))}
+            {adminItems.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  aria-expanded={adminOpen}
+                  onClick={() => setAdminOpen(o => !o)}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: 'none', background: 'transparent', cursor: 'pointer', margin: '10px 0 0', padding: '12px 16px', borderRadius: 14, color: 'var(--vdms-text)', fontFamily: "'Manrope', 'Segoe UI Variable', sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}
+                >
+                  Administration
+                  <Icon iconName={adminOpen ? 'ChevronUp' : 'ChevronDown'} style={{ fontSize: 12 }} />
+                </button>
+                {adminOpen && adminItems.map(item => (
+                  <button
+                    key={item.label}
+                    onClick={() => { if (item.tab) host.setState({ settingsTab: item.tab as any }); else if (item.view) void host._goToView(item.view); }}
+                    style={navBtnStyle(!!item.tab && settingsTab === item.tab, 1)}
+                  >
+                    {navIcon(item.label, !!item.tab && settingsTab === item.tab)}{item.label}
+                  </button>
+                ))}
+              </>
+            )}
           </div>
 
           {/* Settings Content Area */}
           <div className="vdms-settings-body" style={{ width: '100%', minWidth: 0, padding: '26px 32px 32px', boxSizing: 'border-box' }}>
-            <h3 style={{ margin: '0 0 20px', fontFamily: "'Sora', 'Segoe UI Variable', sans-serif", fontSize: 24, fontWeight: 800, letterSpacing: '-0.025em', color: 'var(--vdms-text, #08243a)' }}>{settingsTab}</h3>
-
-            {settingsTab === 'Site Management' && (
-              <SiteIntegrationInfo host={host} />
-            )}
+            <h3 style={{ margin: '0 0 20px', fontFamily: DMS_FONT_DISPLAY, fontSize: 24, fontWeight: 800, letterSpacing: '-0.025em', color: 'var(--vdms-text)' }}>{settingsTab}</h3>
 
             {settingsTab === 'Vessel Settings' && (
               <FolderStructureModeSection host={host} />
@@ -114,6 +185,29 @@ function SettingsPageView({ host }: { host: VesselEmail }): React.ReactElement {
 
             {settingsTab === 'Audit Logs' && (
               <SessionAuditLog host={host} />
+            )}
+
+            {(settingsTab as string) === 'Appearance' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 520 }}>
+                <div style={{ color: 'var(--vdms-text-muted)', fontSize: 14 }}>Choose how the application looks for you.</div>
+                <div role="radiogroup" aria-label="Theme" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, padding: 4, borderRadius: 12, border: '1px solid var(--vdms-line)', background: 'var(--vdms-surface-alt)' }}>
+                  {([['night', 'Night', 'ClearNight'], ['light', 'Light', 'Sunny']] as const).map(([mode, label, icon]) => {
+                    const active = (host.state.themeMode === 'night') === (mode === 'night');
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        onClick={() => { if (!active) host._toggleThemeMode(); }}
+                        style={{ border: 'none', borderRadius: 9, padding: '12px 0', cursor: 'pointer', fontWeight: 700, fontSize: 15, fontFamily: "'Manrope', 'Segoe UI Variable', sans-serif", display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: active ? clay.accentGradient : 'transparent', color: active ? DMS_ON_ACCENT : 'var(--vdms-text)', boxShadow: active ? clay.shadowButton : 'none' }}
+                      >
+                        <Icon iconName={icon} /> {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             )}
 
             {settingsTab === 'Settings Management' && (
@@ -165,679 +259,62 @@ function SessionAuditLog({ host }: { host: VesselEmail }): React.ReactElement {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--vdms-text-muted)' }}>
           Your recent sign-in and sign-out activity for this application.
         </p>
         <button
           onClick={() => void loadAuditLog()}
           disabled={loading}
-          style={{
-            border: '1px solid #e2e8f0', background: '#fff', color: '#334155', fontSize: 12, fontWeight: 600,
-            padding: '6px 12px', borderRadius: 6, cursor: loading ? 'default' : 'pointer',
-          }}
+          style={dmsBtn('secondary', !loading)}
         >
-          {loading ? 'Refreshing…' : '⟳ Refresh'}
+          {loading ? 'Refreshing…' : <><Icon iconName="Refresh" aria-hidden="true" style={{ fontSize: 12 }} /> Refresh</>}
         </button>
       </div>
 
       {err && (
-        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: 12, borderRadius: 6, padding: '8px 12px', marginBottom: 12 }}>
+        <div style={{ background: clay.pillDangerBg, border: '1px solid var(--vdms-line)', color: clay.pillDangerText, fontSize: 12, borderRadius: 6, padding: '8px 12px', marginBottom: 12 }}>
           {err}
         </div>
       )}
 
       {loading && entries.length === 0 && !err ? (
-        <div style={{ color: '#94a3b8', fontSize: 13, padding: '24px 0', textAlign: 'center' }}>Loading audit log…</div>
+        <div style={{ color: 'var(--vdms-text-faint)', fontSize: 13, padding: '24px 0', textAlign: 'center' }}>Loading audit log…</div>
       ) : entries.length === 0 && !err ? (
-        <div style={{ color: '#94a3b8', fontSize: 13, padding: '24px 0', textAlign: 'center' }}>
+        <div style={{ color: 'var(--vdms-text-faint)', fontSize: 13, padding: '24px 0', textAlign: 'center' }}>
           No audit log entries yet. Sign-in / sign-out activity will appear here as it happens.
         </div>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+        <div style={{ ...DMS_TABLE_CARD, overflowX: 'auto' }}>
+          <table style={DMS_TABLE}>
             <thead>
-              <tr style={{ borderBottom: '2px solid #e2e8f0', textTransform: 'uppercase', fontSize: 10.5, color: '#64748b', textAlign: 'left', letterSpacing: '0.04em' }}>
-                <th style={{ padding: '8px 10px' }}>Event</th>
-                <th style={{ padding: '8px 10px' }}>Detail</th>
-                <th style={{ padding: '8px 10px' }}>Status</th>
-                <th style={{ padding: '8px 10px' }}>IP Address</th>
-                <th style={{ padding: '8px 10px' }}>Browser</th>
-                <th style={{ padding: '8px 10px' }}>Login Time</th>
-                <th style={{ padding: '8px 10px' }}>Logout Time</th>
-                <th style={{ padding: '8px 10px' }}>Duration</th>
+              <tr>
+                <th style={DMS_TH}>Event</th>
+                <th style={DMS_TH}>Detail</th>
+                <th style={DMS_TH}>Status</th>
+                <th style={DMS_TH}>IP Address</th>
+                <th style={DMS_TH}>Browser</th>
+                <th style={DMS_TH}>Login Time</th>
+                <th style={DMS_TH}>Logout Time</th>
+                <th style={DMS_TH}>Duration</th>
               </tr>
             </thead>
             <tbody>
               {entries.map((e, idx) => (
-                <tr key={e.session_id ? `${e.session_id}-${idx}` : idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: '8px 10px', fontWeight: 600, color: '#1e293b', whiteSpace: 'nowrap' }}>{e.event || '—'}</td>
-                  <td style={{ padding: '8px 10px', color: '#475569' }}>{e.detail || '—'}</td>
-                  <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                <tr key={e.session_id ? `${e.session_id}-${idx}` : idx} style={DMS_TR}>
+                  <td style={DMS_TD_NAME}>{e.event || '—'}</td>
+                  <td style={DMS_TD}>{e.detail || '—'}</td>
+                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>
                     {badge(e.status === 'success' || e.status === 'active' ? 'green' : e.status === 'failed' ? 'red' : 'default', e.status || '—')}
                   </td>
-                  <td style={{ padding: '8px 10px', color: '#475569', whiteSpace: 'nowrap' }}>{e.ip_address || '—'}</td>
-                  <td style={{ padding: '8px 10px', color: '#475569', whiteSpace: 'nowrap', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }} title={e.browser || ''}>{e.browser || '—'}</td>
-                  <td style={{ padding: '8px 10px', color: '#64748b', whiteSpace: 'nowrap' }}>{formatTime(e.login_time)}</td>
-                  <td style={{ padding: '8px 10px', color: '#64748b', whiteSpace: 'nowrap' }}>{formatTime(e.logout_time)}</td>
-                  <td style={{ padding: '8px 10px', color: '#64748b', whiteSpace: 'nowrap' }}>{e.active_duration_formatted || '—'}</td>
+                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>{e.ip_address || '—'}</td>
+                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }} title={e.browser || ''}>{e.browser || '—'}</td>
+                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>{formatTime(e.login_time)}</td>
+                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>{formatTime(e.logout_time)}</td>
+                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>{e.active_duration_formatted || '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SiteIntegrationInfo({ host }: { host: VesselEmail }): React.ReactElement {
-  const [info, setInfo] = React.useState<any>(null);
-  const [adminConfig, setAdminConfig] = React.useState<any>(null);
-  const [loading, setLoading] = React.useState<boolean>(true);
-  const [err, setErr] = React.useState<string | null>(null);
-  const [isAdmin, setIsAdmin] = React.useState<boolean>(false);
-
-  // Default site state
-  const [settingDefaultKey, setSettingDefaultKey] = React.useState<string | null>(null);
-  const [defaultMsg, setDefaultMsg] = React.useState<string | null>(null);
-
-  // Site visibility toggle state
-  const [togglingSiteKey, setTogglingSiteKey] = React.useState<string | null>(null);
-  const [removingSiteKey, setRemovingSiteKey] = React.useState<string | null>(null);
-  const [visibilityMsg, setVisibilityMsg] = React.useState<string | null>(null);
-
-  // Add-site state
-  const [showAddSite, setShowAddSite] = React.useState<boolean>(false);
-  const [addSiteTenantSites, setAddSiteTenantSites] = React.useState<any[]>([]);
-  const [addSiteTenantLoading, setAddSiteTenantLoading] = React.useState<boolean>(false);
-  const [addSiteSearch, setAddSiteSearch] = React.useState<string>('');
-  const [addSiteSelected, setAddSiteSelected] = React.useState<any>(null);
-  const [addSiteDrives, setAddSiteDrives] = React.useState<any[]>([]);
-  const [addSiteDrivesLoading, setAddSiteDrivesLoading] = React.useState<boolean>(false);
-  const [addSiteSelDrive, setAddSiteSelDrive] = React.useState<any>(null);
-  const [addSiteDisplayName, setAddSiteDisplayName] = React.useState<string>('');
-  const [addSiteKey, setAddSiteKey] = React.useState<string>('');
-  const [addSiteSaving, setAddSiteSaving] = React.useState<boolean>(false);
-  const [addSiteMsg, setAddSiteMsg] = React.useState<string | null>(null);
-
-  // Audit changes
-  const [siteChanges, setSiteChanges] = React.useState<any[]>([]);
-  const [showChanges, setShowChanges] = React.useState<boolean>(false);
-
-  // Tenant-site discovery
-  const [tenantSitesLoading, setTenantSitesLoading] = React.useState<boolean>(false);
-  const [siteSearch, setSiteSearch] = React.useState<string>('');
-
-  const loadTenantSites = React.useCallback(async (base: string, headers: any) => {
-    setTenantSitesLoading(true);
-    try {
-      const r = await fetch(`${base}/api/admin/discover-sites`, { headers });
-      const d = await r.json();
-      if (r.ok && Array.isArray(d.sites)) {
-        setAddSiteTenantSites(d.sites);
-      }
-    } catch {
-      // ignore
-    } finally {
-      setTenantSitesLoading(false);
-    }
-  }, []);
-
-  const loadAdminConfig = React.useCallback(async () => {
-    const base = host._base();
-    try {
-      const r = await fetch(`${base}/api/admin/site-configuration?include_hidden=true`, { headers: host._headers() });
-      if (r.status === 403) { setIsAdmin(false); return; }
-      const d = await r.json();
-      if (d) {
-        setAdminConfig(d);
-        setIsAdmin(true);
-      }
-    } catch {
-      // ignore
-    }
-  }, [host]);
-
-  const loadSiteChanges = React.useCallback(async (): Promise<void> => {
-    try {
-      const response = await fetch(`${host._base()}/api/admin/site-changes?limit=10`, { headers: host._headers() });
-      const data = await response.json();
-      if (response.ok) setSiteChanges(data.changes || []);
-    } catch {
-      // Keep the existing audit list when refresh fails.
-    }
-  }, [host]);
-
-  const handleSetDefaultSite = async (siteKey: string) => {
-    setSettingDefaultKey(siteKey);
-    setDefaultMsg(null);
-    try {
-      const r = await fetch(`${host._base()}/api/admin/set-default-site`, {
-        method: 'POST',
-        headers: { ...host._headers(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ site_name: siteKey }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.detail || 'Failed to set default site');
-      setDefaultMsg(`✓ Successfully set "${d.new_site_name || siteKey}" as the default site.`);
-      setInfo((prev: any) => ({ ...(prev || {}), active_site: d.new_site, site_name: d.new_site_name }));
-      setAdminConfig((prev: any) => prev ? { ...prev, current_site: d.new_site, current_site_name: d.new_site_name } : prev);
-      void Promise.all([host._loadDocumentSites(), host._loadData()]).catch(() => undefined);
-      setTimeout(() => setDefaultMsg(null), 4000);
-    } catch (e: any) {
-      setDefaultMsg(`⚠️ ${e?.message || 'Failed to set default site'}`);
-      setTimeout(() => setDefaultMsg(null), 4000);
-    } finally {
-      setSettingDefaultKey(null);
-    }
-  };
-
-  const handleToggleVisibility = async (siteKey: string, currentIsHidden: boolean) => {
-    setTogglingSiteKey(siteKey);
-    setVisibilityMsg(null);
-    try {
-      const r = await fetch(`${host._base()}/api/admin/site-configurations/${encodeURIComponent(siteKey)}/visibility`, {
-        method: 'PATCH',
-        headers: { ...host._headers(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ is_hidden: !currentIsHidden }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.detail || 'Failed to update visibility');
-      await Promise.all([loadAdminConfig(), loadSiteChanges()]);
-      // Documents/Vessels' own site list, plus the Home dashboard's cached
-      // counts. Deliberately UNforced (no force_refresh): the backend just
-      // reconciled its site list in place when the visibility change above
-      // invalidated the cache, so an unforced read already reflects this
-      // instantly — forcing here would instead make this request itself
-      // wait on a full live rescan of every site (20-30s+), which is the
-      // "stuck for 20-30 seconds" symptom this replaces.
-      void Promise.all([
-        host._loadDocumentSites(),
-        host._loadData(),
-        host._loadDashboardStats(),
-      ]).catch(() => undefined);
-    } catch (e: any) {
-      setVisibilityMsg(`⚠️ ${e?.message || 'Failed to update visibility'}`);
-      setTimeout(() => setVisibilityMsg(null), 4000);
-    } finally {
-      setTogglingSiteKey(null);
-    }
-  };
-
-  const handleRemoveSite = async (siteKey: string, displayName: string): Promise<void> => {
-    if (!window.confirm(`Remove "${displayName}" from the Site Management list? The SharePoint site and its files will not be deleted, but this cannot be undone from here.`)) return;
-    setRemovingSiteKey(siteKey);
-    setVisibilityMsg(null);
-    try {
-      const r = await fetch(`${host._base()}/api/admin/site-configurations/${encodeURIComponent(siteKey)}`, {
-        method: 'DELETE',
-        headers: host._headers(),
-      });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.detail || 'Failed to remove site');
-      await Promise.all([loadAdminConfig(), loadSiteChanges()]);
-      // Unforced — see the matching comment in handleToggleVisibility.
-      void Promise.all([
-        host._loadDocumentSites(),
-        host._loadData(),
-        host._loadDashboardStats(),
-      ]).catch(() => undefined);
-    } catch (e: any) {
-      setVisibilityMsg(`⚠️ ${e?.message || 'Failed to remove site'}`);
-    } finally {
-      setRemovingSiteKey(null);
-    }
-  };
-
-  React.useEffect(() => {
-    const base = host._base();
-    const userEmail = host.props.userEmail;
-
-    // Fetch basic site info
-    fetch(`${base}/api/config/site-info`, { headers: host._headers() })
-      .then(r => r.json())
-      .then(d => setInfo(d))
-      .catch((e: any) => setErr(e?.message || 'Failed to load site information'));
-
-    if (userEmail) {
-      fetch(`${base}/api/admin/site-configuration?include_hidden=true`, { headers: host._headers() })
-        .then(r => {
-          if (r.status === 403) { setIsAdmin(false); setLoading(false); return null; }
-          return r.json();
-        })
-        .then(d => {
-          if (d) {
-            setAdminConfig(d);
-            setIsAdmin(true);
-
-            void loadSiteChanges();
-
-            void loadTenantSites(base, host._headers());
-          }
-          setLoading(false);
-        })
-        .catch(() => { setIsAdmin(false); setLoading(false); });
-    } else {
-      setLoading(false);
-    }
-  }, [host, host.props.userEmail, loadTenantSites, loadSiteChanges]);
-
-  const filteredConfiguredSites = (adminConfig?.available_sites || []).filter((s: any) => {
-    const q = siteSearch.toLowerCase();
-    return !q || `${s.display_name} ${s.name}`.toLowerCase().includes(q);
-  });
-
-  if (loading) return <div style={{ color: '#64748b', fontSize: 13 }}>Loading site configuration...</div>;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, width: '100%' }}>
-      <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 16, width: '100%', boxSizing: 'border-box' }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span>🌐</span> Default Site: {info?.site_name || info?.active_site}
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '170px minmax(0, 1fr)', columnGap: 16, rowGap: 8, fontSize: 12, width: '100%' }}>
-          <span style={{ fontWeight: 600, color: '#64748b' }}>Site Key:</span>
-          <span style={{ fontFamily: 'monospace', color: '#0f172a', fontWeight: 700, wordBreak: 'break-word' }}>{info?.active_site}</span>
-
-          <span style={{ fontWeight: 600, color: '#64748b' }}>Database:</span>
-          <span style={{ fontFamily: 'monospace', color: info?.db_configured ? '#15803d' : '#b45309', fontWeight: 600 }}>
-            {info?.db_name || (info?.db_configured ? 'Connected' : 'In-Memory Stub')}
-          </span>
-
-          <span style={{ fontWeight: 600, color: '#64748b' }}>SharePoint Status:</span>
-          <span style={{ color: info?.sp_configured ? '#15803d' : '#64748b', fontWeight: 600 }}>
-            {info?.sp_configured ? '✅ Configured' : '⚪ Stub / Local Mode'}
-          </span>
-
-          <span style={{ fontWeight: 600, color: '#64748b' }}>Drive ID:</span>
-          <span style={{ fontFamily: 'monospace', color: '#475569', fontSize: 11, wordBreak: 'break-all' }}>
-            {info?.drive_id || '—'}
-          </span>
-
-          <span style={{ fontWeight: 600, color: '#64748b' }}>Backend Mode:</span>
-          <span style={{ color: '#0284c7', fontWeight: 600 }}>{info?.mode}</span>
-        </div>
-      </div>
-
-      {isAdmin && adminConfig && (
-        <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: '#166534', marginBottom: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span>👤 Configured SharePoint Sites & Default Site</span>
-            <button
-              onClick={() => {
-                void loadAdminConfig();
-                void loadTenantSites(host._base(), host._headers());
-              }}
-              disabled={tenantSitesLoading}
-              title="Refresh all tenant and configured sites"
-              style={{ padding: '4px 10px', background: '#0284c7', color: '#fff', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: tenantSitesLoading ? 'wait' : 'pointer' }}
-            >
-              {tenantSitesLoading ? '⏳ Loading…' : '🔄 Refresh Sites'}
-            </button>
-          </div>
-          <p style={{ margin: '0 0 10px', fontSize: 12, color: '#166534', lineHeight: 1.5 }}>
-            Select the default site and manage site visibility. Hiding a site removes it from Sites, Documents, and Vessel Management modules. Hidden sites remain disabled here until you click Unhide.
-          </p>
-
-          {/* Search filter */}
-          <input
-            value={siteSearch}
-            onChange={e => setSiteSearch(e.target.value)}
-            placeholder="🔍 Search site by name or URL…"
-            style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid #bbf7d0', borderRadius: 6, fontSize: 12, marginBottom: 8, outline: 'none' }}
-          />
-
-          {defaultMsg && (
-            <div style={{ background: defaultMsg.startsWith('✓') ? '#dcfce7' : '#fee2e2', border: `1px solid ${defaultMsg.startsWith('✓') ? '#86efac' : '#fca5a5'}`, color: defaultMsg.startsWith('✓') ? '#166534' : '#991b1b', borderRadius: 6, padding: '6px 10px', fontSize: 12, marginBottom: 8 }}>
-              {defaultMsg}
-            </div>
-          )}
-
-          {visibilityMsg && (
-            <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', borderRadius: 6, padding: '6px 10px', fontSize: 12, marginBottom: 8 }}>
-              {visibilityMsg}
-            </div>
-          )}
-
-          {/* ── Configured Sites card list ── */}
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: '#166534' }}>Configured Sites:</label>
-              <span style={{ fontSize: 11, color: '#64748b' }}>Hidden sites remain listed here for unhide.</span>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {filteredConfiguredSites.map((site: any) => {
-                const isCurrent = site.name === adminConfig.current_site;
-                const isHidden = !!site.is_hidden;
-                const isToggling = togglingSiteKey === site.name;
-                const isSettingDefault = settingDefaultKey === site.name;
-                const isRemoving = removingSiteKey === site.name;
-
-                return (
-                  <div
-                    key={`cfg-${site.name}`}
-                    style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      padding: '8px 12px', borderRadius: 8,
-                      border: `1px solid ${isCurrent ? '#86efac' : isHidden ? '#cbd5e1' : '#d1fae5'}`,
-                      background: isCurrent ? '#dcfce7' : isHidden ? '#f8fafc' : '#f0fdf4',
-                      opacity: isHidden && !isCurrent ? 0.65 : 1,
-                      transition: 'all 0.15s',
-                    }}
-                  >
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <span style={{ fontSize: 13, fontWeight: 600, color: isHidden ? '#64748b' : '#166534' }}>
-                          {site.display_name || site.name}
-                        </span>
-                        {isCurrent && (
-                          <span style={{ fontSize: 10, fontWeight: 700, background: '#16a34a', color: '#fff', padding: '2px 7px', borderRadius: 8 }}>
-                            ★ DEFAULT
-                          </span>
-                        )}
-                        {isHidden && (
-                          <span style={{ fontSize: 10, fontWeight: 700, background: '#e2e8f0', color: '#475569', padding: '2px 7px', borderRadius: 8 }}>
-                            HIDDEN
-                          </span>
-                        )}
-                      </div>
-                      <span style={{ display: 'block', fontSize: 10, color: '#64748b', fontFamily: 'monospace', marginTop: 2 }}>
-                        {site.name}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                      {/* Set as Default button */}
-                      {!isCurrent && !isHidden && (
-                        <button
-                          onClick={() => handleSetDefaultSite(site.name)}
-                          disabled={isSettingDefault || isToggling}
-                          title="Set this site as the default site"
-                          style={{
-                            padding: '4px 10px',
-                            background: isSettingDefault ? '#93c5fd' : '#0284c7',
-                            color: '#fff',
-                            border: 'none',
-                            borderRadius: 5,
-                            fontSize: 11,
-                            fontWeight: 600,
-                            cursor: isSettingDefault ? 'wait' : 'pointer',
-                          }}
-                        >
-                          {isSettingDefault ? '⏳ Setting…' : '★ Set as Default'}
-                        </button>
-                      )}
-                      {/* Hidden rows stay visible here, but are disabled everywhere else. */}
-                      {isHidden && (
-                        <button
-                          type="button"
-                          disabled
-                          style={{
-                            padding: '4px 10px', background: '#e2e8f0', color: '#64748b',
-                            border: '1px solid #cbd5e1', borderRadius: 5, fontSize: 11,
-                            fontWeight: 600, cursor: 'not-allowed',
-                          }}
-                        >
-                          HIDDEN
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleToggleVisibility(site.name, isHidden)}
-                        disabled={isCurrent || isToggling || (!isHidden && isCurrent)}
-                        title={
-                          isCurrent
-                            ? 'The default site cannot be hidden. Set another site as default first.'
-                            : isHidden ? 'Make this site visible across all modules' : 'Hide this site from Sites, Documents, and Vessel Management'
-                        }
-                        style={{
-                          padding: '4px 10px',
-                          background: isHidden ? '#eff6ff' : isCurrent ? '#f1f5f9' : '#fff',
-                          color: isHidden ? '#1d4ed8' : isCurrent ? '#94a3b8' : '#475569',
-                          border: `1px solid ${isHidden ? '#bfdbfe' : isCurrent ? '#e2e8f0' : '#cbd5e1'}`,
-                          borderRadius: 5,
-                          fontSize: 11,
-                          fontWeight: 600,
-                          cursor: isCurrent ? 'not-allowed' : isToggling ? 'wait' : 'pointer',
-                        }}
-                      >
-                        {isToggling ? '⏳…' : isHidden ? 'Unhide' : 'Hide'}
-                      </button>
-                      {/* Shown for every configured site, not just ones added via
-                          "Add New Site" — an .env-discovered site (e.g. local/dev/prod)
-                          has no DB row until it's removed or hidden, but it should
-                          still be removable. */}
-                      <button
-                        type="button"
-                        onClick={() => void handleRemoveSite(site.name, site.display_name || site.name)}
-                        disabled={isCurrent || isToggling || isRemoving}
-                        title={isCurrent ? 'Switch to a different site before removing this registration.' : 'Permanently remove this site from the Site Management list'}
-                        style={{
-                          padding: '4px 10px', background: '#fff', color: isCurrent ? '#94a3b8' : '#b91c1c',
-                          border: `1px solid ${isCurrent ? '#e2e8f0' : '#fecaca'}`, borderRadius: 5,
-                          fontSize: 11, fontWeight: 600, cursor: isCurrent ? 'not-allowed' : isRemoving ? 'wait' : 'pointer',
-                        }}
-                      >
-                        {isRemoving ? '⏳ Removing…' : 'Remove'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-              {filteredConfiguredSites.length === 0 && (
-                <div style={{ fontSize: 12, color: '#64748b', padding: '8px 0' }}>
-                  No configured sites match your search.
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* ── Add New Site section ── */}
-          <div style={{ marginBottom: 12, border: '1px solid #d1fae5', borderRadius: 8, overflow: 'hidden' }}>
-            <button
-              onClick={async () => {
-                const next = !showAddSite;
-                setShowAddSite(next);
-                if (next && addSiteTenantSites.length === 0) {
-                  setAddSiteTenantLoading(true);
-                  try {
-                    const r = await fetch(`${host._base()}/api/admin/discover-sites`, { headers: host._headers() });
-                    const d = await r.json();
-                    setAddSiteTenantSites(d.sites || []);
-                  } catch { /* ignore */ } finally { setAddSiteTenantLoading(false); }
-                }
-              }}
-              style={{ width: '100%', padding: '9px 14px', background: '#f0fdf4', border: 'none', color: '#166534', fontSize: 12, fontWeight: 700, cursor: 'pointer', textAlign: 'left' }}
-            >
-              {showAddSite ? '✕ Cancel Add Site' : '➕ Add New Site'}
-            </button>
-            {showAddSite && (
-              <div style={{ padding: 14, background: '#fff' }}>
-                <div style={{ fontSize: 12, color: '#475569', marginBottom: 10 }}>Search and select a SharePoint site to register as a new configured site.</div>
-                <input
-                  value={addSiteSearch}
-                  onChange={e => setAddSiteSearch(e.target.value)}
-                  placeholder="🔍 Search tenant sites…"
-                  style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid #e2e8f0', borderRadius: 6, fontSize: 12, marginBottom: 8, outline: 'none' }}
-                />
-                {addSiteTenantLoading && <div style={{ fontSize: 12, color: '#64748b', marginBottom: 8 }}>⏳ Loading tenant sites…</div>}
-                <div style={{ maxHeight: 160, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 6, marginBottom: 10 }}>
-                  {addSiteTenantSites
-                    .filter(s => !addSiteSearch || `${s.name} ${s.web_url}`.toLowerCase().includes(addSiteSearch.toLowerCase()))
-                    .map(ts => (
-                      <button
-                        key={ts.id}
-                        onClick={async () => {
-                          setAddSiteSelected(ts);
-                          setAddSiteSelDrive(null);
-                          setAddSiteDrives([]);
-                          setAddSiteDisplayName(ts.name || '');
-                          const rawKey = (ts.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-                          setAddSiteKey(rawKey);
-                          setAddSiteDrivesLoading(true);
-                          try {
-                            const r = await fetch(`${host._base()}/api/admin/discover-sites/${encodeURIComponent(ts.id)}/drives`, { headers: host._headers() });
-                            const d = await r.json();
-                            const drives = r.ok ? (d.drives || []) : [];
-                            setAddSiteDrives(drives);
-                            if (drives.length === 1) setAddSiteSelDrive(drives[0]);
-                          } catch { setAddSiteDrives([]); } finally { setAddSiteDrivesLoading(false); }
-                        }}
-                        style={{
-                          display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px',
-                          border: 0, borderBottom: '1px solid #f1f5f9',
-                          background: addSiteSelected?.id === ts.id ? '#eff6ff' : '#fff',
-                          cursor: 'pointer', fontSize: 12, color: '#0f172a',
-                        }}
-                      >
-                        <strong>{ts.name}</strong>
-                        <span style={{ display: 'block', fontSize: 10, color: '#64748b' }}>{ts.web_url}</span>
-                      </button>
-                    ))}
-                </div>
-
-                {/* Drive picker */}
-                {addSiteSelected && (
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: '#0f172a', marginBottom: 6 }}>Document Library:</div>
-                    {addSiteDrivesLoading && <div style={{ fontSize: 11, color: '#64748b' }}>Loading libraries…</div>}
-                    {!addSiteDrivesLoading && addSiteDrives.map(drv => (
-                      <button
-                        key={drv.id}
-                        onClick={() => setAddSiteSelDrive(drv)}
-                        style={{
-                          display: 'block', width: '100%', textAlign: 'left', padding: '7px 10px', marginBottom: 4,
-                          border: `1px solid ${addSiteSelDrive?.id === drv.id ? '#16a34a' : '#e2e8f0'}`,
-                          borderRadius: 5, background: addSiteSelDrive?.id === drv.id ? '#dcfce7' : '#fff',
-                          cursor: 'pointer', fontSize: 11,
-                        }}
-                      >
-                        <strong>{drv.name}</strong>
-                        <span style={{ display: 'block', fontSize: 10, color: '#64748b' }}>{drv.drive_type}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {/* Display name + site key inputs */}
-                {addSiteSelected && addSiteSelDrive && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
-                    <input
-                      value={addSiteDisplayName}
-                      onChange={e => setAddSiteDisplayName(e.target.value)}
-                      placeholder="Display Name (e.g. Vessel Mgmt - Production)"
-                      style={{ padding: '7px 10px', border: '1px solid #cbd5e1', borderRadius: 6, fontSize: 12, outline: 'none' }}
-                    />
-                    <input
-                      value={addSiteKey}
-                      onChange={e => setAddSiteKey(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ''))}
-                      placeholder="Internal site key (e.g. vessel_prod)"
-                      style={{ padding: '7px 10px', border: '1px solid #cbd5e1', borderRadius: 6, fontSize: 12, fontFamily: 'monospace', outline: 'none' }}
-                    />
-                  </div>
-                )}
-
-                {addSiteMsg && (
-                  <div style={{ background: addSiteMsg.startsWith('✓') ? '#dcfce7' : '#fee2e2', border: `1px solid ${addSiteMsg.startsWith('✓') ? '#86efac' : '#fca5a5'}`, color: addSiteMsg.startsWith('✓') ? '#166534' : '#991b1b', borderRadius: 6, padding: '6px 10px', fontSize: 12, marginBottom: 8 }}>
-                    {addSiteMsg}
-                  </div>
-                )}
-
-                <button
-                  disabled={!addSiteSelected || !addSiteSelDrive || !addSiteDisplayName.trim() || !addSiteKey.trim() || addSiteSaving}
-                  onClick={async () => {
-                    if (!addSiteSelected || !addSiteSelDrive || !addSiteDisplayName.trim() || !addSiteKey.trim()) return;
-                    setAddSiteSaving(true);
-                    setAddSiteMsg(null);
-                    try {
-                      const r = await fetch(`${host._base()}/api/admin/site-configurations`, {
-                        method: 'POST',
-                        headers: { ...host._headers(), 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          site_key: addSiteKey.trim(),
-                          display_name: addSiteDisplayName.trim(),
-                          site_name: addSiteSelected.name,
-                          site_id: addSiteSelected.id,
-                          drive_id: addSiteSelDrive.id,
-                        }),
-                      });
-                      const d = await r.json();
-                      if (!r.ok) throw new Error(d.detail || 'Failed to save site');
-                      setAddSiteMsg(`✓ Site "${addSiteDisplayName.trim()}" registered successfully.`);
-                      // Refresh the configured-sites list, and the Home
-                      // dashboard's cached counts. Deliberately UNforced: the
-                      // backend already reconciled the new site into the
-                      // dashboard's site list the instant the save above
-                      // invalidated the cache (see
-                      // invalidate_dashboard_stats_cache), so it appears
-                      // immediately with placeholder counts while its real
-                      // scan runs in the background — forcing here would
-                      // instead make this request block on a full live
-                      // rescan of every site before the new one even shows up.
-                      await Promise.all([loadAdminConfig(), loadSiteChanges()]);
-                      void host._loadDocumentSites();
-                      void host._loadDashboardStats().catch(() => undefined);
-                      // Reset add-site form
-                      setTimeout(() => {
-                        setShowAddSite(false);
-                        setAddSiteSelected(null); setAddSiteSelDrive(null);
-                        setAddSiteDrives([]); setAddSiteDisplayName(''); setAddSiteKey('');
-                        setAddSiteMsg(null); setAddSiteSearch('');
-                      }, 2000);
-                    } catch (e: any) {
-                      setAddSiteMsg(`⚠️ ${e?.message || 'Failed to save'}`);
-                    } finally {
-                      setAddSiteSaving(false);
-                    }
-                  }}
-                  style={{
-                    padding: '8px 16px',
-                    background: (!addSiteSelected || !addSiteSelDrive || !addSiteDisplayName.trim() || !addSiteKey.trim() || addSiteSaving) ? '#cbd5e1' : '#16a34a',
-                    color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600,
-                    cursor: addSiteSaving ? 'wait' : 'pointer',
-                  }}
-                >
-                  {addSiteSaving ? '⏳ Saving…' : '✅ Save & Register Site'}
-                </button>
-              </div>
-            )}
-          </div>
-
-          {showChanges && siteChanges.length > 0 && (
-            <div style={{ marginTop: 16, borderTop: '1px solid #bbf7d0', paddingTop: 12 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#166534', marginBottom: 8 }}>Recent Changes:</div>
-              <div style={{ maxHeight: 200, overflowY: 'auto', fontSize: 11, color: '#166534' }}>
-                {siteChanges.map((change: any) => (
-                  <div key={change.id} style={{ padding: '6px 0', borderBottom: '1px solid #dcfce7' }}>
-                    <div>
-                      <strong>
-                        {change.action === 'hidden' ? 'Hidden' : change.action === 'unhidden' ? 'Unhidden' : change.action === 'removed' ? 'Removed' : `${change.previous_site} → ${change.new_site}`}
-                      </strong>
-                      {change.action && change.action !== 'success' ? ` ${change.new_site_name || change.new_site}` : ` (${change.status})`}
-                      {change.action && change.action !== 'success' && <span> ({change.status})</span>}
-                    </div>
-                    <div style={{ fontSize: 10, color: '#15803d' }}>
-                      {change.changed_by_email} • {new Date(change.created_at).toLocaleString()}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {siteChanges.length > 0 && (
-            <button
-              onClick={() => setShowChanges(!showChanges)}
-              style={{ marginTop: 8, background: 'transparent', border: 'none', color: '#166534', fontSize: 11, fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
-            >
-              {showChanges ? '▼ Hide' : '▶ Show'} Recent Changes
-            </button>
-          )}
-        </div>
-      )}
-
-      {err && (
-        <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 6, padding: 12, fontSize: 12, color: '#991b1b' }}>
-          ⚠️ {err}
         </div>
       )}
     </div>
@@ -974,73 +451,64 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Intro banner */}
-      <div style={{ background: '#f0f9ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: 14 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#1e40af', marginBottom: 4 }}>
+      <div style={{ background: clay.accentSoft, border: '1px solid var(--vdms-line)', borderRadius: clay.radiusCard, padding: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: clay.accentDark, marginBottom: 4 }}>
           Multi-Site Vessel Provisioning & DMS Folder Structure
         </div>
-        <div style={{ fontSize: 12, color: '#1e3a8a', lineHeight: 1.5 }}>
+        <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', lineHeight: 1.5 }}>
           Control which connected SharePoint sites are available for vessel DMS folder structures. Adding sites to an existing vessel creates standard folders on the newly selected site only, preserving existing sites intact.
         </div>
-        <div style={{ marginTop: 8, fontSize: 11, color: '#475569' }}>
+        <div style={{ marginTop: 8, fontSize: 11, color: 'var(--vdms-text-muted)' }}>
           <strong>Note:</strong> File uploads reside inside the targeted site document library and do not replicate files across sites.
         </div>
         <div style={{ marginTop: 10, display: 'flex', justifyContent: 'flex-start' }}>
         </div>
       </div>
 
-      {siteMsg && <div style={{ background: '#dcfce7', border: '1px solid #86efac', color: '#15803d', padding: '10px 14px', borderRadius: 8, fontSize: 13 }}>{siteMsg}</div>}
-      {siteErr && <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#b91c1c', padding: '10px 14px', borderRadius: 8, fontSize: 13 }}>{siteErr}</div>}
+      {siteMsg && <div style={{ background: clay.pillActiveBg, border: '1px solid var(--vdms-line)', color: clay.pillActiveText, padding: '10px 14px', borderRadius: 8, fontSize: 13 }}>{siteMsg}</div>}
+      {siteErr && <div style={{ background: clay.pillDangerBg, border: '1px solid var(--vdms-line)', color: clay.pillDangerText, padding: '10px 14px', borderRadius: 8, fontSize: 13 }}>{siteErr}</div>}
 
       {/* Section 1: Connected Sites */}
-      <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: 16 }}>
+      <div style={{ background: 'var(--vdms-surface)', border: '1px solid var(--vdms-line)', borderRadius: clay.radiusCard, padding: 16, boxShadow: clay.shadowRaised }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div>
-            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#0f172a' }}>1. Connected Sites & Availability</h4>
-            <span style={{ fontSize: 12, color: '#64748b' }}>Configure which sites can receive vessel folder structures.</span>
+            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: 'var(--vdms-text)' }}>1. Connected Sites & Availability</h4>
+            <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>Configure which sites can receive vessel folder structures.</span>
           </div>
           <button
             onClick={handleSaveSiteSettings}
             disabled={saving || loading}
-            style={{
-              padding: '8px 16px',
-              borderRadius: 6,
-              border: 'none',
-              background: saving ? '#cbd5e1' : '#0078d4',
-              color: '#fff',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: saving ? 'wait' : 'pointer',
-            }}
+            style={dmsBtn('primary', !(saving || loading))}
           >
             {saving ? 'Saving...' : 'Save Site Settings'}
           </button>
         </div>
 
         {loading ? (
-          <div style={{ padding: 20, textAlign: 'center', color: '#64748b', fontSize: 13 }}>Loading sites...</div>
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--vdms-text-muted)', fontSize: 13 }}>Loading sites...</div>
         ) : sites.length === 0 ? (
-          <div style={{ padding: 20, textAlign: 'center', color: '#64748b', fontSize: 13 }}>No connected sites discovered.</div>
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--vdms-text-muted)', fontSize: 13 }}>No connected sites discovered.</div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <div style={{ ...DMS_TABLE_CARD, overflowX: 'auto' }}>
+            <table style={DMS_TABLE}>
               <thead>
-                <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', textAlign: 'left', color: '#475569' }}>
-                  <th style={{ padding: '10px 12px' }}>Site Display Name</th>
-                  <th style={{ padding: '10px 12px' }}>Internal Key</th>
-                  <th style={{ padding: '10px 12px', textAlign: 'center' }}>Available for Provisioning</th>
-                  <th style={{ padding: '10px 12px', textAlign: 'center' }}>Default for New Vessels</th>
+                <tr>
+                  <th style={DMS_TH}>Site Display Name</th>
+                  <th style={DMS_TH}>Internal Key</th>
+                  <th style={{ ...DMS_TH, textAlign: 'center' }}>Available for Provisioning</th>
+                  <th style={{ ...DMS_TH, textAlign: 'center' }}>Default for New Vessels</th>
                 </tr>
               </thead>
               <tbody>
                 {sites.filter(s => !s.is_hidden).map(s => (
-                  <tr key={s.site_key} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                    <td style={{ padding: '10px 12px', fontWeight: 600, color: '#0f172a' }}>
+                  <tr key={s.site_key} style={DMS_TR}>
+                    <td style={DMS_TD_NAME}>
                       {s.display_name}
                     </td>
-                    <td style={{ padding: '10px 12px', color: '#64748b' }}>
-                      <code style={{ background: '#f1f5f9', padding: '2px 6px', borderRadius: 4, fontSize: 11 }}>{s.site_key}</code>
+                    <td style={DMS_TD}>
+                      <code style={{ background: 'var(--vdms-surface-alt)', padding: '2px 6px', borderRadius: 4, fontSize: 11 }}>{s.site_key}</code>
                     </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                    <td style={{ ...DMS_TD, textAlign: 'center' }}>
                       <input
                         type="checkbox"
                         checked={s.is_available_for_provisioning}
@@ -1048,10 +516,10 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
                           const checked = e.target.checked;
                           setSites(sites.map(item => item.site_key === s.site_key ? { ...item, is_available_for_provisioning: checked } : item));
                         }}
-                        style={{ width: 16, height: 16, cursor: 'pointer', accentColor: '#0078d4' }}
+                        style={{ width: 16, height: 16, cursor: 'pointer', accentColor: clay.accent }}
                       />
                     </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                    <td style={{ ...DMS_TD, textAlign: 'center' }}>
                       <input
                         type="checkbox"
                         disabled={!s.is_available_for_provisioning}
@@ -1060,7 +528,7 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
                           const checked = e.target.checked;
                           setSites(sites.map(item => item.site_key === s.site_key ? { ...item, is_default_provisioning: checked } : item));
                         }}
-                        style={{ width: 16, height: 16, cursor: s.is_available_for_provisioning ? 'pointer' : 'default', accentColor: '#0078d4' }}
+                        style={{ width: 16, height: 16, cursor: s.is_available_for_provisioning ? 'pointer' : 'default', accentColor: clay.accent }}
                       />
                     </td>
                   </tr>
@@ -1072,51 +540,51 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
       </div>
 
       {/* Section 2: Vessel Provisioning Status */}
-      <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: 16 }}>
+      <div style={{ background: 'var(--vdms-surface)', border: '1px solid var(--vdms-line)', borderRadius: clay.radiusCard, padding: 16, boxShadow: clay.shadowRaised }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <div>
-            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#0f172a' }}>2. Vessel Site Allocation & Status</h4>
-            <span style={{ fontSize: 12, color: '#64748b' }}>View provisioned sites per vessel and trigger provisioning for newly added sites.</span>
+            <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: 'var(--vdms-text)' }}>2. Vessel Site Allocation & Status</h4>
+            <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>View provisioned sites per vessel and trigger provisioning for newly added sites.</span>
           </div>
           <input
             type="text"
             value={vesselSearch}
             onChange={e => setVesselSearch(e.target.value)}
             placeholder="Search vessels by name or IMO..."
-            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 12, width: 220 }}
+            style={{ ...dmsControlStyle(), width: 220 }}
           />
         </div>
 
-        <div style={{ maxHeight: 380, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <div style={{ maxHeight: 380, overflowY: 'auto', border: '1px solid var(--vdms-line)', borderRadius: 8 }}>
+          <table style={DMS_TABLE}>
             <thead>
-              <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', textAlign: 'left', color: '#475569', position: 'sticky', top: 0, zIndex: 1 }}>
-                <th style={{ padding: '10px 12px' }}>Vessel</th>
-                <th style={{ padding: '10px 12px' }}>IMO</th>
-                <th style={{ padding: '10px 12px' }}>Provisioned Sites</th>
-                <th style={{ padding: '10px 12px', textAlign: 'right' }}>Actions</th>
+              <tr style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+                <th style={DMS_TH}>Vessel</th>
+                <th style={DMS_TH}>IMO</th>
+                <th style={DMS_TH}>Provisioned Sites</th>
+                <th style={{ ...DMS_TH, textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {filteredVessels.length === 0 ? (
                 <tr>
-                  <td colSpan={4} style={{ padding: 20, textAlign: 'center', color: '#64748b' }}>No vessels match your search.</td>
+                  <td colSpan={4} style={{ padding: 20, textAlign: 'center', color: 'var(--vdms-text-muted)' }}>No vessels match your search.</td>
                 </tr>
               ) : (
                 filteredVessels.map(v => {
                   const provSites = v.provisioned_site_ids || [];
                   return (
-                    <tr key={v.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      <td style={{ padding: '10px 12px', fontWeight: 600, color: '#0f172a' }}>
-                        🚢 {v.name}
+                    <tr key={v.id} style={DMS_TR}>
+                      <td style={DMS_TD_NAME}>
+                        <Icon iconName="Ferry" aria-hidden="true" style={{ fontSize: 13 }} /> {v.name}
                       </td>
-                      <td style={{ padding: '10px 12px', color: '#64748b' }}>
+                      <td style={DMS_TD}>
                         {v.imo || '—'}
                       </td>
-                      <td style={{ padding: '10px 12px' }}>
+                      <td style={DMS_TD}>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                           {provSites.length === 0 ? (
-                            <span style={{ fontSize: 11, background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: 10 }}>
+                            <span style={{ fontSize: 11, background: clay.pillWarnBg, color: clay.pillWarnText, padding: '2px 8px', borderRadius: 10 }}>
                               Default site only
                             </span>
                           ) : (
@@ -1126,8 +594,8 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
                                 style={{
                                   fontSize: 11,
                                   fontWeight: 600,
-                                  background: '#dcfce7',
-                                  color: '#15803d',
+                                  background: clay.pillActiveBg,
+                                  color: clay.pillActiveText,
                                   padding: '2px 8px',
                                   borderRadius: 10,
                                   display: 'inline-flex',
@@ -1135,26 +603,17 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
                                   gap: 4,
                                 }}
                               >
-                                <span>✅</span>
+                                <span><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 11 }} /></span>
                                 {siteNameMap[sk] || sk}
                               </span>
                             ))
                           )}
                         </div>
                       </td>
-                      <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                      <td style={{ ...DMS_TD, textAlign: 'right' }}>
                         <button
                           onClick={() => handleOpenVesselModal(v)}
-                          style={{
-                            padding: '5px 12px',
-                            borderRadius: 6,
-                            border: '1px solid #cbd5e1',
-                            background: '#fff',
-                            color: '#0f172a',
-                            fontSize: 11,
-                            fontWeight: 600,
-                            cursor: 'pointer',
-                          }}
+                          style={dmsRowBtn('plain')}
                         >
                           Manage Sites
                         </button>
@@ -1174,26 +633,26 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
           style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}
           onClick={e => { if (e.target === e.currentTarget && !provisioning) setSelectedVessel(null); }}
         >
-          <div style={{ background: '#fff', borderRadius: 16, padding: 24, width: 480, maxWidth: '95vw', boxShadow: '0 20px 50px rgba(0,0,0,0.25)' }}>
+          <div style={{ background: 'var(--vdms-surface)', borderRadius: 16, padding: 24, width: 480, maxWidth: '95vw', boxShadow: clay.shadowRaised, border: '1px solid var(--vdms-line)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <div>
-                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0f172a' }}>
+                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'var(--vdms-text)' }}>
                   Manage Sites: {selectedVessel.name}
                 </h3>
-                <span style={{ fontSize: 12, color: '#64748b' }}>IMO: {selectedVessel.imo || '—'}</span>
+                <span style={{ fontSize: 12, color: 'var(--vdms-text-muted)' }}>IMO: {selectedVessel.imo || '—'}</span>
               </div>
               {!provisioning && (
                 <button
                   onClick={() => setSelectedVessel(null)}
-                  style={{ background: 'none', border: 'none', fontSize: 18, color: '#94a3b8', cursor: 'pointer' }}
-                >✕</button>
+                  style={{ background: 'none', border: 'none', fontSize: 18, color: 'var(--vdms-text-faint)', cursor: 'pointer' }}
+                ><Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 18 }} /></button>
               )}
             </div>
 
-            {provMsg && <div style={{ background: '#dcfce7', border: '1px solid #86efac', color: '#15803d', padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 }}>{provMsg}</div>}
-            {provErr && <div style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#b91c1c', padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 }}>{provErr}</div>}
+            {provMsg && <div style={{ background: clay.pillActiveBg, border: '1px solid var(--vdms-line)', color: clay.pillActiveText, padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 }}>{provMsg}</div>}
+            {provErr && <div style={{ background: clay.pillDangerBg, border: '1px solid var(--vdms-line)', color: clay.pillDangerText, padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 }}>{provErr}</div>}
 
-            <div style={{ fontSize: 12, color: '#475569', marginBottom: 12, lineHeight: 1.4 }}>
+            <div style={{ fontSize: 12, color: 'var(--vdms-text-muted)', marginBottom: 12, lineHeight: 1.4 }}>
               Select additional sites to provision the DMS folder tree. Already provisioned sites will not be recreated.
             </div>
 
@@ -1211,8 +670,8 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
                       justifyContent: 'space-between',
                       padding: '10px 12px',
                       borderRadius: 8,
-                      background: isAlreadyProvisioned ? '#f8fafc' : isChecked ? '#eff6ff' : '#fff',
-                      border: `1px solid ${isChecked ? '#93c5fd' : '#e2e8f0'}`,
+                      background: isAlreadyProvisioned ? 'var(--vdms-surface-alt)' : isChecked ? clay.accentSoft : 'var(--vdms-surface)',
+                      border: `1px solid ${isChecked ? clay.accent : 'var(--vdms-line)'}`,
                       cursor: isAlreadyProvisioned ? 'default' : 'pointer',
                     }}
                   >
@@ -1227,24 +686,24 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
                             : targetSiteKeys.filter(k => k !== site.site_key);
                           setTargetSiteKeys(next);
                         }}
-                        style={{ width: 16, height: 16, accentColor: '#0078d4' }}
+                        style={{ width: 16, height: 16, accentColor: clay.accent }}
                       />
                       <div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{site.display_name}</div>
-                        <div style={{ fontSize: 11, color: '#64748b' }}>Key: {site.site_key}</div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--vdms-text)' }}>{site.display_name}</div>
+                        <div style={{ fontSize: 11, color: 'var(--vdms-text-muted)' }}>Key: {site.site_key}</div>
                       </div>
                     </div>
 
                     {isAlreadyProvisioned ? (
-                      <span style={{ fontSize: 11, fontWeight: 700, color: '#15803d', background: '#dcfce7', padding: '2px 8px', borderRadius: 10 }}>
-                        ✅ Provisioned
+                      <span style={{ fontSize: 11, fontWeight: 700, color: clay.pillActiveText, background: clay.pillActiveBg, padding: '2px 8px', borderRadius: 10 }}>
+                        <Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 11 }} /> Provisioned
                       </span>
                     ) : isChecked ? (
-                      <span style={{ fontSize: 11, fontWeight: 600, color: '#1d4ed8', background: '#dbeafe', padding: '2px 8px', borderRadius: 10 }}>
-                        ➕ Will Provision
+                      <span style={{ fontSize: 11, fontWeight: 600, color: clay.accentDark, background: clay.accentSoft, padding: '2px 8px', borderRadius: 10 }}>
+<Icon iconName="Add" aria-hidden="true" style={{ fontSize: 11 }} /> Will Provision
                       </span>
                     ) : (
-                      <span style={{ fontSize: 11, color: '#94a3b8' }}>Not provisioned</span>
+                      <span style={{ fontSize: 11, color: 'var(--vdms-text-faint)' }}>Not provisioned</span>
                     )}
                   </label>
                 );
@@ -1253,13 +712,13 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
 
             {/* Results breakdown if present */}
             {provResults && (
-              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 10, marginBottom: 16, fontSize: 12 }}>
-                <div style={{ fontWeight: 700, marginBottom: 6, color: '#0f172a' }}>Provisioning Results:</div>
+              <div style={{ background: 'var(--vdms-surface-alt)', border: '1px solid var(--vdms-line)', borderRadius: 8, padding: 10, marginBottom: 16, fontSize: 12 }}>
+                <div style={{ fontWeight: 700, marginBottom: 6, color: 'var(--vdms-text)' }}>Provisioning Results:</div>
                 {Object.entries(provResults).map(([sk, res]: [string, any]) => (
                   <div key={sk} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
                     <span>{siteNameMap[sk] || sk}:</span>
-                    <span style={{ color: res.status === 'success' ? '#15803d' : '#b91c1c', fontWeight: 600 }}>
-                      {res.status === 'success' ? '✓ Provisioned' : `✗ Failed: ${res.error || 'Error'}`}
+                    <span style={{ color: res.status === 'success' ? clay.pillActiveText : clay.pillDangerText, fontWeight: 600 }}>
+                      {res.status === 'success' ? <><Icon iconName="CheckMark" aria-hidden="true" style={{ fontSize: 12 }} /> Provisioned</> : <><Icon iconName="ErrorBadge" aria-hidden="true" style={{ fontSize: 12 }} /> Failed: {res.error || 'Error'}</>}
                     </span>
                   </div>
                 ))}
@@ -1270,23 +729,14 @@ function VesselSiteProvisioningPanel({ host }: { host: VesselEmail }): React.Rea
               <button
                 onClick={() => setSelectedVessel(null)}
                 disabled={provisioning}
-                style={{ padding: '8px 16px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', color: '#475569', fontSize: 12, fontWeight: 500, cursor: 'pointer' }}
+                style={dmsBtn('secondary', !provisioning)}
               >
                 Close
               </button>
               <button
                 onClick={handleProvisionSites}
                 disabled={provisioning || targetSiteKeys.filter(k => !(selectedVessel.provisioned_site_ids || []).includes(k)).length === 0}
-                style={{
-                  padding: '8px 18px',
-                  borderRadius: 6,
-                  border: 'none',
-                  background: provisioning || targetSiteKeys.filter(k => !(selectedVessel.provisioned_site_ids || []).includes(k)).length === 0 ? '#cbd5e1' : 'linear-gradient(135deg, #0d9488, #0f766e)',
-                  color: '#fff',
-                  fontSize: 12,
-                  fontWeight: 600,
-                  cursor: provisioning ? 'wait' : 'pointer',
-                }}
+                style={dmsBtn('primary', !(provisioning || targetSiteKeys.filter(k => !(selectedVessel.provisioned_site_ids || []).includes(k)).length === 0))}
               >
                 {provisioning ? 'Provisioning Folders...' : 'Provision Missing Sites'}
               </button>

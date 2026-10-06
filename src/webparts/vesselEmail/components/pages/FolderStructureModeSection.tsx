@@ -1,5 +1,7 @@
 import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
+import { clay } from '../clayTheme';
+import { dmsBtn, dmsControlStyle } from '../dmsDesignSystem';
 
 /**
  * Settings → Vessel Settings → Folder Structure Mode.
@@ -30,24 +32,25 @@ interface PlanItem {
 interface Summary { created_dms: number; created_sp: number; reused: number; custom_kept: number; skipped: number; failed: number; }
 interface RunResult { mode: ModeId; mode_label: string; dry_run: boolean; vessels: string[]; site: SiteInfo; summary: Summary; items: PlanItem[]; }
 
+// Token-backed palette — every value resolves through `clay.*` / `var(--vdms-*)`
+// so this section matches Dashboard's look (and re-themes with it).
 const C = {
-  text: '#0f172a', sub: '#64748b', border: '#e2e8f0', blue: '#0a66d0', blueBg: '#e8f1ff',
-  amberBg: '#fffbeb', amber: '#92400e', redBg: '#fef2f2', red: '#b91c1c', greenBg: '#ecfdf5', green: '#047857',
+  text: 'var(--vdms-text)', sub: 'var(--vdms-text-muted)', border: 'var(--vdms-line)', blue: clay.accent, blueBg: clay.accentSoft,
+  amberBg: clay.pillWarnBg, amber: clay.pillWarnText, redBg: clay.pillDangerBg, red: clay.pillDangerText, greenBg: clay.pillActiveBg, green: clay.pillActiveText,
 };
 
 const OUTCOME_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
   created: { bg: C.greenBg, fg: C.green, label: 'Created' },
   reused: { bg: C.blueBg, fg: C.blue, label: 'Reused' },
-  custom: { bg: '#f5f3ff', fg: '#6d28d9', label: 'Custom kept' },
-  skipped: { bg: '#f1f5f9', fg: '#475569', label: 'Skipped' },
+  custom: { bg: 'var(--vdms-surface-alt)', fg: 'var(--vdms-text-muted)', label: 'Custom kept' },
+  skipped: { bg: 'var(--vdms-surface-alt)', fg: 'var(--vdms-text-muted)', label: 'Skipped' },
   failed: { bg: C.redBg, fg: C.red, label: 'Failed' },
 };
 
-const btn = (primary: boolean, disabled: boolean): React.CSSProperties => ({
-  border: primary ? 'none' : `1px solid ${C.border}`, background: disabled ? '#cbd5e1' : primary ? C.blue : '#fff',
-  color: primary ? '#fff' : C.text, fontSize: 13, fontWeight: 600, padding: '8px 14px', borderRadius: 6,
-  cursor: disabled ? 'not-allowed' : 'pointer',
-});
+// Thin wrapper over the shared `dmsBtn` so every call site below (unchanged)
+// now renders with Dashboard's button spec instead of this section's own.
+const btn = (primary: boolean, disabled: boolean): React.CSSProperties =>
+  dmsBtn(primary ? 'primary' : 'secondary', !disabled);
 
 async function readError(r: Response): Promise<string> {
   try {
@@ -180,7 +183,7 @@ export function FolderStructureModeSection({ host }: { host: VesselEmail }): Rea
         {config.modes.map((m, idx) => (
           <label key={m.id} style={{
             display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 12px', borderRadius: 8, cursor: config.is_admin ? 'pointer' : 'default',
-            border: `1px solid ${mode === m.id ? C.blue : C.border}`, background: mode === m.id ? C.blueBg : '#fff',
+            border: `1px solid ${mode === m.id ? C.blue : C.border}`, background: mode === m.id ? C.blueBg : 'var(--vdms-surface)',
           }}>
             <input type="radio" name="folder-structure-mode" value={m.id} checked={mode === m.id}
               disabled={!config.is_admin} onChange={() => setMode(m.id)} style={{ marginTop: 3 }} />
@@ -207,7 +210,7 @@ export function FolderStructureModeSection({ host }: { host: VesselEmail }): Rea
         <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>Apply to existing vessels</div>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <select value={vesselId} disabled={allVessels || !config.vessels.length} onChange={e => setVesselId(e.target.value)}
-            style={{ minWidth: 280, padding: '7px 8px', borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 13 }}>
+            style={{ ...dmsControlStyle(), minWidth: 280 }}>
             {!config.vessels.length && <option value="">No vessels on this site</option>}
             {config.vessels.map(v => (
               <option key={v.id} value={v.id}>
@@ -268,7 +271,7 @@ export function FolderStructureModeSection({ host }: { host: VesselEmail }): Rea
               ['failed', `Failed ${shown.summary.failed}`],
             ].map(([k, label]) => (
               <button key={k} onClick={() => { setFilter(k); setLimit(300); }} style={{
-                border: `1px solid ${filter === k ? C.blue : C.border}`, background: filter === k ? C.blueBg : '#fff',
+                border: `1px solid ${filter === k ? C.blue : C.border}`, background: filter === k ? C.blueBg : 'var(--vdms-surface)',
                 color: k === 'failed' && shown.summary.failed ? C.red : C.text, fontSize: 12, fontWeight: 600,
                 padding: '5px 10px', borderRadius: 999, cursor: 'pointer',
               }}>{label}</button>
@@ -277,7 +280,7 @@ export function FolderStructureModeSection({ host }: { host: VesselEmail }): Rea
           <div style={{ border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'auto', maxHeight: 460 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
-                <tr style={{ background: '#f8fafc', position: 'sticky', top: 0 }}>
+                <tr style={{ background: 'var(--vdms-surface-alt)', position: 'sticky', top: 0 }}>
                   {['Folder', 'Vessel', 'SharePoint', 'DMS', 'Result', 'Note'].map(h => (
                     <th key={h} style={{ textAlign: 'left', padding: '7px 10px', color: C.sub, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>{h}</th>
                   ))}
@@ -288,7 +291,7 @@ export function FolderStructureModeSection({ host }: { host: VesselEmail }): Rea
                   const st = OUTCOME_STYLE[it.outcome];
                   const depth = Math.max(0, it.path.split('/').length - 1);
                   return (
-                    <tr key={`${it.path}-${i}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <tr key={`${it.path}-${i}`} style={{ borderBottom: '1px solid var(--vdms-border-soft)' }}>
                       <td style={{ padding: '6px 10px', paddingLeft: 10 + depth * 12, color: C.text }} title={it.path}>{it.name}</td>
                       <td style={{ padding: '6px 10px', color: C.sub }}>{it.vessel || 'Common'}</td>
                       <td style={{ padding: '6px 10px', color: C.sub }}>{it.sp}</td>

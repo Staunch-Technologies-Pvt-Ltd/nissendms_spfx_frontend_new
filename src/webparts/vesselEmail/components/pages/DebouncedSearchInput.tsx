@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Icon } from '@fluentui/react/lib/Icon';
 
 /**
  * Debounced search text input shared by DocumentsPage.tsx (both the
@@ -127,7 +128,7 @@ export function DebouncedSearchInput(props: DebouncedSearchInputProps): React.Re
             fontSize: 13, lineHeight: 1, cursor: 'pointer', padding: 2,
           }}
         >
-          ✕
+          <Icon iconName="Cancel" aria-hidden="true" style={{ fontSize: 13 }} />
         </button>
       )}
     </span>
