@@ -151,7 +151,7 @@ export interface S2SSite {
   key: string;
   label: string;
   url?: string;
-  /** "site_management" = added in Sites → Site Management; "allowed_sites" = .env.migration */
+  /** "site_management" = added in Sites → Site Management; "allowed_sites" = MIGRATION_ALLOWED_SITES in backend .env */
   origin?: 'site_management' | 'allowed_sites';
 }
 

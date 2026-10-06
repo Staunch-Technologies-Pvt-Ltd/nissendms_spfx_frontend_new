@@ -15,7 +15,7 @@ usual and the tab works; nothing else to run.
 The web part's **API Base URL** is used. The "Migration API Base URL" property
 is now only an optional override — leave it blank.
 
-Backend configuration (Entra app, sites, destination): `backend/.env.migration`,
+Backend configuration (Entra app, sites, destination): the `MIGRATION_*` keys in `backend/.env`,
 see `backend/migration.env.example` and `backend/app/migration_assistant/README.md`.
 
 ## Files
