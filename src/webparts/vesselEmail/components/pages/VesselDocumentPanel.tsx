@@ -123,18 +123,28 @@ export function VesselDocumentPanel({ host, vesselName, siteKey }: { host: Vesse
     { key: 'drawings', name: 'Drawings', color: clay.accent, icon: 'Design' },
     { key: 'manuals', name: 'Manuals', color: '#7c3aed', icon: 'ReadingMode' },
     { key: 'to_be_classified', name: 'To Be Classified', color: '#d97706', icon: 'Inbox' },
-    { key: 'other', name: 'Other', color: '#94a3b8', icon: 'Page' },
+    { key: 'other', name: 'Other folders', color: '#94a3b8', icon: 'Page' },
   ];
   const shown = groups.filter((g) => (row[g.key] as number) > 0);
 
   return (
     <div style={box}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <span style={label}>Documents</span>
-        <span style={{ fontSize: 11.5, color: 'var(--vdms-text-muted)' }} title={row.last_modified_by ? `Last change by ${row.last_modified_by}` : undefined}>
+        <span style={{ fontSize: 11.5, color: 'var(--vdms-text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+          title={row.last_modified_by ? `Last change by ${row.last_modified_by}` : undefined}>
           Updated {formatWhen(row.last_modified_epoch)} · {formatBytes(row.size_bytes)}
         </span>
       </div>
+      {row.drawings + row.manuals + row.to_be_classified === 0 ? (
+        // Nothing sits in Drawings / Manuals / To Be Classified folders —
+        // e.g. a site that isn't organised that way yet. One line instead
+        // of a column of zeros.
+        <div style={{ fontSize: 12.5, color: 'var(--vdms-text)' }}>
+          <b>{row.total.toLocaleString()}</b> file{row.total === 1 ? '' : 's'}
+          <span style={{ color: 'var(--vdms-text-muted)' }}> — not sorted into Drawings or Manuals yet</span>
+        </div>
+      ) : (<>
       {/* Proportion bar */}
       <div style={{ display: 'flex', height: 6, borderRadius: 999, overflow: 'hidden', background: 'var(--vdms-surface-alt, #eef2f6)' }}>
         {shown.map((g) => (
@@ -155,6 +165,7 @@ export function VesselDocumentPanel({ host, vesselName, siteKey }: { host: Vesse
           );
         })}
       </div>
+      </>)}
     </div>
   );
 }
