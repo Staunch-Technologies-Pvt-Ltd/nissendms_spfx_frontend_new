@@ -2908,11 +2908,15 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // Substring matching on file names (what parseSharePointRowMetadata does)
     // is NOT used here — that is how vessels with no folder on the site, e.g.
     // "Dutches Emerald", leaked into the dropdown.
+    // Comparison key only (never shown). 'l' is folded onto 'i' so a vessel whose
+    // name differs only by the l / capital-I look-alike ("Maersk El Banco" vs
+    // "Maersk EI Banco") is one vessel, not two.
     const normVesselText = (value: string): string => (value || '')
       .toLowerCase()
       .replace(/^(m\/v|mv|mt)[\s.]+/, '')
       .replace(/[^a-z0-9]+/g, ' ')
-      .trim();
+      .trim()
+      .replace(/l/g, 'i');
     const normFolderText = (value: string): string => normVesselText(
       (value || '').replace(/^[\s\d._\-#()[\]]+/, '')
     );
@@ -2921,8 +2925,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       const key = normVesselText(name || '');
       if (key && !vesselCandidateByKey.has(key)) vesselCandidateByKey.set(key, (name || '').trim());
     };
+    // Registered vessels win the display spelling; a Term Store label or an
+    // unregistered folder that spells the same vessel differently maps onto it.
+    const isDiscoveredVessel = (v: VesselRecord): boolean => String((v as any).status || '') === 'Found in SharePoint';
+    (vessels || []).filter(v => !isDiscoveredVessel(v)).forEach(v => addVesselCandidate(v.name));
     liveTermStoreVesselNames.forEach(addVesselCandidate);
-    (vessels || []).forEach(v => addVesselCandidate(v.name));
+    (vessels || []).filter(isDiscoveredVessel).forEach(v => addVesselCandidate(v.name));
     const partialVesselKeys = Array.from(vesselCandidateByKey.keys())
       .filter(key => key.length >= 5)
       .sort((x, y) => y.length - x.length);
@@ -3059,6 +3067,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             if (card.liveFolderId) host._getOrLoadSiteFolderChildren(effectiveLiveSiteId, effectiveLiveDriveId, card.liveFolderId);
           });
         }
+        // The Vessel filter must not depend on which folders happen to have been
+        // opened: index EVERY folder of the library (all depths) so a vessel is
+        // found, and all of its homes are listed, wherever it sits. One backend
+        // call served from the drive folder index, cached for 5 minutes. The
+        // 3-level tree stays as an instant fallback while this one loads.
+        const vesselIndexTree = host._getOrLoadSiteFolderTree(effectiveLiveSiteId, effectiveLiveDriveId, 'root', 8, 12000);
+        (vesselIndexTree?.folders || []).forEach(f => { if (f && f.path) addFolderPath(f.path); });
         (shallowRootTree?.folders || []).forEach(f => { if (f && f.path) addFolderPath(f.path); });
       }
       if (effectiveLiveSiteId && effectiveLiveDriveId) {
@@ -3101,11 +3116,12 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // when the vessel's name already appears as an EARLIER segment of the
     // same path — that's proof this is a sub-folder nested under the
     // vessel's real folder, not an alternate location for it.
-    const isNestedUnderSameVessel = (ancestorSegments: string[], vesselName: string): boolean =>
-      ancestorSegments.some(seg => {
-        const segVessel = matchFolderToVessel(seg);
-        return !!segVessel && vesselNamesEqual(segVessel, vesselName);
-      });
+    // Also true when the path sits inside ANY other vessel's folder: with the
+    // whole library indexed, a folder named like a second vessel deep inside
+    // one vessel's own tree (a filed copy, a mis-nested folder) is not that
+    // second vessel's home either.
+    const isNestedUnderSameVessel = (ancestorSegments: string[], _vesselName: string): boolean =>
+      ancestorSegments.some(seg => !!matchFolderToVessel(seg));
     knownSiteFolderPaths.forEach(path => {
       const segments = path.split('/');
       const vesselName = matchFolderToVessel(segments[segments.length - 1]);
@@ -3238,10 +3254,22 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       if (provisioned.length === 0) return true;
       return isVesselProvisionedToViewedSite(v);
     };
-    (vessels || []).forEach(v => {
-      if (v.name && v.name.trim() && vesselBelongsToViewedSite(v)) allSiteVesselNamesByLower.set(v.name.trim().toLowerCase(), v.name.trim());
+    // Keyed by the comparison key so look-alike spellings collapse to one entry.
+    // Registered vessels first; a folder found in SharePoint only adds an entry when
+    // no registered vessel has that name, and only changes the display spelling when
+    // it differs by letter case alone.
+    (vessels || []).filter(v => !isDiscoveredVessel(v)).forEach(v => {
+      if (v.name && v.name.trim() && vesselBelongsToViewedSite(v)) allSiteVesselNamesByLower.set(normVesselText(v.name), v.name.trim());
     });
-    siteVesselNames.forEach(name => allSiteVesselNamesByLower.set(name.trim().toLowerCase(), name));
+    (vessels || []).filter(isDiscoveredVessel).forEach(v => {
+      const k = normVesselText(v.name || '');
+      if (v.name && v.name.trim() && vesselBelongsToViewedSite(v) && !allSiteVesselNamesByLower.has(k)) allSiteVesselNamesByLower.set(k, v.name.trim());
+    });
+    siteVesselNames.forEach(name => {
+      const k = normVesselText(name);
+      const existing = allSiteVesselNamesByLower.get(k);
+      if (!existing || existing.trim().toLowerCase() === name.trim().toLowerCase()) allSiteVesselNamesByLower.set(k, name);
+    });
     const siteVesselOptions = Array.from(allSiteVesselNamesByLower.values())
       .sort((a, b) => a.localeCompare(b))
       .map(name => ({ id: name, name }));
@@ -4114,7 +4142,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // their options from the rows that pass every OTHER filter:
     //   0 = apply all, 1 = ignore Sub-category, 2 = also ignore Category,
     //   3 = also ignore Group.
-    const passesDocFilters = (r: FlatRow, skipLevels: number): boolean => {
+    // `skip` ignores exactly one filter: it is how each dropdown works out which
+    // of its options still lead to rows given every OTHER filter (faded options).
+    const passesDocFilters = (r: FlatRow, skipLevels: number, skip?: 'vessel' | 'main' | 'group' | 'category'): boolean => {
       const labels = getListViewLabels(r);
 
       // A text query in SharePoint Sites scope is site-wide. Do not let the
@@ -4166,7 +4196,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       }
 
       // 1. Vessel filter
-      if (vesselFilter !== 'all' && docScopeType === 'sites' && vesselFilter.trim().toLowerCase() !== 'not listed') {
+      if (skip === 'vessel') {
+        // option-availability pass: the Vessel filter is deliberately ignored
+      } else if (vesselFilter !== 'all' && docScopeType === 'sites' && vesselFilter.trim().toLowerCase() !== 'not listed') {
         // SharePoint Sites scope: a row belongs to the selected vessel only
         // when its folder path runs through a folder named after that vessel
         // (same matching as the dropdown) — not the fuzzy row label, which
@@ -4275,7 +4307,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       // offers, match it as an exact path segment instead.
       const isLiveMainFolderValue = docCategoryFilter !== 'all' &&
         mainFolderOptions.some(n => n.trim().toLowerCase() === docCategoryFilter.trim().toLowerCase());
-      if (isLiveMainFolderValue) {
+      if (skip === 'main') {
+        // option-availability pass: the Main folder filter is deliberately ignored
+      } else if (isLiveMainFolderValue) {
         const normFilter = docCategoryFilter.trim().toLowerCase();
         const pathSegments = (r.subFolderPath || '').split('>').map(s => s.trim().toLowerCase());
         if (pathSegments.indexOf(normFilter) === -1) return false;
@@ -4293,8 +4327,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       // Group / Category filters use the same path-based rule as the
       // columns (drawingsManualsForRow), so a filter always matches what the
       // table shows.
-      const gcGroup = skipLevels < 3 ? docGroupLevelFilter : 'all';
-      const gcCategory = skipLevels < 2 ? docLeafCategoryFilter : 'all';
+      const gcGroup = skipLevels < 3 && skip !== 'group' ? docGroupLevelFilter : 'all';
+      const gcCategory = skipLevels < 2 && skip !== 'category' ? docLeafCategoryFilter : 'all';
       if (gcGroup !== 'all' || gcCategory !== 'all') {
         if (!pathMatchesGroupCategory(r.subFolderPath || '', gcGroup, gcCategory)) return false;
       }
@@ -4338,6 +4372,85 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
       return true;
     };
     let filtered = scopeRows.filter(r => passesDocFilters(r, 0));
+
+    // ── Faded filter options (List view) ──
+    // Only while an Attachment Status is actually selected: the Main folder and
+    // Category values that would leave no rows are faded (and can't be picked).
+    // With Attachment Status on "All", nothing is ever faded. The option already
+    // picked, and the "All ..." entries, are never faded. Nothing fades while a
+    // facet has no rows at all (e.g. data still loading) or during a whole-site
+    // text search.
+    const fadeOptionsOn = docViewMode === 'list' && !wholeSiteSearch && attachmentFilter !== 'all';
+    type FacetKey = 'vessel' | 'main' | 'group' | 'category' | 'attachment';
+    const facetRowKey = (r: FlatRow): string => r.groupKey || r.subFolderPath || '';
+    const facetCache: Partial<Record<FacetKey, FlatRow[]>> = {};
+    const facetRows = (key: FacetKey): FlatRow[] => {
+      const hit = facetCache[key];
+      if (hit) return hit;
+      const rows = scopeRows.filter(r => passesDocFilters(r, 0, key === 'attachment' ? undefined : key));
+      let out = rows;
+      if (key !== 'attachment' && attachmentFilter !== 'all') {
+        const attached = new Set<string>();
+        rows.forEach(r => { if (r.fileName) attached.add(facetRowKey(r)); });
+        out = rows.filter(r => attached.has(facetRowKey(r)) === (attachmentFilter === 'attached'));
+      }
+      facetCache[key] = out;
+      return out;
+    };
+    const facetPaths: Partial<Record<FacetKey, string[]>> = {};
+    const pathsOf = (key: FacetKey): string[] => {
+      const hit = facetPaths[key];
+      if (hit) return hit;
+      const seen = new Set<string>();
+      facetRows(key).forEach(r => seen.add(r.subFolderPath || ''));
+      const out = Array.from(seen);
+      facetPaths[key] = out;
+      return out;
+    };
+    let mainFacetSegs: Set<string> | null = null;
+    const mainFolderOptionFaded = (folder: string): boolean => {
+      if (!fadeOptionsOn || !folder) return false;
+      if (docScopeType !== 'sites' && docScopeType !== 'shared_docs' && docScopeType !== 'documents') return false;
+      if (mainFacetSegs === null) {
+        const segs = new Set<string>();
+        facetRows('main').forEach(r => (r.subFolderPath || '').split('>').forEach(x => segs.add(x.trim().toLowerCase())));
+        mainFacetSegs = segs.size === 0 ? new Set<string>(['*']) : segs;
+      }
+      if (mainFacetSegs.has('*')) return false;
+      if (folder.trim().toLowerCase() === (docCategoryFilter || '').trim().toLowerCase()) return false;
+      return !mainFacetSegs.has(folder.trim().toLowerCase());
+    };
+    // pathMatchesGroupCategory is per-path string work; results only change when the
+    // category list does, so keep them between renders.
+    let facetMatchMemo: Map<string, boolean> | null = null;
+    const getFacetMatchMemo = (): Map<string, boolean> => {
+      if (facetMatchMemo) return facetMatchMemo;
+      // categoryOptions / groupOptions are defined further down: only read at call time.
+      const sig = `${categoryOptions.length}|${categoryOptions[0] || ''}|${categoryOptions[categoryOptions.length - 1] || ''}|${groupOptions.join(',')}`;
+      const held = (host as any)._facetGcMemo as { sig: string; map: Map<string, boolean> } | undefined;
+      if (held && held.sig === sig && held.map.size < 60000) { facetMatchMemo = held.map; return held.map; }
+      const fresh = { sig, map: new Map<string, boolean>() };
+      (host as any)._facetGcMemo = fresh;
+      facetMatchMemo = fresh.map;
+      return fresh.map;
+    };
+    const facetPathMatches = (path: string, group: string, category: string): boolean => {
+      const memo = getFacetMatchMemo();
+      const key = `${path}\u0001${group}\u0001${category}`;
+      let v = memo.get(key);
+      if (v === undefined) { v = pathMatchesGroupCategory(path, group, category); memo.set(key, v); }
+      return v;
+    };
+    const categoryOptionFaded = (value: string): boolean => {
+      if (!fadeOptionsOn || !value) return false;
+      let g = docGroupLevelFilter;
+      let c = value;
+      const at = value.indexOf('::');
+      if (at > 0) { g = value.slice(0, at); c = value.slice(at + 2); }
+      if (c === docLeafCategoryFilter) return false;
+      if (facetRows('category').length === 0) return false;
+      return !pathsOf('category').some(p => facetPathMatches(p, g, c));
+    };
 
     // ── Group / Category / Sub-category dropdown options ──
     // Built only from files that really are classified, so a value is
@@ -4513,7 +4626,10 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
             if (hit) return;
           }
           const g = folderGroupsOf(seg);
-          if (g.drawings !== g.manuals) groupsSeen.add(g.drawings ? 'Drawings' : 'Manuals');
+          // A combined "Drawings & Manuals" folder holds both groups, whatever the
+          // category folders inside it happen to be called.
+          if (g.drawings) groupsSeen.add('Drawings');
+          if (g.manuals) groupsSeen.add('Manuals');
           if (g.drawings || g.manuals) grp = g.drawings && g.manuals ? 'both' : (g.drawings ? 'drawings' : 'manuals');
         }
       });
@@ -4563,8 +4679,8 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           const own = [...trail, node.name];
           const g = folderGroupsOf(node.name);
           const inTbc = own.some(isToBeClassifiedName);
-          if (!inTbc && g.drawings && !g.manuals) hasDrawings = true;
-          if (!inTbc && g.manuals && !g.drawings) hasManuals = true;
+          if (!inTbc && g.drawings) hasDrawings = true;
+          if (!inTbc && g.manuals) hasManuals = true;
           if (isToBeClassifiedName(node.name)) hasToBeClassified = true;
           if (node.children.length) walkGroups(node.children, own);
         }
@@ -5165,7 +5281,15 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     // vs. not-attached filtering is still controlled by attachmentFilter
     // below.
     if (attachmentFilter !== 'all') {
-      groupedList = groupedList.filter(row => attachmentFilter === 'attached' ? row.files.length > 0 : row.files.length === 0);
+      // In SharePoint Sites scope each file is its own row and the folder is a
+      // separate row with no files of its own, so a folder whose files sit in other
+      // rows must not count as "Attachment Required".
+      const pathKey = (p: string): string => (p || '').trim().toLowerCase();
+      const pathsWithFiles = new Set<string>();
+      groupedList.forEach(row => { if (row.files.length > 0) pathsWithFiles.add(pathKey(row.subFolderPath)); });
+      groupedList = groupedList.filter(row => attachmentFilter === 'attached'
+        ? row.files.length > 0
+        : row.files.length === 0 && !pathsWithFiles.has(pathKey(row.subFolderPath)));
     }
     if (docListSort === 'name_az') {
       groupedList.sort((a, b) => a.category.localeCompare(b.category));
@@ -6843,7 +6967,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
               style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface)', outline: 'none', maxWidth: 180 }}
             >
               <option value="all">All main folders</option>
-              {mainFolderOptions.map(folder => <option key={folder} value={folder}>{folder}</option>)}
+              {mainFolderOptions.map(folder => <option key={folder} value={folder} disabled={mainFolderOptionFaded(folder)}>{folder}</option>)}
             </select>
             {!SHOW_SUBFOLDER_FILTERS ? null : subfolderTree.length > 0 ? (
               <FolderTreeSelect
@@ -7118,11 +7242,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                     )}
                     {categoryOptionGroups.map(x => (
                       <optgroup key={x.group} label={x.group}>
-                        {x.categories.map(category => <option key={`${x.group}::${category}`} value={`${x.group}::${category}`}>{category}</option>)}
+                        {x.categories.map(category => <option key={`${x.group}::${category}`} value={`${x.group}::${category}`} disabled={categoryOptionFaded(`${x.group}::${category}`)}>{category}</option>)}
                       </optgroup>
                     ))}
                   </>
-                ) : categoryOptions.map(category => <option key={category} value={category}>{category}</option>)}
+                ) : categoryOptions.map(category => <option key={category} value={category} disabled={categoryOptionFaded(category)}>{category}</option>)}
               </CompactCategorySelect>
             ) : (
               <select aria-label="Category filter" value="all" disabled style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--vdms-border)', fontSize: 13, background: 'var(--vdms-surface-alt)', color: 'var(--vdms-text-faint)', outline: 'none', maxWidth: 180, cursor: 'not-allowed' }}>
@@ -7697,13 +7821,49 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                   const matched = matchFolderToVessel(node.name);
                   return !!matched && vesselNamesEqual(matched, vesselFilter);
                 });
+                // A vessel is picked and we are still ABOVE it: show the vessel's own
+                // folders straight away (every place it exists on this site, not just
+                // the first), instead of only the parent folders that lead to it. Each
+                // tile carries the full chain of folders to open and its parent path.
+                // Falls back to the old "folders leading to the vessel" list until the
+                // library's folder index has loaded.
+                const vesselHomeItems: any[] = (() => {
+                  if (insideSelectedVessel || vesselFilter === 'all' || vesselFilter.trim().toLowerCase() === 'not listed') return [];
+                  const treeRes = host._getOrLoadSiteFolderTree(effectiveSiteId, rawDriveId, 'root', 8, 12000);
+                  const entries = treeRes?.folders || [];
+                  if (entries.length === 0 || selectedSiteVesselPaths.length === 0) return [];
+                  const byId = new Map<string, { id: string; name: string; parent_id: string; path: string }>();
+                  entries.forEach(e => byId.set(e.id, e));
+                  const homeSet = new Set(selectedSiteVesselPaths);
+                  const prefix = currentDrivePath ? `${currentDrivePath.toLowerCase()}/` : '';
+                  const openedLevels = currentDrivePath ? currentDrivePath.split('/').length : 0;
+                  const out: any[] = [];
+                  entries.forEach(e => {
+                    const low = (e.path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLowerCase();
+                    if (!homeSet.has(low) || (prefix && !low.startsWith(prefix))) return;
+                    const chain: Array<{ id: string; name: string }> = [];
+                    let cur = e;
+                    for (let guard = 0; cur && guard < 30; guard++) {
+                      chain.unshift({ id: cur.id, name: cur.name });
+                      cur = byId.get(cur.parent_id) as typeof e;
+                    }
+                    const parentLabel = (e.path || '').replace(/\\/g, '/').split('/').filter(Boolean).slice(0, -1).join(' \u203A ');
+                    out.push({
+                      id: e.id, name: e.name, folder: {}, _homeNodes: chain.slice(openedLevels), _homeParent: parentLabel,
+                      _homeParentId: chain.length >= 2 ? chain[chain.length - 2].id : 'root',
+                    });
+                  });
+                  return out.sort((a, b) => String(a._homeParent).localeCompare(String(b._homeParent)));
+                })();
                 const vesselScopedChildFolders = insideSelectedVessel
                   ? baseChildFolders
-                  : baseChildFolders.filter(item => {
-                    const matched = matchFolderToVessel(item.name);
-                    if (matched && vesselNamesEqual(matched, vesselFilter)) return true;
-                    return isPathOnSelectedVesselBranch(currentDrivePath ? `${currentDrivePath}/${item.name}` : item.name);
-                  });
+                  : (vesselHomeItems.length > 0
+                    ? (vesselHomeItems as typeof baseChildFolders)
+                    : baseChildFolders.filter(item => {
+                      const matched = matchFolderToVessel(item.name);
+                      if (matched && vesselNamesEqual(matched, vesselFilter)) return true;
+                      return isPathOnSelectedVesselBranch(currentDrivePath ? `${currentDrivePath}/${item.name}` : item.name);
+                    }));
                 // ── Group / Category filter in Folder view ──
                 // A Graph folder listing has no group/category of its own, so
                 // when either filter is set Folder view shows every file *under*
@@ -7749,6 +7909,9 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                 let groupCatSearching = false;
                 let groupCatFailed = false;
                 let groupCatTruncated = false;
+                // Attachment Required with a Group / Category picked: the group's folders
+                // that hold no file at any depth (the listed files are all attachments).
+                const groupCatEmptyFolders: any[] = [];
                 if (groupCatActive && effectiveSiteId && rawDriveId) {
                   // The backend answers this from its drive index (one in-memory
                   // pass) and can pre-select the Group's files by folder-name
@@ -8012,14 +8175,79 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       groupCatMatchRelPath.set(r.fileId, relBelow);
                     });
                   }
+
+                  if (attachmentFilter === 'not_attached' && tree.status === 'done') {
+                    const relParts = (it: any): string[] => String(it.path || it.name || '').split('/').filter(Boolean);
+                    const folderItems = tree.items.filter((it: any) => it && it.is_folder && it.name);
+                    const withFiles = new Set<string>();
+                    tree.items.forEach((it: any) => {
+                      if (!it || it.is_folder || !it.name) return;
+                      const parts = relParts(it).slice(0, -1);
+                      for (let i = 1; i <= parts.length; i++) withFiles.add(parts.slice(0, i).join('/').toLowerCase());
+                    });
+                    const hasSubfolder = new Set<string>();
+                    const byRel = new Map<string, any>();
+                    folderItems.forEach((it: any) => {
+                      const parts = relParts(it);
+                      byRel.set(parts.join('/').toLowerCase(), it);
+                      for (let i = 1; i < parts.length; i++) hasSubfolder.add(parts.slice(0, i).join('/').toLowerCase());
+                    });
+                    folderItems.forEach((it: any) => {
+                      const parts = relParts(it);
+                      const key = parts.join('/').toLowerCase();
+                      if (withFiles.has(key) || hasSubfolder.has(key)) return; // only folders that are empty all the way down
+                      const fullNames = [...baseNames, ...parts];
+                      if (!pathMatchesGroupCategory(fullNames.join(' > '), docGroupLevelFilter, docLeafCategoryFilter)) return;
+                      if (docSubCategoryFilter !== 'all' && !pathMatchesSubCategory(fullNames, docSubCategoryFilter)) return;
+                      if (!insideSelectedVessel) {
+                        const inVessel = fullNames.some(seg => {
+                          const matched = matchFolderToVessel(seg);
+                          return !!matched && vesselNamesEqual(matched, vesselFilter);
+                        });
+                        if (!inVessel) return;
+                      }
+                      if (textFilter && !matchesSearchTokens(textFilter, it.name, ...parts)) return;
+                      const chain: Array<{ id: string; name: string }> = [];
+                      for (let i = 1; i <= parts.length; i++) {
+                        const anc = byRel.get(parts.slice(0, i).join('/').toLowerCase());
+                        if (!anc) { chain.length = 0; break; }
+                        chain.push({ id: anc.id, name: anc.name });
+                      }
+                      if (chain.length !== parts.length) return;
+                      groupCatEmptyFolders.push({
+                        id: it.id, name: it.name, folder: {},
+                        _homeNodes: chain, _homeParent: parts.slice(0, -1).join(' \u203A '),
+                        _homeParentId: chain.length >= 2 ? chain[chain.length - 2].id : currentFolderId,
+                      });
+                    });
+                    groupCatEmptyFolders.sort((a, b) => String(a._homeParent).localeCompare(String(b._homeParent)) || String(a.name).localeCompare(String(b.name)));
+                  }
                 }
 
                 const folderServerCounts2 = folderData.error ? null : host._getOrLoadFolderCounts(effectiveSiteId, rawDriveId, currentFolderId);
-                const childFolders = groupCatActive
-                  ? []
+                const childFoldersBeforeAttachment = groupCatActive
+                  ? (attachmentFilter === 'not_attached' ? groupCatEmptyFolders : [])
                   : (textFilter
                     ? vesselScopedChildFolders.filter(item => matchesSearchTokens(textFilter, item.name))
                     : vesselScopedChildFolders);
+                // Attachment Status in Folder view: Available = the folder holds at least
+                // one file (anywhere below it), Required = it holds none. Uses the folder
+                // counts the tiles already show; a folder whose counts haven't arrived
+                // yet stays visible rather than being hidden by guesswork.
+                const folderHasFiles = (sf: any): boolean | null => {
+                  const hp = sf._homeParentId as string | undefined;
+                  const c = folderServerCounts2?.counts[sf.id]
+                    || (hp ? host._getOrLoadFolderCounts(effectiveSiteId, rawDriveId, hp)?.counts[sf.id] : null);
+                  return c ? (c.total_files || 0) > 0 : null;
+                };
+                const childFolders = attachmentFilter === 'all'
+                  ? childFoldersBeforeAttachment
+                  : childFoldersBeforeAttachment.filter(sf => {
+                    const has = folderHasFiles(sf);
+                    if (has === null) return true;
+                    return attachmentFilter === 'attached' ? has : !has;
+                  });
+                const childFolderCount: number = childFolders.length as number;
 
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -8037,12 +8265,17 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                             const sfFolderCount2 = sfCounts2 ? sfCounts2.folders : null;
                             const sfFileCount2  = sfCounts2 ? sfCounts2.files : null;
                             const sfTotal2 = sf.folder?.childCount ?? 0;
-                            const sfServerCounts2 = folderServerCounts2?.counts[sf.id] || null;
+                            const homeParentId = (sf as any)._homeParentId as string | undefined;
+                            const sfServerCounts2 = folderServerCounts2?.counts[sf.id]
+                              || (homeParentId ? host._getOrLoadFolderCounts(effectiveSiteId, rawDriveId, homeParentId)?.counts[sf.id] : null)
+                              || null;
+                            const homeCountsPending = !!homeParentId && !sfServerCounts2;
                             return (
                               <div
                                 key={sf.id || sf.name + idx}
                                 onClick={() => {
-                                  pushLiveFolderNav([...folderPathStack, { id: sf.id, name: sf.name }]);
+                                  const homeNodes = (sf as any)._homeNodes as Array<{ id: string; name: string }> | undefined;
+                                  pushLiveFolderNav([...folderPathStack, ...(homeNodes && homeNodes.length ? homeNodes : [{ id: sf.id, name: sf.name }])]);
                                 }}
                                 className="dms-tile"
                                 style={DMS_TILE}
@@ -8052,8 +8285,13 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                   <div style={DMS_TILE_TITLE} title={sf.name}>
                                     {sf.name}
                                   </div>
+                                  {(sf as any)._homeParent && (
+                                    <div style={{ fontSize: 11, color: 'var(--vdms-text-muted)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={String((sf as any)._homeParent)}>
+                                      {String((sf as any)._homeParent)}
+                                    </div>
+                                  )}
                                   <div title={sfCounts2 ? `${sfCounts2.folders} sub-folder(s) and ${sfCounts2.files} file(s) in total` : undefined} style={{ ...DMS_TILE_SUB, marginTop: 4 }}>
-                                    {sfServerCounts2 ? renderServerCountPill(sfServerCounts2, sf.name) : sfLoading2 ? (
+                                    {sfServerCounts2 ? renderServerCountPill(sfServerCounts2, sf.name) : (sfLoading2 || homeCountsPending) ? (
                                       <span style={{ color: 'var(--vdms-text-faint)', fontSize: 11 }}>{sfTotal2 > 0 ? `${sfTotal2} items` : '···'}</span>
                                     ) : (
                                       <>
@@ -8088,7 +8326,11 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                       // Group / Category active → the subtree search results
                       // computed above (path-based, same rule as List view);
                       // otherwise this folder's own files.
-                      const displayChildFiles = groupCatActive ? groupCatMatchedFiles : textFilteredChildFiles;
+                      // Every file listed with a Group picked is an attachment, so Attachment
+                      // Required lists the empty folders (above) and no files.
+                      const displayChildFiles = groupCatActive
+                        ? (attachmentFilter === 'not_attached' ? [] : groupCatMatchedFiles)
+                        : textFilteredChildFiles;
                       const subPickCtx = subCategoryPickCtx();
                       const groupCatLabel = [
                         docGroupLevelFilter !== 'all' ? docGroupLevelFilter : (subPickCtx ? subPickCtx.group : null),
@@ -8325,6 +8567,17 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
                                         {groupCatFailed
                                           ? 'That took longer than expected. Trying again automatically…'
                                           : `Looking through the sub-folders of ${currentNode?.name || 'this folder'}.`}
+                                      </div>
+                                    </>
+                                  ) : attachmentFilter === 'not_attached' ? (
+                                    <>
+                                      <div style={{ fontWeight: 700, color: 'var(--vdms-text)', fontSize: 15 }}>
+                                        {childFolderCount > 0 ? `${childFolderCount} ${groupCatLabel} folder${childFolderCount === 1 ? '' : 's'} still need files` : `No ${groupCatLabel} folder is waiting for files`}
+                                      </div>
+                                      <div style={{ fontSize: 13, marginTop: 4, maxWidth: 520, lineHeight: 1.5 }}>
+                                        {childFolderCount > 0
+                                          ? 'Files that already exist are attachments, so they are not listed here. Folders with no files are shown above.'
+                                          : `Every ${groupCatLabel} folder here already has files. Choose "Attachment Available" to see them.`}
                                       </div>
                                     </>
                                   ) : (
