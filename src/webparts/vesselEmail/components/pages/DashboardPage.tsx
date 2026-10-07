@@ -80,6 +80,10 @@ export interface DashboardStats {
   total_folders?: number;
   total_sites?: number;
   total_vessels: number;
+  /** Vessel folders in the selected site(s) that hold at least one document. */
+  active_vessels?: number;
+  /** Vessel folders in the selected site(s) with no documents yet. */
+  vessels_without_documents?: number;
   sites?: DashboardSiteSummary[];
   truncated?: boolean;
   recent_documents: RealDashboardDoc[];
@@ -383,17 +387,26 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
   const siteRows: DashboardSiteSummary[] = dashboardStats?.sites || [];
   const totalVessels = dashboardStats?.total_vessels ?? (vessels || []).length;
 
-  // Fleet status — real, from vessels registered in the DMS (GET /api/vessels,
-  // already loaded app-wide). Unknown/missing status defaults to "Active",
-  // the same convention used everywhere else this field is read.
+  // Fleet status for the selected site. Active = a vessel folder holding at
+  // least one document (dashboard stats, computed per site by the backend);
+  // In Maintenance = a DMS vessel record marked so. Older backends without
+  // active_vessels fall back to the DMS records' status field.
   const vesselList: VesselRecord[] = vessels || [];
-  let activeVesselCount = 0, maintenanceVesselCount = 0, otherVesselCount = 0;
+  let maintenanceVesselCount = 0;
+  let activeVesselCount = 0, otherVesselCount = 0;
   vesselList.forEach(v => {
     const s = v.status || 'Active';
-    if (s === 'Active') activeVesselCount++;
-    else if (s === 'In Maintenance') maintenanceVesselCount++;
+    if (s === 'In Maintenance') maintenanceVesselCount++;
+    else if (s === 'Active') activeVesselCount++;
     else otherVesselCount++;
   });
+  let fleetTotal = vesselList.length;
+  if (dashboardStats && typeof dashboardStats.active_vessels === 'number') {
+    fleetTotal = totalVessels || 0;
+    maintenanceVesselCount = Math.min(maintenanceVesselCount, fleetTotal);
+    activeVesselCount = Math.max(0, Math.min(dashboardStats.active_vessels, fleetTotal - maintenanceVesselCount));
+    otherVesselCount = Math.max(0, fleetTotal - activeVesselCount - maintenanceVesselCount);
+  }
 
   // Requires attention — real signals only: sites the backend failed to scan,
   // and unread anomaly alerts (unrecognised vessel folders, files uploaded
@@ -511,7 +524,7 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
         {kpiCard({ label: 'Total Vessels', value: totalVessels, icon: 'Ferry' })}
         {kpiCard({
           label: 'Active Vessels', value: activeVesselCount, icon: 'CheckMark', tone: 'success',
-          sub: vesselList.length > 0 ? <span style={{ fontSize: 11, color: mutedText, fontWeight: 600 }}>of {vesselList.length} in DMS</span> : undefined,
+          sub: fleetTotal > 0 ? <span style={{ fontSize: 11, color: mutedText, fontWeight: 600 }}>with documents, of {fleetTotal}</span> : undefined,
         })}
         {kpiCard({ label: 'Total Documents', value: totalFiles, icon: 'Page' })}
         {kpiCard({
@@ -523,14 +536,14 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
       {/* Fleet status + document activity */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 10 }}>
         <SectionCard palette={palette}>
-          {sectionHeader('Fleet Status', <span style={{ fontSize: 11, fontWeight: 700, color: clay.accentDark, background: clay.accentSoft, borderRadius: 12, padding: '1px 8px' }}>{vesselList.length} vessels</span>)}
-          {vesselList.length === 0 ? (
+          {sectionHeader('Fleet Status', <span style={{ fontSize: 11, fontWeight: 700, color: clay.accentDark, background: clay.accentSoft, borderRadius: 12, padding: '1px 8px' }}>{fleetTotal} vessels</span>)}
+          {fleetTotal === 0 ? (
             <EmptyNote palette={palette}>No vessel records yet</EmptyNote>
           ) : (
             <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
               <DonutChart
                 palette={palette}
-                centerValue={String(vesselList.length)}
+                centerValue={String(fleetTotal)}
                 centerLabel="Vessels"
                 segments={[
                   { value: activeVesselCount, color: clay.pillActiveText },
@@ -539,13 +552,13 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
                 ]}
               />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 9, flex: 1, minWidth: 150 }}>
-                <DonutLegendRow label="Active" count={activeVesselCount} total={vesselList.length} color={clay.pillActiveText} palette={palette} />
-                <DonutLegendRow label="In Maintenance" count={maintenanceVesselCount} total={vesselList.length} color={clay.pillWarnText} palette={palette} />
-                <DonutLegendRow label="Inactive / Other" count={otherVesselCount} total={vesselList.length} color={clay.pillDangerText} palette={palette} />
+                <DonutLegendRow label="Active" count={activeVesselCount} total={fleetTotal} color={clay.pillActiveText} palette={palette} />
+                <DonutLegendRow label="In Maintenance" count={maintenanceVesselCount} total={fleetTotal} color={clay.pillWarnText} palette={palette} />
+                <DonutLegendRow label="No documents yet" count={otherVesselCount} total={fleetTotal} color={clay.pillDangerText} palette={palette} />
               </div>
             </div>
           )}
-          <div style={{ fontSize: 11, color: mutedText, marginTop: 12 }}>Based on vessels registered in the DMS.</div>
+          <div style={{ fontSize: 11, color: mutedText, marginTop: 12 }}>Active = vessel folders with at least one document.</div>
         </SectionCard>
 
         <SectionCard palette={palette}>
