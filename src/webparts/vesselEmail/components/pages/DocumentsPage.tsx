@@ -6241,7 +6241,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           /* Fluent dropdowns (Vessel / Category) take the same typography as the native selects. */
           html .vessel-dms-app .dms-filter-bar .ms-Dropdown, html .vessel-dms-app .dms-filter-bar .ms-Dropdown-title, html .vessel-dms-app .dms-filter-bar .ms-Dropdown-title *,
           html .vessel-dms-app .dms-filter-callout .ms-Dropdown-item, html .vessel-dms-app .dms-filter-callout .ms-Dropdown-item *,
-          html .dms-filter-callout .ms-Dropdown-item, html .dms-filter-callout .ms-Dropdown-item * { font-family: 'Manrope', 'Segoe UI Variable', 'Segoe UI', sans-serif !important; font-size: 13px !important; font-weight: 500 !important; letter-spacing: normal !important; }
+          html .dms-filter-callout .ms-Dropdown-item, html .dms-filter-callout .ms-Dropdown-item * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important; font-size: 13px !important; font-weight: 600 !important; letter-spacing: normal !important; }
           .dms-filter-bar .dms-filter-export:not(:disabled):hover { border-color: var(--clay-accent, #0e7490) !important; color: var(--clay-accent, #0e7490) !important; }
         `}</style>
         {/* Header block: breadcrumb + module header + filter toolbar. Not

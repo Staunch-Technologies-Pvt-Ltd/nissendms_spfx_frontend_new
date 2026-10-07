@@ -316,7 +316,7 @@ function ArchivePickerDialog({ host, dialog }: { host: VesselEmail; dialog: Arch
         style={{
           background: 'var(--vdms-surface)', borderRadius: 16, padding: isMobile ? '16px 14px' : '24px 28px',
           width: isMobile ? '95vw' : 560, maxWidth: '95vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column',
-          boxShadow: '0 8px 40px rgba(0,0,0,0.18)', fontFamily: "'Segoe UI', sans-serif",
+          boxShadow: '0 8px 40px rgba(0,0,0,0.18)', fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
         }}
         onClick={e => e.stopPropagation()}
       >

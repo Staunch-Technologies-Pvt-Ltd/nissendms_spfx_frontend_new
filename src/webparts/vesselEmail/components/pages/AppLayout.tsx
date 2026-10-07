@@ -319,7 +319,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
       height: '100vh', minHeight: '100vh',
       width: '100vw', overflow: 'hidden',
       background: clay.bg,
-      fontFamily: "'Segoe UI Variable', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
+      fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
       position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 99999,
     }} data-vessel-theme={host.state.themeMode}>
       <DeletionToastLayer host={host} />
@@ -368,7 +368,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
             )}
             {!phone && <span className="vdms-crumb" style={{ color: 'var(--vdms-glass-strong)', fontSize: 16, fontWeight: 600, letterSpacing: '0.2px' }}>Vessel DMS</span>}
             <Icon iconName="ChevronRight" className="vdms-crumb" style={{ fontSize: 14, color: 'var(--vdms-glass-strong)' }} />
-            <span style={{ color: 'var(--vdms-text)', fontSize: phone ? 18 : 26, fontWeight: 700, letterSpacing: '-0.02em', fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif" }}>
+            <span style={{ color: 'var(--vdms-text)', fontSize: phone ? 18 : 26, fontWeight: 700, letterSpacing: '-0.02em', fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>
               {viewLabel}
             </span>
           </div>
@@ -468,7 +468,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
         )}
 
         {/* ── Main Content ── */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 32), background: 'transparent', ['--vdms-content-pad' as any]: `${isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 32)}px` }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 24), background: 'transparent', ['--vdms-content-pad' as any]: `${isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 24)}px` }}>
           {content}
         </div>
 

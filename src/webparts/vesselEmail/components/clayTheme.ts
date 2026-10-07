@@ -283,7 +283,7 @@ export function buildDeepHarborTheme(colors: ClayColorSet, isNight: boolean): IP
       variantBorder: isNight ? mixHex(accent, '#000000', 0.55) : lightenHex(accent, 0.78),
       variantBorderHovered: accent,
     },
-    defaultFontStyle: { fontFamily: "'Manrope', 'Segoe UI Variable', 'Segoe UI', sans-serif" },
+    defaultFontStyle: { fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" },
     fonts: {
       medium: { fontSize: '15px' },
       mediumPlus: { fontSize: '16px' },

@@ -85,7 +85,7 @@ function CreateFolderDialog({ host, dialog }: { host: VesselEmail; dialog: Creat
         style={{
           background: 'var(--vdms-surface)', borderRadius: 16, padding: isMobile ? '16px 14px' : '24px 28px',
           width: isMobile ? '95vw' : 480, maxWidth: '95vw', display: 'flex', flexDirection: 'column',
-          boxShadow: '0 8px 40px rgba(0,0,0,0.18)', fontFamily: "'Segoe UI', sans-serif",
+          boxShadow: '0 8px 40px rgba(0,0,0,0.18)', fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
         }}
         onClick={e => e.stopPropagation()}
       >

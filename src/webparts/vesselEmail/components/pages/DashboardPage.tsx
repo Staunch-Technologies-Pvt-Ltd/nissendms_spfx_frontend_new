@@ -172,7 +172,7 @@ function SectionCard(props: { palette: Palette; children: React.ReactNode }): Re
   return (
     <div style={{
       background: palette.surface, borderRadius: 18, border: `1px solid ${palette.border}`,
-      padding: 20, boxShadow: clay.shadowRaised,
+      padding: '14px 16px', boxShadow: clay.shadowRaised,
       backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)',
       display: 'flex', flexDirection: 'column', minWidth: 0,
     }}>
@@ -222,7 +222,7 @@ function DonutChart(props: {
           return el;
         })}
       </g>
-      <text x={c} y={c - 4} textAnchor="middle" dominantBaseline="middle" fill={palette.text} style={{ fontSize: size * 0.2, fontWeight: 800, fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif" }}>
+      <text x={c} y={c - 4} textAnchor="middle" dominantBaseline="middle" fill={palette.text} style={{ fontSize: size * 0.2, fontWeight: 800, fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>
         {centerValue}
       </text>
       <text x={c} y={c + size * 0.14} textAnchor="middle" dominantBaseline="middle" fill={palette.muted} style={{ fontSize: size * 0.082, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
@@ -433,14 +433,14 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
     const iconBg = tone === 'success' ? clay.pillActiveBg : tone === 'warning' ? clay.pillWarnBg : clay.accentSoft;
     const iconColor = tone === 'success' ? clay.pillActiveText : tone === 'warning' ? clay.pillWarnText : clay.accentDark;
     return (
-      <div style={{ background: cardSurface, borderRadius: 16, padding: '16px 18px', border: `1px solid ${cardBorder}`, boxShadow: clay.shadowRaised, display: 'flex', flexDirection: 'column', gap: 10, backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' }}>
+      <div style={{ background: cardSurface, borderRadius: 16, padding: '12px 14px', border: `1px solid ${cardBorder}`, boxShadow: clay.shadowRaised, display: 'flex', flexDirection: 'column', gap: 8, backdropFilter: 'blur(18px) saturate(1.3)', WebkitBackdropFilter: 'blur(18px) saturate(1.3)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontSize: 12.5, fontWeight: 700, color: mutedText, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{opts.label}</span>
           <div style={{ width: 30, height: 30, borderRadius: 9, background: iconBg, color: iconColor, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
             <Icon iconName={opts.icon} style={{ fontSize: 14 }} />
           </div>
         </div>
-        <div style={{ fontSize: 30, fontWeight: 800, fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif", letterSpacing: '-0.02em', color: primaryText, lineHeight: 1 }}>
+        <div style={{ fontSize: 30, fontWeight: 800, fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif", letterSpacing: '-0.02em', color: primaryText, lineHeight: 1 }}>
           {statsLoading && opts.value === undefined ? <span style={{ fontSize: 18, color: mutedText, fontWeight: 600 }}>…</span> : formatNumber(opts.value)}
         </div>
         {opts.sub}
@@ -449,7 +449,7 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
   };
 
   const sectionHeader = (title: string, right?: React.ReactNode): React.ReactElement => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
       <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: primaryText }}>{title}</h3>
       {right}
     </div>
@@ -462,11 +462,11 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
   ) : undefined;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {/* Header: page title + subtitle (left), site filter + refresh (right) */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 'clamp(22px, 2.2vw, 28px)', fontWeight: 800, letterSpacing: '-0.02em', color: primaryText, fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif" }}>
+          <h1 style={{ margin: 0, fontSize: 'clamp(22px, 2.2vw, 28px)', fontWeight: 800, letterSpacing: '-0.02em', color: primaryText, fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>
             Dashboard
           </h1>
           <p style={{ margin: '3px 0 0', fontSize: 13, fontWeight: 600, color: mutedText }}>Vessel compliance and document overview</p>
@@ -507,7 +507,7 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
       </div>
 
       {/* KPI row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10 }}>
         {kpiCard({ label: 'Total Vessels', value: totalVessels, icon: 'Ferry' })}
         {kpiCard({
           label: 'Active Vessels', value: activeVesselCount, icon: 'CheckMark', tone: 'success',
@@ -521,7 +521,7 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
       </div>
 
       {/* Fleet status + document activity */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 10 }}>
         <SectionCard palette={palette}>
           {sectionHeader('Fleet Status', <span style={{ fontSize: 11, fontWeight: 700, color: clay.accentDark, background: clay.accentSoft, borderRadius: 12, padding: '1px 8px' }}>{vesselList.length} vessels</span>)}
           {vesselList.length === 0 ? (
@@ -554,7 +554,7 @@ export function renderDashboard(host: VesselEmail): React.ReactElement {
       </div>
 
       {/* Requires attention + recent activity */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 10 }}>
         <SectionCard palette={palette}>
           {sectionHeader('Requires Attention', viewAllAlertsLink(attentionCount > 0))}
           {attentionPreview.length === 0 ? (

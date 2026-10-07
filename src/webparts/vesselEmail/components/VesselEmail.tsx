@@ -8899,7 +8899,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           // previously an unresolved var() left `background`/`color`
           // unset, so the dialog blended into the dark backdrop overlay.
           background: 'var(--vdms-surface, #ffffff)', borderRadius: 16, padding: isMobile ? '16px 14px' : '28px 32px', width: isMobile ? '95vw' : 'auto', minWidth: isMobile ? 0 : 420, maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto',
-          boxShadow: '0 8px 40px rgba(0,0,0,0.18)', fontFamily: "'Segoe UI', sans-serif",
+          boxShadow: '0 8px 40px rgba(0,0,0,0.18)', fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
             <div style={{ width: 40, height: 40, borderRadius: 10, background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}><Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 20 }} /></div>
@@ -9948,7 +9948,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         position: 'fixed', bottom: isMobile ? 10 : 28, right: isMobile ? 10 : 28, zIndex: 100002,
         background: 'var(--vdms-surface)', borderRadius: 16, boxShadow: '0 8px 40px rgba(0,0,0,0.18)',
         border: '1.5px solid #86efac', padding: isMobile ? '12px' : '20px 24px 18px', width: isMobile ? 'calc(100vw - 20px)' : 'auto', minWidth: isMobile ? 0 : 340, maxWidth: isMobile ? 'calc(100vw - 20px)' : 420,
-        fontFamily: "'Segoe UI', sans-serif", animation: 'slideInRight 0.3s ease',
+        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif", animation: 'slideInRight 0.3s ease',
       }}>
         <style>{`
           @keyframes slideInRight { from { opacity:0; transform:translateX(40px); } to { opacity:1; transform:translateX(0); } }
@@ -12154,7 +12154,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           background: '#1e293b', color: '#fff',
           borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,0.28)',
           padding: isMobile ? '12px' : '16px 24px', display: 'flex', alignItems: 'center', gap: 12,
-          flexDirection: isMobile ? 'column' : 'row', width: isMobile ? 'calc(100vw - 20px)' : 'auto', minWidth: isMobile ? 0 : 360, maxWidth: isMobile ? 'calc(100vw - 20px)' : 560, fontFamily: "'Segoe UI', sans-serif",
+          flexDirection: isMobile ? 'column' : 'row', width: isMobile ? 'calc(100vw - 20px)' : 'auto', minWidth: isMobile ? 0 : 360, maxWidth: isMobile ? 'calc(100vw - 20px)' : 560, fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
           border: '1.5px solid #ef4444',
         }}>
         <div style={{
@@ -12223,7 +12223,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
           background: '#1e293b', color: '#fff', borderRadius: 12,
           boxShadow: '0 8px 32px rgba(0,0,0,0.28)', padding: isMobile ? '12px' : '16px 24px',
           display: 'flex', alignItems: 'flex-start', gap: 12, flexDirection: isMobile ? 'column' : 'row', width: isMobile ? 'calc(100vw - 20px)' : 'auto', minWidth: isMobile ? 0 : 360, maxWidth: isMobile ? 'calc(100vw - 20px)' : 560,
-          fontFamily: "'Segoe UI', sans-serif", border: '1.5px solid #ef4444',
+          fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif", border: '1.5px solid #ef4444',
         }}>
         <div style={{ width: 36, height: 36, borderRadius: 10, background: '#fee2e2', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}><Icon iconName="Delete" aria-hidden="true" style={{ fontSize: 18 }} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -12368,7 +12368,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         <div className="vessel-dms-auth" data-vessel-theme={this.state.themeMode} style={{
           position: 'fixed', inset: 0, zIndex: 99999, isolation: 'isolate',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: clay.bg, fontFamily: "'Manrope', 'Segoe UI Variable', 'Segoe UI', sans-serif", padding: 24,
+          background: clay.bg, fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif", padding: 24,
         }}>
           <div style={{
             background: isNight ? 'rgba(7,28,47,0.9)' : 'rgba(255,255,255,0.92)', backdropFilter: 'blur(26px) saturate(1.5)', WebkitBackdropFilter: 'blur(26px) saturate(1.5)',
@@ -12376,7 +12376,7 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
             textAlign: 'center', boxShadow: 'var(--vdms-shadow)', border: '1px solid var(--vdms-line)',
           }}>
             <div style={{ width: 64, height: 64, margin: '0 auto 18px', borderRadius: 20, background: clay.accentGradient, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30, boxShadow: clay.shadowButton }}><Icon iconName="Lock" aria-hidden="true" style={{ fontSize: 30 }} /></div>
-            <h2 style={{ margin: '0 0 10px', fontSize: 24, fontWeight: 800, color: 'var(--vdms-text)', fontFamily: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif" }}>Session Expired</h2>
+            <h2 style={{ margin: '0 0 10px', fontSize: 24, fontWeight: 800, color: 'var(--vdms-text)', fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>Session Expired</h2>
             <p style={{ margin: '0 0 26px', fontSize: 15, color: 'var(--vdms-text-secondary)', lineHeight: 1.6 }}>
               Your session has expired or is no longer valid. Please sign out and sign back in to continue.
             </p>

@@ -16,7 +16,7 @@ import { vdmsFont } from './futuristicTheme';
  * callers keep their own handlers/data.
  */
 
-export const DMS_FONT_DISPLAY = "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif";
+export const DMS_FONT_DISPLAY = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 // Text on a solid accent fill: the app's own toggle-active text token
 // (white in light mode, deep teal-black in night mode, where the default
 // accent is a light teal), so primary buttons stay readable in both themes.
@@ -226,11 +226,11 @@ export function dmsCompactDropdownStyles(styleProps: Partial<IDropdownStyleProps
   const width = opts?.width ?? 220;
   return {
     root: { width, maxWidth: '100%', minWidth: 0, flex: `0 1 ${width}px` },
-    dropdown: { width: '100%', minWidth: 0, fontFamily: vdmsFont.ui, fontSize: 15, fontWeight: 500 },    title: {
+    dropdown: { width: '100%', minWidth: 0, fontFamily: vdmsFont.ui, fontSize: 15, fontWeight: 600 },    title: {
       height: 34, lineHeight: '32px', boxSizing: 'border-box', padding: '0 32px 0 10px',
       border: '1px solid var(--vdms-border)', borderRadius: 6,
       background: 'var(--vdms-surface)', color: 'var(--vdms-text)',
-      fontFamily: vdmsFont.ui, fontSize: 15, fontWeight: 500, boxShadow: clay.shadowRaised, whiteSpace: 'nowrap',
+      fontFamily: vdmsFont.ui, fontSize: 15, fontWeight: 600, boxShadow: clay.shadowRaised, whiteSpace: 'nowrap',
     },
     caretDownWrapper: { height: 32, width: 28 },
     caretDown: {
@@ -248,7 +248,7 @@ export function dmsCompactDropdownStyles(styleProps: Partial<IDropdownStyleProps
     },
     dropdownItem: {
       height: 30, minHeight: 30, boxSizing: 'border-box', padding: '5px 12px',
-      fontFamily: vdmsFont.ui, fontSize: 15, fontWeight: 500, lineHeight: '20px', color: 'var(--vdms-text)',
+      fontFamily: vdmsFont.ui, fontSize: 15, fontWeight: 600, lineHeight: '20px', color: 'var(--vdms-text)',
       selectors: {
         '&:hover': { background: 'var(--clay-surface-hover, #eaf0f6)', color: 'var(--vdms-text)' },
         '&:focus': { background: 'var(--clay-surface-hover, #eaf0f6)', color: 'var(--vdms-text)' },
@@ -256,7 +256,7 @@ export function dmsCompactDropdownStyles(styleProps: Partial<IDropdownStyleProps
     },
     dropdownItemSelected: {
       height: 30, minHeight: 30, boxSizing: 'border-box', padding: '5px 12px',
-      fontFamily: vdmsFont.ui, fontSize: 15, fontWeight: 500, lineHeight: '20px', background: clay.accent, color: '#ffffff',
+      fontFamily: vdmsFont.ui, fontSize: 15, fontWeight: 600, lineHeight: '20px', background: clay.accent, color: '#ffffff',
       selectors: { '&:hover': { background: clay.accentHover, color: '#ffffff' } },
     },
     dropdownItemHeader: {
@@ -264,7 +264,7 @@ export function dmsCompactDropdownStyles(styleProps: Partial<IDropdownStyleProps
       fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
       color: 'var(--vdms-text-muted)',
     },
-    dropdownOptionText: { fontFamily: vdmsFont.ui, fontSize: 15, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+    dropdownOptionText: { fontFamily: vdmsFont.ui, fontSize: 15, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
     callout: {
       maxHeight: 280, overflow: 'hidden', border: '1px solid var(--vdms-border)',
       borderRadius: 6, background: 'var(--vdms-surface)', boxShadow: clay.shadowRaised,

@@ -111,7 +111,7 @@ function SettingsPageView({ host }: { host: VesselEmail }): React.ReactElement {
       background: active ? clay.accentGradient : 'transparent',
       color: active ? DMS_ON_ACCENT : 'var(--vdms-text)', fontWeight: active ? 800 : 600,
       fontSize: 14, padding: indent ? '9px 12px 9px 30px' : '10px 12px', borderRadius: 12, textAlign: 'left', cursor: 'pointer',
-      fontFamily: "'Manrope', 'Segoe UI Variable', sans-serif",
+      fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
       boxShadow: active ? clay.shadowButton : 'none',
     });
 
@@ -142,7 +142,7 @@ function SettingsPageView({ host }: { host: VesselEmail }): React.ReactElement {
                   type="button"
                   aria-expanded={adminOpen}
                   onClick={() => setAdminOpen(o => !o)}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: 'none', background: 'transparent', cursor: 'pointer', margin: '10px 0 0', padding: '12px 16px', borderRadius: 14, color: 'var(--vdms-text)', fontFamily: "'Manrope', 'Segoe UI Variable', sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', border: 'none', background: 'transparent', cursor: 'pointer', margin: '10px 0 0', padding: '12px 16px', borderRadius: 14, color: 'var(--vdms-text)', fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}
                 >
                   Administration
                   <Icon iconName={adminOpen ? 'ChevronUp' : 'ChevronDown'} style={{ fontSize: 12 }} />
@@ -204,7 +204,7 @@ function SettingsPageView({ host }: { host: VesselEmail }): React.ReactElement {
                         role="radio"
                         aria-checked={active}
                         onClick={() => { if (!active) host._toggleThemeMode(); }}
-                        style={{ border: 'none', borderRadius: 9, padding: '12px 0', cursor: 'pointer', fontWeight: 700, fontSize: 15, fontFamily: "'Manrope', 'Segoe UI Variable', sans-serif", display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: active ? clay.accentGradient : 'transparent', color: active ? DMS_ON_ACCENT : 'var(--vdms-text)', boxShadow: active ? clay.shadowButton : 'none' }}
+                        style={{ border: 'none', borderRadius: 9, padding: '12px 0', cursor: 'pointer', fontWeight: 700, fontSize: 15, fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif", display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, background: active ? clay.accentGradient : 'transparent', color: active ? DMS_ON_ACCENT : 'var(--vdms-text)', boxShadow: active ? clay.shadowButton : 'none' }}
                       >
                         <Icon iconName={icon} /> {label}
                       </button>

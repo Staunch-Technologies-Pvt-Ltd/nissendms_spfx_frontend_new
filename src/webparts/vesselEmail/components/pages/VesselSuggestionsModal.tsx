@@ -23,7 +23,7 @@ const OVERLAY_STYLE: React.CSSProperties = {
   backdropFilter: 'blur(12px)',
   display: 'flex', alignItems: 'center', justifyContent: 'center',
   padding: 20,
-  fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+  fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
 };
 
 const CARD_STYLE: React.CSSProperties = {
@@ -116,7 +116,7 @@ function ExtractRow({ label, value, delay }: { label: string; value: string; del
       <span style={{ fontSize: 11, color: 'rgba(148,163,184,1)', width: 120, flexShrink: 0 }}>{label}</span>
       <span style={{
         fontSize: 13, fontWeight: 600, color: value ? '#e2e8f0' : 'rgba(100,116,139,1)',
-        fontFamily: value ? "'JetBrains Mono', monospace" : 'inherit',
+        fontFamily: value ? "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" : 'inherit',
       }}>
         {value || 'Not detected'}
       </span>
@@ -136,7 +136,7 @@ function Field({
     background: 'rgba(255,255,255,0.06)', border: '1.5px solid rgba(99,179,237,0.2)',
     borderRadius: 10, padding: '10px 14px', color: '#e2e8f0', fontSize: 14,
     outline: 'none', transition: 'border-color 0.2s',
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
   };
   return (
     <div style={{ marginBottom: 14 }}>

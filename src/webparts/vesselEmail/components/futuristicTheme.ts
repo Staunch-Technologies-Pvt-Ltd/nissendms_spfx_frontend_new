@@ -12,9 +12,9 @@ const STYLE_ID = 'vessel-dms-futuristic';
 const FONT_ID = 'vessel-dms-futuristic-fonts';
 
 export const vdmsFont = {
-  display: "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif",
-  ui: "'Manrope', 'Segoe UI Variable', 'Segoe UI', sans-serif",
-  mono: "'JetBrains Mono', Consolas, monospace",
+  display: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+  ui: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+  mono: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
 };
 
 export const vdmsMotion = {
@@ -29,7 +29,7 @@ export function injectFuturisticTheme(): void {
     const link = document.createElement('link');
     link.id = FONT_ID;
     link.rel = 'stylesheet';
-    link.href = 'https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap';
+    link.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap';
     document.head.appendChild(link);
   }
 
@@ -96,6 +96,7 @@ export function injectFuturisticTheme(): void {
 
     /* ── Type ─────────────────────────────────────────────────────────── */
     .vessel-dms-app, .vessel-dms-auth { font-family: ${vdmsFont.ui} !important; -webkit-font-smoothing: antialiased; }
+    .vessel-dms-app button, .vessel-dms-auth button, .vessel-dms-auth input { font-family: inherit; }
     .vessel-dms-app h1, .vessel-dms-app h2, .vessel-dms-app h3, .vessel-dms-auth h1 { font-family: ${vdmsFont.display}; letter-spacing: -0.02em; }
 
     /* ── App backdrop ─────────────────────────────────────────────────── */
@@ -129,7 +130,7 @@ export function injectFuturisticTheme(): void {
        margin/radius (previously margin: 14px 14px 0 + border-radius: 12px,
        which left a visible gap between the sidebar and the header). */
     .vessel-dms-topbar {
-      margin: 0; height: 72px !important; border-radius: 0;
+      margin: 0; height: 60px !important; border-radius: 0;
       position: relative; z-index: 5;
     }
     .vessel-dms-topbar, .vessel-dms-topbar button { font-family: ${vdmsFont.ui}; }
@@ -139,24 +140,32 @@ export function injectFuturisticTheme(): void {
     html [data-vessel-theme="night"] .vdms-hero-ovl { background: linear-gradient(90deg, rgba(3,20,35,0.92) 0%, rgba(3,20,35,0.6) 55%, rgba(3,20,35,0.15) 100%); }
     html [data-vessel-theme="night"] .vdms-hero { background-color: #0a1626; filter: none; }
     .vessel-dms-app table th { font-family: ${vdmsFont.mono}; letter-spacing: 0.08em; }
-    /* ── Typography scale (design: body 16–17, table cells 15, labels 14, meta 12) ──
+    /* ── Typography scale (~10% smaller: body 14.5–15.5, table cells 13.5, labels 12.5–13.5, meta 11) ──
        Pages set inline px sizes; these remap them without touching any JSX. */
-    .vessel-dms-app [style*="font-size: 9px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 11px !important; }
-    .vessel-dms-app [style*="font-size: 10px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 11px !important; }
-    .vessel-dms-app [style*="font-size: 11px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 12px !important; }
-    .vessel-dms-app [style*="font-size: 11.5px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 13px !important; }
-    .vessel-dms-app [style*="font-size: 12px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 14px !important; }
-    .vessel-dms-app [style*="font-size: 12.5px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 14px !important; }
-    .vessel-dms-app [style*="font-size: 13px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 15px !important; }
-    .vessel-dms-app [style*="font-size: 14px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 16px !important; }
-    .vessel-dms-app [style*="font-size: 15px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 16px !important; }
-    .vessel-dms-app [style*="font-size: 16px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 17px !important; }
-    .vessel-dms-app h1 { font-size: 28px !important; }
-    .vessel-dms-app h2 { font-size: 22px !important; }
-    .vessel-dms-app h3 { font-size: 19px !important; }
-    .vessel-dms-app [style*="font-family"]:not(i):not([data-icon-name]):not([data-no-scale]):not([style*="Sora"]):not([style*="JetBrains"]) { font-family: ${vdmsFont.ui} !important; }
-    .vessel-dms-app table td { font-size: 15px; }
-    .vessel-dms-app table th { font-size: 12px !important; }
+    .vessel-dms-app [style*="font-size: 9px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 10px !important; }
+    .vessel-dms-app [style*="font-size: 10px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 10px !important; }
+    .vessel-dms-app [style*="font-size: 11px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 11px !important; }
+    .vessel-dms-app [style*="font-size: 11.5px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 11.5px !important; }
+    .vessel-dms-app [style*="font-size: 12px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 12.5px !important; }
+    .vessel-dms-app [style*="font-size: 12.5px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 12.5px !important; }
+    .vessel-dms-app [style*="font-size: 13px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 13.5px !important; }
+    .vessel-dms-app [style*="font-size: 14px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 14.5px !important; }
+    .vessel-dms-app [style*="font-size: 15px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 14.5px !important; }
+    .vessel-dms-app [style*="font-size: 16px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 15.5px !important; }
+    .vessel-dms-app [style*="font-size: 17px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 15.5px !important; }
+    .vessel-dms-app [style*="font-size: 18px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 16px !important; }
+    .vessel-dms-app [style*="font-size: 20px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 18px !important; }
+    .vessel-dms-app [style*="font-size: 22px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 20px !important; }
+    .vessel-dms-app [style*="font-size: 24px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 21.5px !important; }
+    .vessel-dms-app [style*="font-size: 26px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 23.5px !important; }
+    .vessel-dms-app [style*="font-size: 28px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 25px !important; }
+    .vessel-dms-app [style*="font-size: 30px"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-size: 27px !important; }
+    .vessel-dms-app h1 { font-size: 25px !important; }
+    .vessel-dms-app h2 { font-size: 20px !important; }
+    .vessel-dms-app h3 { font-size: 17px !important; }
+    .vessel-dms-app [style*="font-family"]:not(i):not([data-icon-name]):not([data-no-scale]) { font-family: ${vdmsFont.ui} !important; }
+    .vessel-dms-app table td { font-size: 13.5px; }
+    .vessel-dms-app table th { font-size: 11px !important; }
 
     /* ── Text colours: hard-coded slate greys → design ink (light mode only;
        night keeps the var(--vdms-*) values, which already flip) ───────── */
@@ -243,8 +252,8 @@ export function injectFuturisticTheme(): void {
     }
     @media (max-width: 767px) {
       .vessel-dms-topbar { margin: 8px 8px 0; height: 60px !important; border-radius: 18px; }
-      .vessel-dms-app h1 { font-size: 22px !important; }
-      .vessel-dms-app h2 { font-size: 19px !important; }
+      .vessel-dms-app h1 { font-size: 20px !important; }
+      .vessel-dms-app h2 { font-size: 17px !important; }
       .vessel-dms-app input[style*="min-width"], .vessel-dms-app select[style*="min-width"], .vessel-dms-app textarea[style*="min-width"] { min-width: 0 !important; }
       .vessel-dms-app input[style*="width: 2"], .vessel-dms-app input[style*="width: 1"], .vessel-dms-app select[style*="width: 1"], .vessel-dms-app select[style*="width: 2"] { width: 100% !important; }
       .vessel-dms-app div[style*="position: fixed"][style*="inset: 0px"] > div:only-child { border-radius: 16px; }

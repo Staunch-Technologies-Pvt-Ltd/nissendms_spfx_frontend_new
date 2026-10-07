@@ -28,9 +28,9 @@ const hexRgb = (hex: string): number[] => {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 };
 const rgbaOf = (hex: string, a: number): string => `rgba(${hexRgb(hex).join(',')},${a})`;
-const SB_FONT_UI = "'Manrope', 'Segoe UI Variable', 'Segoe UI', sans-serif";
-const SB_FONT_DISPLAY = "'Sora', 'Segoe UI Variable', 'Segoe UI', sans-serif";
-const SB_FONT_MONO = "'JetBrains Mono', Consolas, monospace";
+const SB_FONT_UI = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+const SB_FONT_DISPLAY = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+const SB_FONT_MONO = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 // Hex fallback mirroring clayLight.accent — used only where a literal hex is
 // required (rgba() math); `clay.accent` (the CSS-var form) is used everywhere
 // else so Settings → Color Management keeps re-theming this correctly.
@@ -164,9 +164,9 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
           alignItems: 'center',
           justifyContent: collapsed ? 'center' : 'space-between',
           width: '100%',
-          minHeight: 50,
+          minHeight: 42,
           padding: collapsed ? '6px 0' : '5px 12px 5px 16px',
-          marginBottom: 6,
+          marginBottom: 4,
           borderRadius: 8,
           boxSizing: 'border-box',
           border: '1px solid transparent',
@@ -313,7 +313,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
         {/* Brand Header */}
         <div style={{
           position: 'relative', zIndex: 1,
-          padding: collapsed ? '18px 0' : '20px 18px',
+          padding: collapsed ? '18px 0' : '14px 18px',
           borderBottom: `1px solid ${SB_DIVIDER}`,
           display: 'flex', alignItems: 'center',
           gap: collapsed ? 0 : 10,
@@ -321,7 +321,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
           flexShrink: 0,
           boxSizing: 'border-box',
           width: '100%',
-          minHeight: 72,
+          minHeight: 60,
         }}>
           {!collapsed && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
@@ -354,7 +354,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
           style={{
             position: 'relative', zIndex: 1,
             flex: 1, overflowY: 'auto', overflowX: 'hidden',
-            padding: collapsed ? '16px 8px' : '18px 14px',
+            padding: collapsed ? '16px 8px' : '12px 14px',
             boxSizing: 'border-box',
             scrollbarWidth: 'none',
             msOverflowStyle: 'none',
@@ -372,7 +372,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
               const isVesselsActive = view === 'vessels' || !!host.state.vesselSuggestionDialog?.open;
 
               return (
-                <div key="vessels-group" style={{ marginBottom: 6 }}>
+                <div key="vessels-group" style={{ marginBottom: 4 }}>
                   <button
                     onClick={() => {
                       if (collapsed) {
@@ -392,7 +392,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                       alignItems: 'center',
                       justifyContent: collapsed ? 'center' : 'space-between',
                       width: '100%',
-                      minHeight: 50,
+                      minHeight: 42,
                       padding: collapsed ? '6px 0' : '5px 12px 5px 16px',
                       borderRadius: 8,
                       boxSizing: 'border-box',
