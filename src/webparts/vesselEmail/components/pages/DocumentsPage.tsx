@@ -201,7 +201,7 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
     type ParsedSearchQuery = { raw: string[]; clauses: string[][]; single: string[]; clauseStrings: string[] };
     if (!(host as any)._searchQueryParseCache) (host as any)._searchQueryParseCache = new Map<string, ParsedSearchQuery | null>();
     const _searchQueryParseCache: Map<string, ParsedSearchQuery | null> = (host as any)._searchQueryParseCache;
-    const _nonAscii = /[^\u0000-\u007f]/;
+    const _nonAscii = /[\u0080-￿]/;
     const parseSearchQuery = (query: string) => {
       const key = query || '';
       const hit = _searchQueryParseCache.get(key);
