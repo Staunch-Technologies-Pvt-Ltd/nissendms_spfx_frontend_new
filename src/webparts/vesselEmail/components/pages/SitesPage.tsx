@@ -5,7 +5,6 @@ import * as React from 'react';
 import type VesselEmail from '../VesselEmail';
 import { Icon } from '@fluentui/react/lib/Icon';
 import { clay } from '../clayTheme';
-import { CopilotSearchPanel } from '../copilot/CopilotSearchPanel';
 import { SiteManagementSection } from './SiteManagementSection';
 import { DmsPageHeader, dmsControlStyle, dmsBtn, dmsRowBtn, dmsTone, DMS_ON_ACCENT } from '../dmsDesignSystem';
 
@@ -2008,8 +2007,6 @@ export function SitesPage({ host }: { host: VesselEmail }): React.ReactElement {
 
   return (
     <div style={{ background: 'transparent', minHeight: '100%' }}>
-      {/* Renders as a fixed floating button + popup at bottom-right; doesn't affect layout here */}
-      <CopilotSearchPanel host={host} />
       {renderTaggingModal()}
       {renderConfirmOverwriteModal()}
       {renderConfirmScanModal()}

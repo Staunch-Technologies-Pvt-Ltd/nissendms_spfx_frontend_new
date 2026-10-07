@@ -42,6 +42,7 @@ import {
 import { renderSidebar } from './pages/Sidebar';
 import { renderLayout } from './pages/AppLayout';
 import { renderDocPreviewDrawer } from './pages/DocPreviewDrawer';
+import { CopilotSearchPanel } from './copilot/CopilotSearchPanel';
 import { renderDashboard, DashboardStats } from './pages/DashboardPage';
 import { renderDocumentsPage } from './pages/DocumentsPage';
 import { SitesPage } from './pages/SitesPage';
@@ -54,7 +55,7 @@ import { renderBentoEmailDashboardPage } from './pages/BentoEmailDashboardPage';
 import { renderRecycleBinPage } from './pages/RecycleBinPage';
 import { ArchivePage } from './pages/ArchivePage';
 import { renderAlertsPage } from './pages/AlertsPage';
-import { renderBentoComposeModal } from './modals/BentoComposeModal';
+import { ComposeMailModal } from './mail/ComposeMailModal';
 import { renderVesselForm } from './modals/VesselFormModal';
 import { renderDeleteModal } from './modals/DeleteVesselModal';
 import { renderArchivePickerModal, ArchivePickerDialogState } from './modals/ArchiveSelectionModal';
@@ -11515,8 +11516,12 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
   }
 
 
-  public _renderBentoComposeModal(): React.ReactElement | null {
-    return renderBentoComposeModal(this);
+  public _renderBentoComposeModal(): React.ReactElement | React.ReactPortal | null {
+    // "Send Email" now opens the Outlook-style composer (To/Cc/Bcc, any
+    // SharePoint files/folders, files from the computer). The older AI
+    // Bento dispatch form (renderBentoComposeModal) is no longer opened.
+    if (!this.state.bentoComposeOpen) return null;
+    return <ComposeMailModal host={this} onClose={() => this.setState({ bentoComposeOpen: false })} />;
   }
 
 
@@ -12467,6 +12472,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         {this._renderSpoDeletionToasts()}
         {renderClassifyDialog(this)}
         {renderVesselSuggestionsModal(this)}
+        {/* Documents Copilot: floating button + chat panel on every page */}
+        <CopilotSearchPanel host={this} />
       </>
     );
   }

@@ -15,6 +15,10 @@
       {
         "resource": "Microsoft Graph",
         "scope": "Files.ReadWrite.All"
+      },
+      {
+        "resource": "Microsoft Graph",
+        "scope": "Mail.Send"
       }
     ],
     "developer": {

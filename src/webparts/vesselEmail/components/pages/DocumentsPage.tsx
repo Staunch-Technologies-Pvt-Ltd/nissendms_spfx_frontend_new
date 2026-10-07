@@ -22,7 +22,6 @@ import {
   getCommonShipsFlatRows, getKaizenFlatRows, getVesselTemplateFlatRows,
 } from '../vesselFolderTemplate';
 import { extractFilesFromDataTransfer } from '../BulkUploadModal';
-import { CopilotSearchPanel } from '../copilot/CopilotSearchPanel';
 import { FolderTreeSelect, FolderTreeNode } from './FolderTreeSelect';
 import { CompactCategorySelect } from './CompactCategorySelect';
 import { DebouncedSearchInput } from './DebouncedSearchInput';
@@ -7409,8 +7408,6 @@ export function renderDocumentsPage(host: VesselEmail): React.ReactElement {
           </div>
         </div>
         </div>{/* /sticky header */}
-
-        <CopilotSearchPanel host={host} />
 
         {/* Vessel's other main folders — a vessel commonly has a folder under
             several main folders (Technical & Crewing, Commercial &

@@ -42,6 +42,7 @@ export function renderBentoEmailDashboardPage(host: VesselEmail): React.ReactEle
       if (q) {
         return [
           log.vessel_name ?? '',
+          log.sender ?? '',
           log.subject ?? '',
           log.datasource_tag_used ?? '',
           log.recipient ?? '',
@@ -62,8 +63,8 @@ export function renderBentoEmailDashboardPage(host: VesselEmail): React.ReactEle
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <DmsPageHeader
-          title="AI Bento Email Dashboard"
-          subtitle="Automated document tagging, status tracking, and Graph email dispatching."
+          title="Email"
+          subtitle="Send documents from any SharePoint site and track every email sent."
         >
           <button
             style={dmsBtn('primary')}
@@ -82,7 +83,7 @@ export function renderBentoEmailDashboardPage(host: VesselEmail): React.ReactEle
               },
             })}
           >
-            <Icon iconName="Mail" aria-hidden="true" style={{ fontSize: 13 }} /> Compose & Dispatch Email
+            <Icon iconName="Mail" aria-hidden="true" style={{ fontSize: 13 }} /> New message
           </button>
           <button
             disabled={bentoClearAllBusy || totalCount === 0}
@@ -104,11 +105,11 @@ export function renderBentoEmailDashboardPage(host: VesselEmail): React.ReactEle
 
         <div style={dmsGrid(180)}>
           <div style={statCardStyle}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--vdms-text-muted)' }}>Total Processed</div>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: 'var(--vdms-text-muted)' }}>Total</div>
             <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--vdms-text)', marginTop: 4 }}>{totalCount}</div>
           </div>
           <div style={statCardStyle}>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: completedTone.fg }}>Completed</div>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: completedTone.fg }}>Sent</div>
             <div style={{ fontSize: 26, fontWeight: 800, color: completedTone.fg, marginTop: 4 }}>{completedCount}</div>
           </div>
           <div style={statCardStyle}>
@@ -121,43 +122,56 @@ export function renderBentoEmailDashboardPage(host: VesselEmail): React.ReactEle
           </div>
         </div>
 
-        {/* Logs Table */}
+        {/* Sent mail history */}
         <div style={{ ...DMS_TABLE_CARD, overflowX: 'auto' }}>
-          <table style={{ ...DMS_TABLE, minWidth: 900 }}>
+          <table style={{ ...DMS_TABLE, minWidth: 960 }}>
             <thead>
               <tr>
-                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>#</th>
-                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Vessel</th>
-                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Tag</th>
+                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Date</th>
+                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>From</th>
+                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>To</th>
                 <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Subject</th>
-                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Recipient</th>
+                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Documents</th>
                 <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Status</th>
-                <th style={{ ...DMS_TH, whiteSpace: 'nowrap' }}>Attached File</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((log) => (
-                <tr key={log.id} style={DMS_TR}>
-                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>#{log.id}</td>
-                  <td style={{ ...DMS_TD, fontWeight: 600, color: 'var(--vdms-text)', whiteSpace: 'nowrap' }}>{log.vessel_name || '—'}</td>
-                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>{badge('blue', log.datasource_tag_used)}</td>
-                  <td style={{ ...DMS_TD, color: 'var(--vdms-text)', minWidth: 200 }}>{log.subject}</td>
-                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>{log.recipient}</td>
-                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>
-                    {badge(log.status === 'completed' || log.status === 'success' ? 'green' : log.status === 'pending' ? 'orange' : 'red', log.status)}
-                  </td>
-                  <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>
-                    {log.attachment_names && log.attachment_names.length > 0
-                      ? log.attachment_names.map((name, i) => (
-                          <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: dmsTone('accent').bg, border: '1px solid var(--vdms-line)', borderRadius: 6, padding: '2px 8px', fontSize: 11, color: dmsTone('accent').fg, fontWeight: 600, marginRight: 4 }}>
-                            <Icon iconName="Attach" aria-hidden="true" style={{ fontSize: 11 }} /> {name}
-                          </span>
-                        ))
-                      : <span style={{ color: 'var(--vdms-text-faint)', fontSize: 11 }}>—</span>
-                    }
-                  </td>
-                </tr>
-              ))}
+              {filtered.length === 0 && (
+                <tr><td colSpan={6} style={{ ...DMS_TD, textAlign: 'center', padding: 28, color: 'var(--vdms-text-muted)' }}>
+                  No emails yet — click <strong>New message</strong> to send documents from SharePoint.
+                </td></tr>
+              )}
+              {filtered.map((log) => {
+                const when = log.sent_at || log.created_at;
+                const docs = (log.documents && log.documents.length)
+                  ? log.documents
+                  : (log.attachment_names || []).map(n => ({ name: n, kind: 'file' }));
+                const ok = log.status === 'completed' || log.status === 'success' || log.status === 'sent';
+                return (
+                  <tr key={log.id} style={DMS_TR}>
+                    <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>{when ? new Date(when.endsWith('Z') ? when : `${when}Z`).toLocaleString(undefined, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                    <td style={{ ...DMS_TD, whiteSpace: 'nowrap' }}>{log.sender || '—'}</td>
+                    <td style={{ ...DMS_TD, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={log.recipient}>{log.recipient}</td>
+                    <td style={{ ...DMS_TD, color: 'var(--vdms-text)', fontWeight: 600, minWidth: 200 }}>{log.subject}</td>
+                    <td style={{ ...DMS_TD }}>
+                      {docs.length > 0
+                        ? docs.map((d, i) => (
+                            <span key={i} title={d.kind === 'file' ? 'Attached copy' : 'SharePoint link'}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: dmsTone('accent').bg, border: '1px solid var(--vdms-line)', borderRadius: 6, padding: '2px 8px', fontSize: 11, color: dmsTone('accent').fg, fontWeight: 600, margin: '0 4px 4px 0' }}>
+                              <Icon iconName={d.kind === 'folder' ? 'FabricFolder' : d.kind === 'link' ? 'Link' : 'Attach'} aria-hidden="true" style={{ fontSize: 11 }} /> {d.name}
+                            </span>
+                          ))
+                        : <span style={{ color: 'var(--vdms-text-faint)', fontSize: 11 }}>—</span>}
+                    </td>
+                    <td style={{ ...DMS_TD, minWidth: 120 }}>
+                      {badge(ok ? 'green' : log.status === 'pending' ? 'orange' : 'red', ok ? 'Sent' : log.status === 'pending' ? 'Pending' : 'Failed')}
+                      {!ok && log.error_message && (
+                        <div style={{ fontSize: 11, color: dmsTone('danger').fg, marginTop: 4, maxWidth: 260, whiteSpace: 'normal' }}>{log.error_message}</div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
