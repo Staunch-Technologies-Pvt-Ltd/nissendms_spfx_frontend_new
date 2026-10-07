@@ -2746,16 +2746,23 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
         // it and would just muddy which backend is "active". Let it
         // propagate straight to the caller (see _loadSiteFolderChildren).
         if (typeof err?.message === 'string' && err.message.indexOf('THROTTLED_429:') === 0) throw err;
-        if (url.includes('nk-dms-dev.sg-nissenkaiun.com')) {
-          VesselEmail._remoteServerDown = true;
+        // The server answered with an error status (404, 500, ...): it is up,
+        // so a local backend can't help. Report the real error instead of
+        // switching hosts — one failing endpoint used to flip the whole app
+        // to 127.0.0.1 for the rest of the session.
+        const answered = typeof err?.message === 'string'
+          && (err.message.indexOf('SERVER_ERROR_') === 0 || err.message.indexOf('HTTP ') === 0);
+        if (!answered && url.includes('nk-dms-dev.sg-nissenkaiun.com')) {
           const fallbackUrl = url.replace('https://nk-dms-dev.sg-nissenkaiun.com', 'http://127.0.0.1:8000');
-          console.warn(`[VesselDMS] Remote API 502/Network error (${err?.message}) — auto-switched primary base to local backend: ${fallbackUrl}`);
           try {
             const localOpts: RequestInit = {
               ...opts,
               headers: this._headersForLocalFallback(),
             };
             const r = await fetch(fallbackUrl, localOpts);
+            // Only stick to the local backend once it has actually answered.
+            VesselEmail._remoteServerDown = true;
+            console.warn(`[VesselDMS] Remote API unreachable (${err?.message}) — switched to local backend: ${fallbackUrl}`);
             if (r.status === 401) {
               this.setState({ sessionExpired: true, authPage: 'login' });
               throw new Error('SESSION_EXPIRED');
