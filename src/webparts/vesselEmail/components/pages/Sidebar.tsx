@@ -97,7 +97,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
   // literal AppView member.
   const ALL_NAV_ITEMS: Array<{ id: AppView; label: string; iconName: string; badge?: number }> = [
     { id: 'dashboard',  label: 'Dashboard',           iconName: 'Home' },
-    { id: 'list',       label: 'Documents',        iconName: 'Documentation' },
+    { id: 'list',       label: 'Vessel DMS',      iconName: 'Documentation' },
     { id: 'sites',      label: 'Sites',             iconName: 'SharepointLogo' },
     { id: 'vessels',    label: 'Vessels',          iconName: 'Ferry' },
     // 'templates' (Templates & OCR) removed — that functionality already
@@ -144,14 +144,16 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
   );
 
   const renderNavBtn = (
-    id: AppView | 'bento_compose',
+    id: AppView | 'bento_compose' | 'classic_site',
     label: string,
     iconName: string,
     onClick: () => void,
     badgeCount?: number,
     isAux = false,
   ): React.ReactElement => {
-    const active = view === id;
+    const classicOpen = host.state.classicSiteOpen;
+    // While the traditional site is shown, only its own button is highlighted.
+    const active = id === 'classic_site' ? classicOpen : view === id && !classicOpen;
 
     return (
       <button
@@ -327,7 +329,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 }}>
               {/* Static brand mark — Vessel DMS */}
               <div
-                aria-label="Vessel DMS"
+                aria-label="NKS DOCMAN"
                 role="img"
                 style={{
                   width: 38, height: 38, borderRadius: 9, flexShrink: 0,
@@ -340,7 +342,7 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
               </div>
               <div style={{ minWidth: 0, display: 'flex', alignItems: 'center' }}>
                 <div style={{ fontFamily: SB_FONT_DISPLAY, fontWeight: 700, fontSize: 18, color: SB_TEXT, lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', letterSpacing: '-0.015em' }}>
-                  Vessel DMS
+                  NKS DOCMAN
                 </div>
               </div>
             </div>
@@ -512,7 +514,16 @@ export function renderSidebar(host: VesselEmail): React.ReactElement {
                 </div>
               );
             }
-            return renderNavBtn(item.id, item.label, item.iconName, () => host._goToView(item.id), item.badge);
+            const btn = renderNavBtn(item.id, item.label, item.iconName, () => host._goToView(item.id), item.badge);
+            if (item.id !== 'list') return btn;
+            // Right under "Vessel DMS": the site's traditional SharePoint
+            // Documents library, shown inside the app (toggles).
+            return [
+              btn,
+              renderNavBtn('classic_site', 'Documents', 'DocLibrary', () => {
+                if (host.state.classicSiteOpen) host._closeClassicSite(); else void host._openClassicSite();
+              }),
+            ];
           })}
 
 

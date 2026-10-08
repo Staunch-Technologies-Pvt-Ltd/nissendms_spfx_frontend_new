@@ -26,14 +26,14 @@ npm run build
 npm run clean
 ```
 
-There is no separate `npm test`/`npm run lint` script — `heft test` (invoked as part of `npm run build`, or run directly as `heft test`) runs both linting (`.eslintrc.js`, extending `@microsoft/eslint-config-spfx`) and any Jest specs together. Run `npx heft test --clean` directly during development instead of the full production build when you just want lint/test feedback.
+There is no separate `npm test`/`npm run lint` script — `heft test` (invoked as part of `npm run build`, or run directly as `heft test`) runs both linting (`.eslintrc.js`, extending `@microsoft/eslint-config-spfx`) and any Jest specs together. No `*.test.*`/`*.spec.*` files are committed, so in practice `heft test` is lint + type-check (`jest-output/` is untracked generated output; `@typescript-eslint/no-explicit-any` and `no-unused-vars` are turned off in `.eslintrc.js`). Run `npx heft test --clean` directly during development instead of the full production build when you just want lint/test feedback.
 
 Packaged output lands at `sharepoint/solution/vessel-email-spfx-v-2.sppkg` (prod) or the `-dev` variant, per the `config/package-solution*.json` / `config/serve*.json` dev/prod pairs.
 
 ## Architecture
 
 **Two components in one solution:**
-- `src/webparts/vesselEmail/` — the main web part (`VesselEmailWebPart.ts`), rendering `components/VesselEmail.tsx`. This is essentially the whole application: vessel registry, document browser/uploads, approvals, recycle bin, archive, sessions, settings, reports, users, and the AI BANTO email dashboard.
+- `src/webparts/vesselEmail/` — the main web part (`VesselEmailWebPart.ts`), rendering `components/VesselEmail.tsx`. `VesselEmail.tsx` alone is ~12,500 lines and holds most app state, auth bootstrap and Graph calls — grep it before assuming logic lives in a page file. This is essentially the whole application: vessel registry, document browser/uploads, approvals, recycle bin, archive, sessions, settings, reports, users, and the AI BANTO email dashboard.
 - `src/extensions/uploadAndTag/` — a ListView Command Set extension (`UploadAndTagCommandSet.ts`) that adds upload/tag actions directly to the SharePoint document library's command bar, independent of the web part.
 
 **Page components live flat in `components/pages/`** (one file per screen — `DashboardPage`, `DocumentsPage`, `VesselsPage`, `ApprovalsPage`, `RecycleBinPage`, `ArchivePage`, `BentoEmailDashboardPage`, `SettingsPage` + its `*ManagementSection`/`*Section` sub-panels, etc.), routed/switched inside `AppLayout.tsx` + `Sidebar.tsx` rather than through a router library. When adding a new screen, follow this pattern: a new file in `pages/`, wired into `AppLayout`/`Sidebar`.
@@ -53,7 +53,7 @@ Packaged output lands at `sharepoint/solution/vessel-email-spfx-v-2.sppkg` (prod
 - `vesselFolderTemplate.ts` — the canonical `Documents/Vessels/{vessel}/{main}/...` tree shape used both when provisioning and when rendering.
 - `vesselImagePool.ts` / `assets/vessel_images/` — per-vessel thumbnail assignment.
 - `migrationAssistant/` — a self-contained module (scan / site-to-site / tag-existing-files / Excel export tabs) for one-time data migration tooling; has its own `README.md` worth reading before touching it.
-- `copilot/CopilotSearchPanel.tsx` — talks to the backend's `app/copilot/` API.
+- `copilot/CopilotSearchPanel.tsx` — floating bottom-right chat button ("Documents Copilot") mounted once in the app shell (`<CopilotSearchPanel host={this} />` at the end of `VesselEmail.tsx` render), so it shows on every page; calls the backend's `app/copilot/` API (`/status`, `/query`) via `host._base()` / `host._headers()`. Clicking a file result calls `host._openDocumentFile`; folders aren't clickable. Shows "basic mode" when the backend has no Azure OpenAI key.
 - `types/` (`rows.ts`, `bento.ts`, `ui.ts`, `view.ts`) — shared TypeScript types; check here before redefining a shape that likely already exists.
 
 ## Key configuration

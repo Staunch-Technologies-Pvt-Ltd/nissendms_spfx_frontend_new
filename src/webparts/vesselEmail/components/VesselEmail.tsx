@@ -464,6 +464,9 @@ interface State {
   sidebarCollapsed: boolean;
   themeMode: 'light' | 'night';
   fullScreenWorkspace: boolean;
+  /** Top-bar "Documents" button: shows the traditional SharePoint library inside the app. */
+  classicSiteOpen: boolean;
+  classicSiteUrl: string;
   windowWidth: number;
 
   // Folder navigation history (back/forward)
@@ -835,6 +838,8 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       sidebarCollapsed: false,
       themeMode,
       fullScreenWorkspace: false,
+      classicSiteOpen: false,
+      classicSiteUrl: '',
       windowWidth: typeof window !== 'undefined' ? window.innerWidth : 1200,
       folderNavHistory: persistedFolderNav
         ? [{ folderPathStack: persistedFolderNav.folderPathStack, docMainFolder: persistedFolderNav.docMainFolder }]
@@ -879,6 +884,41 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
 
   public _toggleFullScreenWorkspace = (): void => {
     this.setState(prev => ({ fullScreenWorkspace: !prev.fullScreenWorkspace }));
+  };
+
+  /** Show the site's traditional "Documents" library inside the app (top-bar
+   * "Documents" button). The URL is the drive's own webUrl from Graph — the
+   * library's URL segment is usually "Shared Documents", not "Documents" —
+   * with the site URL as a fallback. The Vessel DMS content stays mounted
+   * underneath, so _closeClassicSite returns to exactly where the user was. */
+  public _openClassicSite = async (): Promise<void> => {
+    // Follow the site the user is looking at: the Dashboard / Vessels
+    // "SharePoint site" filters, or the Documents site elsewhere. "All
+    // sites" (or nothing chosen) falls back to the site the web part is on.
+    const { view, dashboardSiteFilter, vesselSiteFilter, activeDocumentSite, documentSites } = this.state;
+    const chosen = view === 'dashboard' ? dashboardSiteFilter
+      : view === 'vessels' ? vesselSiteFilter
+      : activeDocumentSite;
+    const key = chosen && chosen !== 'all' ? chosen.toLowerCase() : '';
+    const site = key ? (documentSites || []).find(s => String(s.site_key).toLowerCase() === key) : undefined;
+
+    let url = '';
+    try {
+      const { graphClient } = this.props;
+      const driveId = site?.drive_id || this.props.driveId;
+      if (graphClient && driveId) {
+        const drive = await graphClient.api(`/drives/${driveId}`).select('webUrl').get();
+        url = drive?.webUrl || '';
+      }
+    } catch (e) {
+      console.warn('[VesselDMS] could not resolve the Documents library URL:', e);
+    }
+    if (!url) url = `${(site?.web_url || this.props.siteUrl || '').replace(/\/$/, '')}/Shared%20Documents`;
+    this.setState({ classicSiteOpen: true, classicSiteUrl: url });
+  };
+
+  public _closeClassicSite = (): void => {
+    this.setState({ classicSiteOpen: false });
   };
 
   private _uploadCacheStorageKey(): string {
@@ -6749,7 +6789,9 @@ export default class VesselEmail extends React.Component<IVesselEmailProps, Stat
       view = 'dashboard';
     }
     const previousView = this.state.view;
-    this.setState({ view });
+    // Picking any app section (sidebar, deep links) leaves the embedded
+    // traditional SharePoint site.
+    this.setState({ view, classicSiteOpen: false });
     if (view === 'dashboard') {
       void this._loadDashboardStats();
     } else if (view === 'list') {

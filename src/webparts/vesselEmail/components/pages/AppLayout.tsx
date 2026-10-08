@@ -27,7 +27,7 @@ import { injectRefreshTheme } from '../refreshTheme';
 // View → display label
 const VIEW_LABELS: Record<string, string> = {
   dashboard: 'Dashboard',
-  list: 'Documents',
+  list: 'Vessel DMS',
   vessels: 'Vessels',
   templates: 'Templates',
   migration: 'Migration Assistant',
@@ -286,7 +286,8 @@ function DeletionToastLayer({ host }: { host: VesselEmail }): React.ReactElement
 export function renderLayout(host: VesselEmail, content: React.ReactElement): React.ReactElement {
   const userDisplayName = host.props.userDisplayName || 'Admin';
   const isNight = host.state.themeMode === 'night';
-  const isWorkspaceFullScreen = host.state.fullScreenWorkspace && host.state.view === 'list';
+  const classicOpen = host.state.classicSiteOpen;
+  const isWorkspaceFullScreen = host.state.fullScreenWorkspace && host.state.view === 'list' && !classicOpen;
   const viewLabel = VIEW_LABELS[host.state.view] || host.state.view.replace(/_/g, ' ');
   const viewportWidth = host.state.windowWidth || (typeof window !== 'undefined' ? window.innerWidth : 1200);
   const tabletOrBelow = isTabletOrBelow(viewportWidth);
@@ -366,7 +367,7 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
                 <Icon iconName="GlobalNavButton" style={{ fontSize: 18 }} />
               </button>
             )}
-            {!phone && <span className="vdms-crumb" style={{ color: 'var(--vdms-glass-strong)', fontSize: 16, fontWeight: 600, letterSpacing: '0.2px' }}>Vessel DMS</span>}
+            {!phone && <span className="vdms-crumb" style={{ color: 'var(--vdms-glass-strong)', fontSize: 16, fontWeight: 600, letterSpacing: '0.2px' }}>NKS DOCMAN</span>}
             <Icon iconName="ChevronRight" className="vdms-crumb" style={{ fontSize: 14, color: 'var(--vdms-glass-strong)' }} />
             <span style={{ color: 'var(--vdms-text)', fontSize: phone ? 18 : 26, fontWeight: 700, letterSpacing: '-0.02em', fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" }}>
               {viewLabel}
@@ -375,7 +376,27 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
 
           {/* Right controls */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {host.state.view === 'list' && (
+            {/* Traditional SharePoint site is opened from the sidebar ("Documents", under Vessel DMS);
+                while it is showing, this Back button returns to the app. */}
+            {classicOpen && (
+              <button
+                type="button"
+                onClick={host._closeClassicSite}
+                title="Back to NKS DOCMAN"
+                aria-label="Back to NKS DOCMAN"
+                style={{
+                  height: 42, padding: phone ? '0 12px' : '0 16px', borderRadius: 12,
+                  border: '1px solid var(--vdms-line-strong)',
+                  background: 'var(--vdms-field)',
+                  color: 'var(--vdms-text)', display: 'inline-flex', alignItems: 'center', gap: 8,
+                  fontSize: 14, fontWeight: 700, cursor: 'pointer', boxShadow: '0 3px 10px rgba(0,0,0,0.15)',
+                }}
+              >
+                <Icon iconName="Back" style={{ fontSize: 16 }} />
+                {!phone && 'Back'}
+              </button>
+            )}
+            {host.state.view === 'list' && !classicOpen && (
               <button
                 type="button"
                 onClick={host._toggleFullScreenWorkspace}
@@ -469,7 +490,23 @@ export function renderLayout(host: VesselEmail, content: React.ReactElement): Re
 
         {/* ── Main Content ── */}
         <div style={{ flex: 1, overflowY: 'auto', padding: isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 24), background: 'transparent', ['--vdms-content-pad' as any]: `${isWorkspaceFullScreen ? (phone ? 10 : 18) : (phone ? 12 : tabletOrBelow ? 18 : 24)}px` }}>
-          {content}
+          {/* The app stays mounted (hidden) while the classic site is shown, so Back restores it as-is. */}
+          <div style={{ display: classicOpen ? 'none' : 'block' }}>{content}</div>
+          {classicOpen && (
+            <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 480, border: '1px solid var(--vdms-border)', borderRadius: 12, overflow: 'hidden', background: 'var(--vdms-surface)' }}>
+              <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, padding: '6px 12px', borderBottom: '1px solid var(--vdms-border)', fontSize: 12, color: 'var(--vdms-text-muted)' }}>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Traditional SharePoint site — {host.state.classicSiteUrl}</span>
+                <a href={host.state.classicSiteUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--clay-accent, #0e7490)', fontWeight: 700, whiteSpace: 'nowrap', textDecoration: 'none' }}>
+                  Open in new tab
+                </a>
+              </div>
+              <iframe
+                title="SharePoint Documents library"
+                src={host.state.classicSiteUrl}
+                style={{ flex: 1, width: '100%', border: 0, background: '#fff' }}
+              />
+            </div>
+          )}
         </div>
 
         {/* Right-side Document Preview Drawer */}
